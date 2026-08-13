@@ -9,6 +9,7 @@ from aha_cli.domain.models import (
     normalize_agents_config_from_loaded,
     normalize_integrations_config,
 )
+from aha_cli.services.provider_config import normalize_configured_models, normalize_providers, sync_legacy_backend_env
 from aha_cli.services.proxy import normalize_proxy_config, proxy_configured
 from aha_cli.store.io import read_json
 from aha_cli.store.paths import config_path
@@ -89,6 +90,12 @@ def load_config(root: Path) -> dict:
     cfg["proxy"] = _shared_proxy_config(defaults["proxy"], loaded)
     cfg["codex"] = _merge_backend_config(defaults["codex"], loaded.get("codex", {}), cfg["proxy"])
     cfg["claude"] = _merge_backend_config(defaults["claude"], loaded.get("claude", {}), cfg["proxy"])
+    cfg["providers"] = normalize_providers(loaded.get("providers", []))
+    cfg["configured_models"] = normalize_configured_models(
+        loaded.get("configured_models", []),
+        (str(item.get("id") or "") for item in cfg["providers"]),
+    )
+    sync_legacy_backend_env(cfg)
     loaded_retention_policy = loaded.get("retention_policy", {})
     cfg["retention_policy"] = defaults["retention_policy"] | (loaded_retention_policy if isinstance(loaded_retention_policy, dict) else {})
     cfg["knowledge"] = _merge_knowledge_config(defaults["knowledge"], loaded.get("knowledge", {}))

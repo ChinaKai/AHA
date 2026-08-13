@@ -165,6 +165,15 @@ class TaskCommandTests(unittest.TestCase):
                 self.assertEqual(code, 0)
                 run_id = plan_output.splitlines()[0].split(": ", 1)[1]
                 complete_task(root, run_id, "task-001", 0)
+                append_message(
+                    root,
+                    run_id,
+                    "main",
+                    "stale message before reopen",
+                    sender="browser",
+                    task_id="task-001",
+                )
+                reopen_boundary = inbox_path(root, run_id, "main").stat().st_size
 
                 reopen_handled, _, reopen_payload = handle_slash_command(
                     root,
@@ -181,10 +190,12 @@ class TaskCommandTests(unittest.TestCase):
                     "task-001",
                 )
                 task = status_snapshot(root, run_id)["tasks"][0]
+                offset = read_json(chat_offset_path(run_dir(root, run_id), "main", "task-001"))["offset"]
 
         self.assertTrue(reopen_handled)
         self.assertIn("reopened", reopen_payload["message"]["message"])
         self.assertEqual(task["status"], "awaiting_user")
+        self.assertEqual(offset, reopen_boundary)
         self.assertTrue(reset_handled)
         self.assertNotIn("compact_reset", reset_payload)
         self.assertIn("Unsupported AHA command", reset_payload["message"]["message"])

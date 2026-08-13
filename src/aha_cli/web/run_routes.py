@@ -11,6 +11,12 @@ from aha_cli.backends.claude import CLAUDE_ENV_GROUP_FIELDS
 from aha_cli.backends.registry import agent_backend_names, agent_backend_or_default, normalize_reasoning_effort
 from aha_cli.domain.models import default_config, normalize_integrations_config
 from aha_cli.services.observe_proxy import observe_proxy_status, observe_proxy_usage_summary
+from aha_cli.services.provider_config import (
+    normalize_configured_models,
+    normalize_providers,
+    provider_by_id,
+    sync_legacy_backend_env,
+)
 from aha_cli.services.orchestrator import dispatch_task_to_main
 from aha_cli.services.proxy import normalize_proxy_config, proxy_configured
 from aha_cli.services.run_archive import export_run_archive, import_run_archive
@@ -490,7 +496,13 @@ def _extract_models(payload: object) -> list[dict[str, object]]:
     return models
 
 
-def _detect_gateway_models(base_url: str, api_key: str, auth_token: str, timeout: int = 15) -> tuple[list[dict[str, object]], str]:
+def _detect_gateway_models(
+    base_url: str,
+    api_key: str,
+    auth_token: str,
+    timeout: int = 15,
+    auth_style: str = "auto",
+) -> tuple[list[dict[str, object]], str]:
     """Query a gateway's /v1/models (OpenAI-style) or /models (Anthropic-style) endpoint.
 
     Tries several URL/auth combinations because gateways vary: some want
@@ -508,12 +520,16 @@ def _detect_gateway_models(base_url: str, api_key: str, auth_token: str, timeout
     else:
         candidates.append(f"{base}/v1/models")
         candidates.append(f"{base}/models")
+    normalized_auth_style = str(auth_style or "auto").strip().lower()
     auth_sets: list[tuple[str, dict[str, str]]] = []
-    if key:
+    if normalized_auth_style in {"auto", "bearer"} and key:
         auth_sets.append(("bearer", {"Authorization": f"Bearer {key}"}))
+    if normalized_auth_style in {"auto", "x-api-key"} and key:
         auth_sets.append(("x-api-key", {"x-api-key": key, "anthropic-version": "2023-06-01"}))
-    else:
+    if normalized_auth_style in {"auto", "none"}:
         auth_sets.append(("none", {}))
+    if not auth_sets:
+        raise ValueError("provider credential is not configured")
     last_error = ""
     for endpoint in candidates:
         for auth_style, auth_headers in auth_sets:
@@ -538,12 +554,16 @@ def _test_gateway_model(
     auth_token: str,
     model: str,
     auth_style: str,
+    *,
+    backend: str = "claude",
+    wire_api: str = "",
     timeout: int = 10,
 ) -> None:
-    """Send a minimal probe request to verify a model is callable on the gateway.
+    """Send a minimal probe request using the selected backend's runtime protocol.
 
-    Bearer gateways are probed via the OpenAI chat completions endpoint, x-api-key
-    gateways via the Anthropic messages endpoint. Raises ValueError on failure.
+    Codex providers default to the Responses API. Claude x-api-key gateways use
+    Anthropic Messages, while Bearer gateways retain OpenAI chat compatibility.
+    Raises ValueError on failure.
     """
     key = (auth_token or api_key or "").strip()
     base = (base_url or "").strip().rstrip("/")
@@ -551,16 +571,20 @@ def _test_gateway_model(
         raise ValueError("base_url is required")
     if not model:
         raise ValueError("model is required")
+    if not key:
+        raise ValueError("api_key or auth_token is required")
+    normalized_backend = str(backend or "").strip().lower()
+    normalized_wire_api = str(wire_api or "").strip().lower()
     body: dict[str, object]
-    if auth_style == "x-api-key":
-        if not key:
-            raise ValueError("api_key or auth_token is required")
+    if normalized_backend == "codex" and normalized_wire_api != "chat":
+        endpoint = f"{base}/v1/responses" if not base.endswith("/v1") else f"{base}/responses"
+        headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
+        body = {"model": model, "input": "ping", "max_output_tokens": 1}
+    elif auth_style == "x-api-key":
         endpoint = f"{base}/v1/messages" if not base.endswith("/v1") else f"{base}/messages"
         headers = {"x-api-key": key, "anthropic-version": "2023-06-01", "Content-Type": "application/json"}
         body = {"model": model, "max_tokens": 1, "messages": [{"role": "user", "content": "ping"}]}
     else:
-        if not key:
-            raise ValueError("api_key or auth_token is required")
         endpoint = f"{base}/v1/chat/completions" if not base.endswith("/v1") else f"{base}/chat/completions"
         headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
         body = {"model": model, "messages": [{"role": "user", "content": "ping"}], "max_tokens": 1}
@@ -579,38 +603,178 @@ def _test_gateway_model(
         raise ValueError(f"model probe failed: {exc}") from exc
 
 
+def _saved_provider(root: Path, payload: dict) -> dict:
+    provider_id = str(payload.get("provider_id") or "").strip()
+    if not provider_id:
+        raise ValueError("provider_id is required")
+    provider = provider_by_id(load_config(root), provider_id)
+    if not provider:
+        raise ValueError("provider not found")
+    return provider
+
+
+def _provider_auth_headers(provider: dict, wire_api: str) -> dict[str, str]:
+    credential = str(provider.get("credential") or "").strip()
+    auth_style = str(provider.get("auth_style") or "auto").strip()
+    if auth_style == "auto":
+        auth_style = "x-api-key" if wire_api == "anthropic_messages" else "bearer"
+    headers = {"Content-Type": "application/json"}
+    if auth_style == "bearer" and credential:
+        headers["Authorization"] = f"Bearer {credential}"
+    elif auth_style == "x-api-key" and credential:
+        headers["x-api-key"] = credential
+    if wire_api == "anthropic_messages":
+        headers["anthropic-version"] = "2023-06-01"
+    return headers
+
+
+def _anthropic_base_candidates(base_url: str) -> list[str]:
+    """Candidate bases whose ``/v1/messages`` may serve the Anthropic protocol.
+
+    Some gateways (DeepSeek, MiniMax, Kimi) expose their OpenAI-compatible API
+    at the provider base while serving Anthropic Messages under an
+    ``/anthropic`` suffix. Return the primary base first, then the ``/anthropic``
+    variant when it differs.
+    """
+    base = str(base_url or "").strip().rstrip("/")
+    if not base:
+        return []
+    if base.endswith("/anthropic"):
+        return [base]
+    root = base[:-3] if base.endswith("/v1") else base
+    candidates = [base]
+    anthropic = f"{root}/anthropic"
+    if anthropic != base:
+        candidates.append(anthropic)
+    return candidates
+
+
+def _probe_anthropic_messages(provider: dict, model: str, timeout: int = 10) -> tuple[dict[str, object], str]:
+    """Probe the Anthropic Messages interface, falling back to ``/anthropic``.
+
+    Returns ``(status, anthropic_base_url)``. The ``/anthropic`` base is only
+    tried when the primary base reports the endpoint as missing
+    (``unsupported``), so auth/rate-limit results on the primary base are
+    reported as-is without extra requests.
+    """
+    candidates = _anthropic_base_candidates(str(provider.get("base_url") or ""))
+    if not candidates:
+        return _probe_status(provider, model, "anthropic_messages", timeout=timeout), ""
+    primary = _probe_status({**provider, "base_url": candidates[0]}, model, "anthropic_messages", timeout=timeout)
+    if primary.get("status") != "unsupported" or len(candidates) == 1:
+        return primary, ""
+    for candidate in candidates[1:]:
+        status = _probe_status({**provider, "base_url": candidate}, model, "anthropic_messages", timeout=timeout)
+        if status.get("status") == "supported":
+            return status, candidate
+    return primary, ""
+
+
+def _protocol_probe_request(provider: dict, model: str, wire_api: str) -> Request:
+    base = str(provider.get("base_url") or "").strip().rstrip("/")
+    prefix = base if base.endswith("/v1") else f"{base}/v1"
+    if wire_api == "responses":
+        endpoint = f"{prefix}/responses"
+        body: dict[str, object] = {"model": model, "input": "ping", "max_output_tokens": 1}
+    elif wire_api == "chat_completions":
+        endpoint = f"{prefix}/chat/completions"
+        body = {"model": model, "messages": [{"role": "user", "content": "ping"}], "max_tokens": 1}
+    else:
+        endpoint = f"{prefix}/messages"
+        body = {"model": model, "messages": [{"role": "user", "content": "ping"}], "max_tokens": 1}
+    return Request(
+        endpoint,
+        data=json.dumps(body).encode("utf-8"),
+        headers=_provider_auth_headers(provider, wire_api),
+        method="POST",
+    )
+
+
+def _probe_status(provider: dict, model: str, wire_api: str, timeout: int = 10) -> dict[str, object]:
+    try:
+        with urlopen(_protocol_probe_request(provider, model, wire_api), timeout=timeout) as response:
+            status_code = int(getattr(response, "status", 200) or 200)
+        if 200 <= status_code < 300:
+            return {"status": "supported", "http_status": status_code}
+        return {"status": "inconclusive", "http_status": status_code}
+    except HTTPError as exc:
+        status_code = int(exc.code or 0)
+        if status_code in {401, 403}:
+            status = "auth_error"
+        elif status_code == 429:
+            status = "rate_limited"
+        elif status_code in {404, 405, 501}:
+            status = "unsupported"
+        elif status_code >= 500:
+            status = "unavailable"
+        else:
+            status = "inconclusive"
+        return {"status": status, "http_status": status_code}
+    except (URLError, TimeoutError, OSError):
+        return {"status": "unavailable"}
+    except (ValueError, json.JSONDecodeError):
+        return {"status": "inconclusive"}
+
+
 def handle_detect_models(root: Path, body: bytes) -> bytes:
     payload = parse_json_body(body)
-    base_url = str(payload.get("base_url") or "").strip()
-    api_key = str(payload.get("api_key") or "").strip()
-    auth_token = str(payload.get("auth_token") or "").strip()
-    if not base_url:
-        return json_response({"error": "base_url is required"}, "400 Bad Request")
-    if not (api_key or auth_token):
-        return json_response({"error": "api_key or auth_token is required"}, "400 Bad Request")
     try:
-        models, auth_style = _detect_gateway_models(base_url, api_key, auth_token)
+        provider = _saved_provider(root, payload)
     except ValueError as exc:
-        return json_response({"error": str(exc)}, "502 Bad Gateway")
+        return json_response({"error": str(exc)}, "404 Not Found" if "not found" in str(exc) else "400 Bad Request")
+    credential = str(provider.get("credential") or "").strip()
+    configured_auth_style = str(provider.get("auth_style") or "auto").strip()
+    if configured_auth_style not in {"auto", "none"} and not credential:
+        return json_response({"error": "provider credential is not configured"}, "400 Bad Request")
+    try:
+        models, detected_auth_style = _detect_gateway_models(
+            str(provider.get("base_url") or ""),
+            credential,
+            credential,
+            auth_style=configured_auth_style,
+        )
+    except ValueError:
+        return json_response({"error": "failed to detect provider models"}, "502 Bad Gateway")
     if not models:
         return json_response({"error": "no models found"}, "502 Bad Gateway")
-    return json_response({"models": models, "base_url": base_url, "auth_style": auth_style})
+    return json_response({
+        "provider_id": provider["id"],
+        "auth_style": detected_auth_style,
+        "models": models,
+    })
 
 
 def handle_detect_model_test(root: Path, body: bytes) -> bytes:
     payload = parse_json_body(body)
-    base_url = str(payload.get("base_url") or "").strip()
-    api_key = str(payload.get("api_key") or "").strip()
-    auth_token = str(payload.get("auth_token") or "").strip()
-    model = str(payload.get("model") or "").strip()
-    auth_style = str(payload.get("auth_style") or "").strip() or "bearer"
-    if not base_url or not model:
-        return json_response({"error": "base_url and model are required"}, "400 Bad Request")
     try:
-        _test_gateway_model(base_url, api_key, auth_token, model, auth_style)
+        provider = _saved_provider(root, payload)
     except ValueError as exc:
-        return json_response({"error": str(exc)}, "502 Bad Gateway")
-    return json_response({"ok": True, "model": model, "auth_style": auth_style})
+        return json_response({"error": str(exc)}, "404 Not Found" if "not found" in str(exc) else "400 Bad Request")
+    detected_auth_style = str(payload.get("auth_style") or "").strip().lower()
+    if provider.get("auth_style") == "auto" and detected_auth_style in {"bearer", "x-api-key", "none"}:
+        provider = {**provider, "auth_style": detected_auth_style}
+    raw_models = payload.get("models", payload.get("model_ids", payload.get("model")))
+    if isinstance(raw_models, str):
+        selected_models = [raw_models.strip()] if raw_models.strip() else []
+    elif isinstance(raw_models, list):
+        selected_models = [str(item).strip() for item in raw_models if str(item or "").strip()]
+    else:
+        selected_models = []
+    if not selected_models:
+        return json_response({"error": "at least one model is required"}, "400 Bad Request")
+    results = []
+    for model in dict.fromkeys(selected_models):
+        capabilities = {
+            wire_api: _probe_status(provider, model, wire_api)
+            for wire_api in ("responses", "chat_completions")
+        }
+        messages_status, anthropic_base_url = _probe_anthropic_messages(provider, model)
+        capabilities["anthropic_messages"] = messages_status
+        result: dict[str, object] = {"model_id": model, "capabilities": capabilities}
+        if anthropic_base_url:
+            result["anthropic_base_url"] = anthropic_base_url
+        results.append(result)
+    return json_response({"provider_id": provider["id"], "results": results})
 
 
 def _optional_string(value: object) -> str | None:
@@ -620,6 +784,14 @@ def _optional_string(value: object) -> str | None:
 
 def _string_or_default(value: object, default: str) -> str:
     return str(value or "").strip() or default
+
+
+MODEL_SOURCE_OPTIONS = {"both", "official", "env"}
+
+
+def _model_source(value: object, default: str = "both") -> str:
+    text = str(value or "").strip().lower()
+    return text if text in MODEL_SOURCE_OPTIONS else default
 
 
 def _string_list(value: object, field_name: str) -> list[str]:
@@ -751,8 +923,9 @@ def _backend_proxy_switch_from_payload(value: object, field_name: str, fallback:
     }
 
 
-def _bootstrap_config_from_payload(payload: dict) -> dict:
+def _bootstrap_config_from_payload(payload: dict, existing_config: dict | None = None) -> dict:
     defaults = default_config()
+    existing_config = existing_config if isinstance(existing_config, dict) else {}
     backend = _string_or_default(payload.get("backend"), "codex")
     if backend not in BOOTSTRAP_BACKEND_OPTIONS:
         raise ValueError(f"unknown backend: {backend}")
@@ -785,6 +958,7 @@ def _bootstrap_config_from_payload(payload: dict) -> dict:
         "json": parse_optional_bool(codex_payload.get("json", codex_defaults["json"]), "codex.json"),
         "session_policy": _session_policy(codex_payload.get("session_policy"), str(codex_defaults["session_policy"])),
         "env_active": _optional_string(codex_payload.get("env_active")),
+        "model_source": _model_source(codex_payload.get("model_source"), str(codex_defaults.get("model_source", "both"))),
         "env": codex_env,
         "proxy": _backend_proxy_switch_from_payload(
             codex_payload.get("proxy"),
@@ -805,6 +979,7 @@ def _bootstrap_config_from_payload(payload: dict) -> dict:
         "permission_mode": _optional_string(claude_payload.get("permission_mode")),
         "session_policy": _session_policy(claude_payload.get("session_policy"), str(claude_defaults["session_policy"])),
         "env_active": _optional_string(claude_payload.get("env_active")),
+        "model_source": _model_source(claude_payload.get("model_source"), str(claude_defaults.get("model_source", "both"))),
         "env": claude_env,
         "proxy": _backend_proxy_switch_from_payload(
             claude_payload.get("proxy"),
@@ -813,6 +988,17 @@ def _bootstrap_config_from_payload(payload: dict) -> dict:
         ),
     }
     integrations = normalize_integrations_config(_object_value(payload.get("integrations"), "integrations"))
+    provider_input = payload.get("providers") if "providers" in payload else existing_config.get("providers", [])
+    providers = normalize_providers(provider_input, existing_config.get("providers", []))
+    configured_model_input = (
+        payload.get("configured_models")
+        if "configured_models" in payload
+        else existing_config.get("configured_models", [])
+    )
+    configured_models = normalize_configured_models(
+        configured_model_input,
+        (str(item.get("id") or "") for item in providers),
+    )
 
     return {
         "backend": backend,
@@ -825,6 +1011,8 @@ def _bootstrap_config_from_payload(payload: dict) -> dict:
         "context_windows": _object_value(payload.get("context_windows"), "context_windows"),
         "retention_policy": retention_policy_schedule_config(payload.get("retention_policy")),
         "integrations": integrations,
+        "providers": providers,
+        "configured_models": configured_models,
         "codex": codex,
         "claude": claude,
     }
@@ -848,7 +1036,9 @@ def handle_save_bootstrap(root: Path, default_run_id: str, body: bytes) -> bytes
     path = config_path(root)
     if path.exists() and not parse_optional_bool(payload.get("force", False), "force"):
         return json_response({"error": "AHA is already initialized"}, "409 Conflict")
-    cfg = _preserve_existing_bootstrap_sections(path, _bootstrap_config_from_payload(payload))
+    existing = load_config(root) if path.exists() else {}
+    cfg = _preserve_existing_bootstrap_sections(path, _bootstrap_config_from_payload(payload, existing))
+    sync_legacy_backend_env(cfg)
     write_json(path, cfg)
     return json_response(bootstrap_payload(root, default_run_id), "201 Created")
 

@@ -519,6 +519,7 @@ appBridge = window.AHAAppBridge.createAppBridge({
 });
 const {
   addBootstrapConfigRow,
+  addBootstrapProvider,
   addOptimisticSendFeedback,
   agentStatusSession,
   agentStatusTiming,
@@ -579,6 +580,7 @@ const {
   realtimeDebug,
   realtimeTransportText,
   removeBootstrapConfigRow,
+  removeBootstrapProvider,
   removeOptimisticEventsMatchedBy,
   renderAccessControlStatus,
   renderAgents,

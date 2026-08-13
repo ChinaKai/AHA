@@ -45,6 +45,7 @@ COMMANDS = {
     "commit-check",
     "package",
     "service",
+    "managed-process",
     "codex-runner",
     "claude-runner",
     "codex-chat",
@@ -577,6 +578,35 @@ def build_parser(handlers: Mapping[str, Callable[[argparse.Namespace], int]]) ->
     service_upgrade.add_argument("--skip-upgrade-validation", action="store_true", help="Do not verify the downloaded executable with --version")
     service_upgrade.add_argument("--json", action="store_true", help="Print machine-readable JSON")
     service_upgrade.set_defaults(func=handlers["service"])
+
+    managed_process_p = sub.add_parser("managed-process", help="Manage task-scoped background processes through AHA Web")
+    managed_process_sub = managed_process_p.add_subparsers(dest="managed_process_cmd", required=True)
+
+    def add_managed_process_scope(p: argparse.ArgumentParser, *, include_name: bool = False) -> None:
+        if include_name:
+            p.add_argument("name", help="Stable process name within the task/agent scope")
+        p.add_argument("--run-id", default=None, help="Defaults to $AHA_RUN_ID")
+        p.add_argument("--task-id", default=None, help="Defaults to $AHA_TASK_ID")
+        p.add_argument("--agent-id", default=None, help="Defaults to $AHA_AGENT_ID or main")
+        p.add_argument("--web-token", default=None, help=argparse.SUPPRESS)
+
+    managed_process_start = managed_process_sub.add_parser("start", help="Start a Web-owned background process")
+    add_managed_process_scope(managed_process_start, include_name=True)
+    managed_process_start.add_argument("--cwd", default=None, help="Working directory inside the task workspace")
+    managed_process_start.add_argument("command_argv", nargs="+", help="Command after --; executed without a shell")
+    managed_process_start.set_defaults(func=handlers["managed-process"])
+
+    managed_process_list = managed_process_sub.add_parser("list", help="List managed processes for the task agent")
+    add_managed_process_scope(managed_process_list)
+    managed_process_list.set_defaults(func=handlers["managed-process"])
+
+    managed_process_status = managed_process_sub.add_parser("status", help="Show one managed process")
+    add_managed_process_scope(managed_process_status, include_name=True)
+    managed_process_status.set_defaults(func=handlers["managed-process"])
+
+    managed_process_stop = managed_process_sub.add_parser("stop", help="Stop one managed process tree")
+    add_managed_process_scope(managed_process_stop, include_name=True)
+    managed_process_stop.set_defaults(func=handlers["managed-process"])
 
     codex_runner_p = sub.add_parser("codex-runner")
     codex_runner_p.add_argument("--codex-bin", default="codex")

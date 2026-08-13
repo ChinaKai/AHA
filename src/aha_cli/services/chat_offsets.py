@@ -9,6 +9,7 @@ from aha_cli import locking
 from aha_cli.domain.models import utc_now
 from aha_cli.services.subagent_state import task_has_incomplete_sub_agents
 from aha_cli.store.filesystem import iter_jsonl_from, read_json, task_snapshot, write_json
+from aha_cli.store.paths import inbox_path, run_dir
 
 
 TERMINAL_TASK_STATUSES = {"completed", "failed", "blocked"}
@@ -92,6 +93,12 @@ def chat_turn_result_recoverable(checkpoint: dict | None, backend: str, model: s
         # turn (e.g. backend refused an over-long prompt) has nothing to preserve,
         # and recovering it would make a reopen hit the old failure immediately.
         return False
+    if not str(checkpoint.get("reply") or "").strip():
+        # A successful process exit without a deliverable reply is not a
+        # recoverable turn result. Older backend completion handling could leave
+        # this shape behind after mistaking a background-task notification for
+        # the real turn boundary; replaying it makes every reopen fail again.
+        return False
     expected_backend = str(backend or "").removesuffix("-chat").strip().lower()
     checkpoint_backend = str(checkpoint.get("backend") or "").removesuffix("-chat").strip().lower()
     if not checkpoint_backend:
@@ -103,6 +110,55 @@ def chat_turn_result_recoverable(checkpoint: dict | None, backend: str, model: s
     expected_model = str(model or "").strip()
     checkpoint_model = str(checkpoint.get("model") or "").strip()
     return not checkpoint_model or not expected_model or checkpoint_model == expected_model
+
+
+def reset_task_chat_for_reopen(root: Path, run_id: str, task: dict) -> dict:
+    """Discard pre-reopen inbox work and stale checkpoints for every task agent."""
+
+    run = run_dir(root, run_id)
+    task_id = str(task.get("id") or "").strip()
+    if not task_id:
+        raise ValueError("task id is required to reset chat state")
+    agents = task.get("agents") if isinstance(task.get("agents"), list) else []
+    targets = {
+        str(agent.get("id") or "").strip()
+        for agent in agents
+        if isinstance(agent, dict) and str(agent.get("id") or "").strip()
+    }
+    targets.add("main")
+    boundaries: list[dict] = []
+    for target in sorted(targets):
+        inbox = inbox_path(root, run_id, target)
+        try:
+            boundary = inbox.stat().st_size if inbox.exists() else 0
+        except OSError:
+            boundary = 0
+        offset_file = chat_offset_path(run, target, task_id)
+        _write_chat_offset(offset_file, boundary, monotonic=False)
+
+        checkpoint_file = chat_turn_checkpoint_path(run, target, task_id)
+        checkpoint_discarded = False
+        if checkpoint_file.exists():
+            try:
+                checkpoint = read_json(checkpoint_file)
+            except (OSError, ValueError):
+                checkpoint = {}
+            if checkpoint.get("phase") in {"prepared", "executed"}:
+                checkpoint["phase"] = "discarded"
+                checkpoint["discarded_at"] = utc_now()
+                checkpoint["discard_reason"] = "task_reopened"
+                checkpoint["reopen_boundary_offset"] = boundary
+                checkpoint["updated_at"] = utc_now()
+                write_json(checkpoint_file, checkpoint)
+                checkpoint_discarded = True
+        boundaries.append(
+            {
+                "target": target,
+                "offset": boundary,
+                "checkpoint_discarded": checkpoint_discarded,
+            }
+        )
+    return {"task_id": task_id, "boundaries": boundaries}
 
 
 def load_prepared_chat_turn(path: Path, source_offset: int) -> dict | None:
@@ -316,6 +372,7 @@ __all__ = [
     "load_prepared_chat_turn",
     "load_chat_turn_checkpoint",
     "release_chat_consumer",
+    "reset_task_chat_for_reopen",
     "safe_target_name",
     "save_chat_offset",
     "save_chat_turn_actions",

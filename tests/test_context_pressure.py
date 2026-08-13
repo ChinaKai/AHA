@@ -160,6 +160,48 @@ class ContextPressureTests(unittest.TestCase):
         self.assertEqual(window, 123456)
         self.assertEqual(source, "config")
 
+    def test_context_window_can_come_from_configured_model(self) -> None:
+        window, source = context_window_for_model(
+            "claude",
+            "deepseek-v4-flash",
+            cfg={
+                "configured_models": [
+                    {
+                        "provider_id": "p1",
+                        "model_id": "deepseek-v4-flash",
+                        "backend": "claude",
+                        "wire_api": "anthropic_messages",
+                        "context_window": 262144,
+                    }
+                ]
+            },
+            environ={},
+        )
+
+        self.assertEqual(window, 262144)
+        self.assertEqual(source, "configured")
+
+    def test_configured_model_window_is_backend_and_model_scoped(self) -> None:
+        window, source = context_window_for_model(
+            "codex",
+            "deepseek-v4-flash",
+            cfg={
+                "configured_models": [
+                    {
+                        "provider_id": "p1",
+                        "model_id": "deepseek-v4-flash",
+                        "backend": "claude",
+                        "wire_api": "anthropic_messages",
+                        "context_window": 262144,
+                    }
+                ]
+            },
+            environ={},
+        )
+
+        self.assertIsNone(window)
+        self.assertEqual(source, "unknown")
+
     def test_context_window_can_be_overridden_by_env(self) -> None:
         window, source = context_window_for_model(
             "codex",

@@ -328,6 +328,47 @@ class WebRunApiTests(unittest.TestCase):
             ],
         )
 
+    def test_api_bootstrap_persists_model_source_defaults_and_validation(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / ".aha"
+            asyncio.run(
+                fetch_ui_response(
+                    root,
+                    "",
+                    "/api/bootstrap",
+                    method="POST",
+                    payload={
+                        "backend": "codex",
+                        "codex": {"model": "gpt-5.5", "model_source": "official"},
+                        "claude": {"model": "env:work", "model_source": "env"},
+                    },
+                )
+            )
+            cfg = read_json(root / "config.json")
+
+        self.assertEqual(cfg["codex"]["model_source"], "official")
+        self.assertEqual(cfg["claude"]["model_source"], "env")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / ".aha"
+            asyncio.run(
+                fetch_ui_response(
+                    root,
+                    "",
+                    "/api/bootstrap",
+                    method="POST",
+                    payload={
+                        "backend": "codex",
+                        "codex": {"model": "gpt-5.5", "model_source": "bogus"},
+                        "claude": {"model": "claude-sonnet"},
+                    },
+                )
+            )
+            cfg = read_json(root / "config.json")
+
+        self.assertEqual(cfg["codex"]["model_source"], "both")
+        self.assertEqual(cfg["claude"]["model_source"], "both")
+
     def test_claude_env_groups_migrate_legacy_runtime_fields_to_simple_shape(self) -> None:
         groups = _claude_env_groups(
             [
@@ -608,197 +649,21 @@ class WebRunApiTests(unittest.TestCase):
         self.assertIsNone(cfg["claude"]["env_active"])
         self.assertEqual(cfg["claude"]["env"][0]["name"], "work")
 
-    def test_api_detect_models_returns_gateway_models(self) -> None:
-        class FakeResponse:
-            def __enter__(self):
-                return self
-
-            def __exit__(self, *_args):
-                return False
-
-            def read(self):
-                return json.dumps({
-                    "object": "list",
-                    "data": [
-                        {"id": "claude-sonnet-5", "object": "model", "max_input_tokens": 1000000, "max_output_tokens": 64000},
-                        {"id": "claude-opus-5", "object": "model"},
-                        {"id": "deepseek-v4-flash", "object": "model", "max_input_tokens": 1000000},
-                    ],
-                }).encode("utf-8")
-
-        with tempfile.TemporaryDirectory() as tmp, mock.patch("aha_cli.web.run_routes.urlopen", return_value=FakeResponse()) as urlopen:
-            root = Path(tmp) / ".aha"
-            response = asyncio.run(
-                fetch_ui_response(
-                    root,
-                    "",
-                    "/api/detect-models",
-                    method="POST",
-                    payload={
-                        "base_url": "https://gateway.test/v1",
-                        "api_key": "test-key",
-                        "backend": "claude",
-                    },
-                )
-            )
-        body = json_response_body(response)
-        self.assertTrue(response.startswith(b"HTTP/1.1 200 OK"))
-        self.assertEqual(
-            body["models"],
-            [
-                {"id": "claude-sonnet-5", "max_input_tokens": 1000000, "max_output_tokens": 64000},
-                {"id": "claude-opus-5"},
-                {"id": "deepseek-v4-flash", "max_input_tokens": 1000000},
-            ],
-        )
-        self.assertEqual(body["base_url"], "https://gateway.test/v1")
-        self.assertEqual(body["auth_style"], "bearer")
-        requested_url = urlopen.call_args[0][0].full_url
-        self.assertIn("gateway.test", requested_url)
-
-    def test_api_detect_models_reports_x_api_key_style(self) -> None:
-        class FakeResponse:
-            def __enter__(self):
-                return self
-
-            def __exit__(self, *_args):
-                return False
-
-            def read(self):
-                return json.dumps({"data": [{"id": "claude-sonnet-5"}]}).encode("utf-8")
-
-        call_count = 0
-
-        def fake_urlopen(_request, **kwargs):
-            nonlocal call_count
-            call_count += 1
-            if call_count == 1:
-                from urllib.error import HTTPError
-
-                raise HTTPError("url", 401, "Unauthorized", {}, None)
-            return FakeResponse()
-
-        with tempfile.TemporaryDirectory() as tmp, mock.patch("aha_cli.web.run_routes.urlopen", side_effect=fake_urlopen):
-            root = Path(tmp) / ".aha"
-            response = asyncio.run(
-                fetch_ui_response(
-                    root,
-                    "",
-                    "/api/detect-models",
-                    method="POST",
-                    payload={"base_url": "https://gateway.test/v1", "api_key": "test-key"},
-                )
-            )
-        body = json_response_body(response)
-        self.assertTrue(response.startswith(b"HTTP/1.1 200 OK"))
-        self.assertEqual(body["auth_style"], "x-api-key")
-
-    def test_api_detect_model_test_probes_bearer_gateway(self) -> None:
-        class FakeResponse:
-            def __enter__(self):
-                return self
-
-            def __exit__(self, *_args):
-                return False
-
-            def read(self):
-                return json.dumps({"id": "cmpl-test", "object": "chat.completion"}).encode("utf-8")
-
-        with tempfile.TemporaryDirectory() as tmp, mock.patch("aha_cli.web.run_routes.urlopen", return_value=FakeResponse()) as urlopen:
-            root = Path(tmp) / ".aha"
-            response = asyncio.run(
-                fetch_ui_response(
-                    root,
-                    "",
-                    "/api/detect-models/test",
-                    method="POST",
-                    payload={"base_url": "https://gateway.test", "api_key": "test-key", "model": "claude-sonnet-5", "auth_style": "bearer"},
-                )
-            )
-        body = json_response_body(response)
-        self.assertTrue(response.startswith(b"HTTP/1.1 200 OK"))
-        self.assertTrue(body["ok"])
-        requested_url = urlopen.call_args[0][0].full_url
-        self.assertIn("/v1/chat/completions", requested_url)
-
-    def test_api_detect_model_test_uses_x_api_key_style(self) -> None:
-        class FakeResponse:
-            def __enter__(self):
-                return self
-
-            def __exit__(self, *_args):
-                return False
-
-            def read(self):
-                return json.dumps({"type": "message", "content": []}).encode("utf-8")
-
-        with tempfile.TemporaryDirectory() as tmp, mock.patch("aha_cli.web.run_routes.urlopen", return_value=FakeResponse()) as urlopen:
-            root = Path(tmp) / ".aha"
-            response = asyncio.run(
-                fetch_ui_response(
-                    root,
-                    "",
-                    "/api/detect-models/test",
-                    method="POST",
-                    payload={"base_url": "https://gateway.test", "auth_token": "tok", "model": "claude-sonnet-5", "auth_style": "x-api-key"},
-                )
-            )
-        body = json_response_body(response)
-        self.assertTrue(response.startswith(b"HTTP/1.1 200 OK"))
-        requested_url = urlopen.call_args[0][0].full_url
-        self.assertIn("/v1/messages", requested_url)
-
-    def test_api_detect_model_test_surfaces_gateway_error(self) -> None:
-        from urllib.error import URLError
-
-        with tempfile.TemporaryDirectory() as tmp, mock.patch(
-            "aha_cli.web.run_routes.urlopen", side_effect=URLError("boom")
-        ):
-            root = Path(tmp) / ".aha"
-            response = asyncio.run(
-                fetch_ui_response(
-                    root,
-                    "",
-                    "/api/detect-models/test",
-                    method="POST",
-                    payload={"base_url": "https://gateway.test", "api_key": "test-key", "model": "claude-sonnet-5", "auth_style": "bearer"},
-                )
-            )
-        body = json_response_body(response)
-        self.assertTrue(response.startswith(b"HTTP/1.1 502 Bad Gateway"))
-        self.assertIn("model probe failed", body["error"])
-
-    def test_api_detect_models_requires_base_url_and_credential(self) -> None:
+    def test_api_detect_models_rejects_unsaved_connection_details(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / ".aha"
-            missing_url = asyncio.run(
-                fetch_ui_response(root, "", "/api/detect-models", method="POST", payload={"api_key": "k"})
-            )
-            missing_key = asyncio.run(
-                fetch_ui_response(root, "", "/api/detect-models", method="POST", payload={"base_url": "https://gateway.test"})
-            )
-        self.assertTrue(missing_url.startswith(b"HTTP/1.1 400 Bad Request"))
-        self.assertTrue(missing_key.startswith(b"HTTP/1.1 400 Bad Request"))
-
-    def test_api_detect_models_surfaces_gateway_error(self) -> None:
-        from urllib.error import URLError
-
-        with tempfile.TemporaryDirectory() as tmp, mock.patch(
-            "aha_cli.web.run_routes.urlopen", side_effect=URLError("boom")
-        ):
-            root = Path(tmp) / ".aha"
             response = asyncio.run(
                 fetch_ui_response(
                     root,
                     "",
                     "/api/detect-models",
                     method="POST",
-                    payload={"base_url": "https://gateway.test/v1", "api_key": "test-key"},
+                    payload={"base_url": "https://gateway.test", "api_key": "secret"},
                 )
             )
-        body = json_response_body(response)
-        self.assertTrue(response.startswith(b"HTTP/1.1 502 Bad Gateway"))
-        self.assertIn("failed to detect models", body["error"])
+
+        self.assertTrue(response.startswith(b"HTTP/1.1 400 Bad Request"))
+        self.assertNotIn("secret", response.decode("utf-8"))
 
     def test_api_bootstrap_force_updates_existing_config(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

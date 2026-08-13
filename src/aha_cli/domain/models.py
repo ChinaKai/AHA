@@ -271,6 +271,8 @@ def default_config() -> dict:
             "no_proxy": None,
         },
         "context_windows": {},
+        "providers": [],
+        "configured_models": [],
         "integrations": default_integrations_config(),
         "agents": default_agents_config(),
         "retention_policy": default_retention_policy_config(),
@@ -284,6 +286,7 @@ def default_config() -> dict:
             "json": True,
             "session_policy": "sticky",
             "env_active": None,
+            "model_source": "both",
             "env": [],
             "proxy": {
                 "enabled": False,
@@ -297,6 +300,7 @@ def default_config() -> dict:
             "permission_mode": None,
             "session_policy": "sticky",
             "env_active": None,
+            "model_source": "both",
             "env": [],
             "proxy": {
                 "enabled": False,

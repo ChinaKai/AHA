@@ -807,22 +807,23 @@ class BackendRunnerSessionTests(unittest.TestCase):
     def test_codex_exec_finishes_after_native_completion_when_stdout_stays_open(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             output = Path(tmp) / "reply.md"
-            output.write_text("done", encoding="utf-8")
             events = Path(tmp) / "events.jsonl"
+            message = json.dumps({"type": "item.completed", "item": {"type": "agent_message", "text": "done"}}) + "\n"
             completion = json.dumps({"type": "turn.completed", "usage": {"output_tokens": 1}}) + "\n"
 
             class BlockingStdout:
                 def __init__(self) -> None:
-                    self.sent = False
+                    self.lines = iter([message, completion])
                     self.release = threading.Event()
 
                 def __iter__(self) -> "BlockingStdout":
                     return self
 
                 def __next__(self) -> str:
-                    if not self.sent:
-                        self.sent = True
-                        return completion
+                    try:
+                        return next(self.lines)
+                    except StopIteration:
+                        pass
                     self.release.wait(5)
                     raise StopIteration
 
@@ -855,10 +856,12 @@ class BackendRunnerSessionTests(unittest.TestCase):
                 )
             process.stdout.release.set()
             rows = [json.loads(line) for line in events.read_text(encoding="utf-8").splitlines()]
+            output_text = output.read_text(encoding="utf-8")
 
         self.assertEqual(code, 0)
         self.assertEqual(reply, "done")
-        self.assertEqual([row["type"] for row in rows], ["agent_usage", "backend_completion_grace_exceeded"])
+        self.assertEqual(output_text, "done")
+        self.assertEqual([row["type"] for row in rows], ["agent_message", "agent_usage", "backend_completion_grace_exceeded"])
         self.assertEqual(rows[-1]["data"]["backend"], "codex")
         self.assertEqual(rows[-1]["data"]["process_exit_code"], 0)
 

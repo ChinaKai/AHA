@@ -71,6 +71,7 @@ PROMPT_CONVERSATION_MESSAGE_CHAR_LIMIT = 700
 PROMPT_CONVERSATION_MIN_MESSAGE_CHAR_LIMIT = 240
 PROMPT_RECENT_CONVERSATION_CHAR_BUDGET = 1800
 CLAUDE_PUBLIC_UPDATE_CONTEXT_KEY = "claude_public_updates"
+MANAGED_PROCESS_CONTEXT_KEY = "managed_processes"
 COMMIT_POLICY_INTENT_TERMS = (
     "commit",
     "git commit",
@@ -122,6 +123,17 @@ ATTACHMENT_OUTPUT_INTENT_TERMS = (
     "发图",
     "发送图片",
     "显示图片",
+)
+MANAGED_PROCESS_INTENT_TERMS = (
+    "background",
+    "server",
+    "watcher",
+    "tunnel",
+    "monitor",
+    "web service",
+    "后台",
+    "服务",
+    "监听",
 )
 CONTEXT_FINGERPRINT_UPDATES_METRIC_KEY = "context_fingerprint_updates"
 CONTEXT_PACK_EVIDENCE_METRIC_KEY = "context_pack_evidence"
@@ -344,6 +356,10 @@ def _knowledge_enabled_for_prompt(root: Path) -> bool:
         return bool(isinstance(knowledge, dict) and knowledge.get("enabled"))
     except (Exception, SystemExit):
         return False
+
+
+def _prompt_needs_managed_process_guidance(item: dict) -> bool:
+    return _has_intent_term(_intent_text_for_prompt(item), MANAGED_PROCESS_INTENT_TERMS)
 
 
 def _knowledge_context_delta_for_prompt(root: Path, run_id: str, task: dict) -> str:
@@ -645,6 +661,10 @@ def _claude_public_update_context(backend: str | None) -> str:
     return render_prompt_template("backend_claude_public_updates.md").rstrip()
 
 
+def _managed_process_context() -> str:
+    return render_prompt_template("backend_managed_processes.md").rstrip()
+
+
 def _prompt_context_fingerprints(
     root: Path,
     run_id: str,
@@ -652,6 +672,7 @@ def _prompt_context_fingerprints(
     *,
     backend: str | None = None,
     include_attachment_output: bool = True,
+    include_managed_process: bool = True,
 ) -> dict[str, str]:
     if not task:
         return {}
@@ -666,6 +687,8 @@ def _prompt_context_fingerprints(
         "service_assistant": _context_fingerprint(_service_assistant_context_for_prompt(root, task)),
         "feishu_group": _context_fingerprint(_feishu_group_context_for_prompt(root, run_id, task)),
     }
+    if include_managed_process:
+        fingerprints[MANAGED_PROCESS_CONTEXT_KEY] = _context_fingerprint(_managed_process_context())
     if include_attachment_output:
         fingerprints["attachment_output_guidance"] = _context_fingerprint(_attachment_output_guidance_for_prompt(root, run_id))
     claude_public_updates = _claude_public_update_context(backend)
@@ -697,6 +720,12 @@ def _sticky_context_delta_for_prompt(
         return ""
     delivered = _delivered_context_fingerprints(session)
     sections: list[str] = []
+    managed_process_context = _managed_process_context()
+    if (
+        current_fingerprints.get(MANAGED_PROCESS_CONTEXT_KEY)
+        and delivered.get(MANAGED_PROCESS_CONTEXT_KEY) != current_fingerprints.get(MANAGED_PROCESS_CONTEXT_KEY)
+    ):
+        sections.append(managed_process_context)
     hardware_context = hardware_debug_context_for_prompt(task).rstrip()
     if current_fingerprints.get("hardware_debug") and delivered.get("hardware_debug") != current_fingerprints.get("hardware_debug"):
         sections.append(hardware_context)
@@ -1263,6 +1292,7 @@ def chat_prompt(
                     detail["task"],
                     backend=backend,
                     include_attachment_output=_prompt_needs_attachment_output_guidance(item, sticky_delta=sticky_delta),
+                    include_managed_process=(not sticky_delta or _prompt_needs_managed_process_guidance(item)),
                 )
                 if not is_agent_command:
                     context_pack_payload = _context_pack_payload_for_prompt(root, run_id, detail["task"], item)
@@ -1285,6 +1315,11 @@ def chat_prompt(
             )
             if claude_public_update_pending:
                 components["claude_public_update_context"] = claude_public_update_context
+            managed_process_pending = bool(
+                context_fingerprint_updates.get(MANAGED_PROCESS_CONTEXT_KEY)
+                and delivered_fingerprints.get(MANAGED_PROCESS_CONTEXT_KEY)
+                != context_fingerprint_updates.get(MANAGED_PROCESS_CONTEXT_KEY)
+            )
             if (
                 sticky_delta
                 and item.get("plain_sticky")
@@ -1293,6 +1328,7 @@ def chat_prompt(
                 and not context_pack
                 and not components["request_policy"]
                 and not claude_public_update_pending
+                and not managed_process_pending
             ):
                 prompt = str(item.get("message") or "")
                 _fill_prompt_metrics(
@@ -1488,6 +1524,10 @@ def chat_prompt(
                 )
             if claude_public_update_context and not sticky_delta and not is_result_request:
                 task_context = f"{task_context.rstrip()}\n\n{claude_public_update_context}\n"
+            if not sticky_delta and not is_result_request:
+                managed_process_context = _managed_process_context()
+                task_context = f"{task_context.rstrip()}\n\n{managed_process_context}\n"
+                components["managed_process_context"] = managed_process_context
             if context_pack and not sticky_delta and not is_result_request:
                 task_context = f"{task_context.rstrip()}\n\n{context_pack}\n"
             if not sticky_delta and is_task_supervision_host_agent(detail["task"], target):

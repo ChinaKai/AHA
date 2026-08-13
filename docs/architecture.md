@@ -187,8 +187,16 @@ and completes the logical turn instead of leaving the Task permanently
 `running`. AHA stops only a still-running backend parent; it does not tree-kill
 an already detached server. No timeout applies before the native completion
 event, so active commands and model work retain their existing lifecycle.
-Persistent servers, watchers, tunnels, and monitors should still be owned by an
-AHA runtime or an external service host rather than by an individual agent turn.
+Persistent servers, watchers, tunnels, and monitors can be started through
+`aha managed-process start`. The CLI calls the loopback-only/authenticated
+`/api/managed-processes` endpoint, so the long-lived AHA Web process performs
+the spawn instead of the current Codex/Claude turn. Runtime JSON is stored under
+`runs/<run-id>/runtime/`, output under `runs/<run-id>/logs/`, and start/status/
+list/stop are scoped by task and agent. Commands use an argv array without an
+implicit shell, cwd is constrained to the task workspace, and Web shutdown
+or a terminal task stops the owned process tree. This provides turn persistence without creating
+system orphans; services that must survive an AHA Web restart still belong in
+an external service host.
 
 Changing a task `main`, `sub-*`, or assisted-supervision `host` backend or model is a lifecycle operation. AHA stops an active old backend, builds a compact handoff summary, archives and resets the backend session id, updates the agent backend/model, appends a handoff message for the new backend, and restarts the new backend when the old one was active. The supervision policy stores the host's selected `host_model`, so a Codex/Claude host does not have to inherit the task-main model. This keeps the logical AHA agent identity stable while making the backend session boundary explicit.
 

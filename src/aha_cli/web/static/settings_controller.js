@@ -87,6 +87,51 @@
           deps.removeBootstrapConfigRow?.(removeConfigRow);
           return;
         }
+        const addProvider = event.target instanceof Element ? event.target.closest("[data-bootstrap-add-provider]") : null;
+        if (addProvider) {
+          event.preventDefault();
+          deps.addBootstrapProvider?.(addProvider);
+          return;
+        }
+        const removeProvider = event.target instanceof Element ? event.target.closest("[data-bootstrap-remove-provider]") : null;
+        if (removeProvider) {
+          event.preventDefault();
+          deps.removeBootstrapProvider?.(removeProvider);
+          return;
+        }
+        const removeBinding = event.target instanceof Element ? event.target.closest("[data-bootstrap-remove-binding]") : null;
+        if (removeBinding) {
+          event.preventDefault();
+          const list = removeBinding.closest("[data-bootstrap-binding-list]");
+          removeBinding.closest("[data-bootstrap-model-binding]")?.remove();
+          deps.refreshConfiguredModelGroups?.(list);
+          return;
+        }
+        const editBinding = event.target instanceof Element ? event.target.closest("[data-bootstrap-edit-binding]") : null;
+        if (editBinding) {
+          event.preventDefault();
+          const row = editBinding.closest("[data-bootstrap-model-binding]");
+          const form = editBinding.closest("[data-bootstrap-config-form]");
+          if (!row || !form) return;
+          const value = key => String(row.querySelector(`[data-bootstrap-binding-field="${key}"]`)?.value || "").trim();
+          const binding = { provider_id: value("provider_id"), model_id: value("model"), backend: value("backend"), wire_api: value("wire_api") };
+          for (const key of ["context_window", "max_output_tokens"]) {
+            const num = Number(value(key));
+            if (Number.isFinite(num) && num > 0) binding[key] = num;
+          }
+          for (const key of ["fable_model", "opus_model", "sonnet_model", "haiku_model"]) {
+            const text = value(key);
+            if (text) binding[key] = text;
+          }
+          deps.openModelEditor?.({ form, binding, providers: deps.providerList?.(deps.bootstrapData?.()?.config?.providers || []) || [] });
+          return;
+        }
+        const addBinding = event.target instanceof Element ? event.target.closest("[data-bootstrap-add-binding]") : null;
+        if (addBinding) {
+          event.preventDefault();
+          deps.openModelEditor?.({ form: addBinding.closest("[data-bootstrap-config-form]"), binding: null, providers: deps.providerList?.(deps.bootstrapData?.()?.config?.providers || []) || [] });
+          return;
+        }
         const detectButton = event.target instanceof Element ? event.target.closest("[data-bootstrap-detect-models]") : null;
         if (detectButton) {
           event.preventDefault();
@@ -108,6 +153,10 @@
         deps.syncBootstrapProxyDefaultsForInput?.(input);
         if (!input?.matches("[data-bootstrap-env-name], [data-bootstrap-env-field]")) return;
         deps.syncBootstrapModelOptions?.(input.closest("[data-bootstrap-config-form]"));
+      });
+      elements.settingsDialogEl?.addEventListener("change", event => {
+        const filter = event.target instanceof Element ? event.target.closest("[data-bootstrap-config-field$='.model_source']") : null;
+        if (filter) deps.syncBootstrapModelOptions?.(filter.closest("[data-bootstrap-config-form]"));
       });
     }
 

@@ -43,6 +43,20 @@ def _config_context_window(cfg: Mapping[str, object], backend: str, model: str) 
     return None
 
 
+def _configured_model_context_window(cfg: Mapping[str, object], backend: str, model: str) -> int | None:
+    configured = cfg.get("configured_models")
+    if not isinstance(configured, list):
+        return None
+    for item in configured:
+        if not isinstance(item, dict):
+            continue
+        if str(item.get("backend") or "").strip().lower() == backend and str(item.get("model_id") or "").strip() == model:
+            window = _positive_int(item.get("context_window"))
+            if window:
+                return window
+    return None
+
+
 def context_window_for_model(
     backend: str,
     model: str | None,
@@ -74,6 +88,10 @@ def context_window_for_model(
     from_config = _config_context_window(cfg or {}, normalized_backend, normalized_model)
     if from_config:
         return from_config, "config"
+
+    from_configured = _configured_model_context_window(cfg or {}, normalized_backend, normalized_model)
+    if from_configured:
+        return from_configured, "configured"
 
     if from_runtime:
         return from_runtime, "runtime"

@@ -23,7 +23,15 @@ from aha_cli.services.chat_offsets import (
     save_chat_turn_result,
     worker_backend_should_exit_after_turn,
 )
-from aha_cli.store.filesystem import append_jsonl, read_json, set_task_status
+from aha_cli.store.filesystem import (
+    append_jsonl,
+    inbox_path,
+    iter_jsonl_from,
+    read_json,
+    reopen_task,
+    run_dir,
+    set_task_status,
+)
 
 
 class ChatOffsetTests(unittest.TestCase):
@@ -167,6 +175,62 @@ class ChatOffsetTests(unittest.TestCase):
         missing_exit_code = dict(checkpoint or {})
         missing_exit_code.pop("exit_code", None)
         self.assertFalse(chat_turn_result_recoverable(missing_exit_code, "claude", "env:gateway-a"))
+
+    def test_empty_successful_chat_turn_result_is_never_recovered(self) -> None:
+        checkpoint = {
+            "phase": "executed",
+            "exit_code": 0,
+            "reply": "",
+            "backend": "claude",
+            "model": "env:gateway-a",
+        }
+
+        self.assertFalse(chat_turn_result_recoverable(checkpoint, "claude", "env:gateway-a"))
+
+    def test_reopen_discards_pending_messages_and_stale_checkpoint(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "stub")
+                code, plan_output = self.run_cli("plan", "Reopen boundary", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+
+            inbox = inbox_path(root, run_id, "main")
+            run = run_dir(root, run_id)
+            append_jsonl(
+                inbox,
+                {"sender": "browser", "message": "failed message", "task_id": "task-001"},
+            )
+            failed_boundary = inbox.stat().st_size
+            failed_item = {"sender": "browser", "message": "failed message", "task_id": "task-001"}
+            checkpoint_file = chat_turn_checkpoint_path(run, "main", "task-001")
+            save_chat_turn_result(
+                checkpoint_file,
+                failed_boundary,
+                failed_item,
+                exit_code=0,
+                reply="",
+                backend="stub",
+            )
+            set_task_status(root, run_id, "task-001", "failed", 0)
+
+            reopen_task(root, run_id, "task-001")
+
+            offset_file = chat_offset_path(run, "main", "task-001")
+            self.assertEqual(read_json(offset_file)["offset"], failed_boundary)
+            discarded = read_json(checkpoint_file)
+            self.assertEqual(discarded["phase"], "discarded")
+            self.assertEqual(discarded["discard_reason"], "task_reopened")
+            self.assertEqual(discarded["reopen_boundary_offset"], failed_boundary)
+
+            append_jsonl(
+                inbox,
+                {"sender": "browser", "message": "new follow-up", "task_id": "task-001"},
+            )
+            pending, _ = iter_jsonl_from(inbox, load_chat_offset(inbox, offset_file, from_start=False))
+
+        self.assertEqual([item["message"] for item in pending], ["new follow-up"])
 
     def test_prepared_chat_turn_preserves_merged_item_through_execution(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

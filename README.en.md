@@ -164,6 +164,20 @@ claude
 Claude Code works directly in PowerShell on Windows. For Bash support, also run
 `winget install --id Git.Git -e`.
 
+When an agent needs a preview server, watcher, or tunnel to survive across chat
+turns, use an AHA Web-managed process instead of the Codex/Claude tool's own
+background-task mode:
+
+```powershell
+aha managed-process start preview --cwd . -- python -m http.server 8790
+aha managed-process status preview
+aha managed-process stop preview
+```
+
+Inside an AHA backend session, run/task/agent scope is inherited from the
+environment. A managed process survives model turns but is stopped cleanly when
+its task becomes terminal or the AHA Web service restarts/exits.
+
 Optional features:
 
 ```powershell

@@ -472,6 +472,7 @@
       sessionMenuEl
     }, {
       addBootstrapConfigRow: deps.addBootstrapConfigRow,
+      addBootstrapProvider: deps.addBootstrapProvider,
       bootstrapConfigFormHtml: deps.bootstrapConfigFormHtml,
       bootstrapData: deps.bootstrapData,
       closeMobileActionPanel: deps.closeMobileActionPanel,
@@ -480,7 +481,11 @@
       dispatchAction: deps.dispatchAction,
       fillBootstrapProxyDefaultFor: deps.fillBootstrapProxyDefaultFor,
       loadBootstrap: deps.loadBootstrap,
+      openModelEditor: deps.openModelEditor,
+      providerList: deps.providerList,
+      refreshConfiguredModelGroups: deps.refreshConfiguredModelGroups,
       removeBootstrapConfigRow: deps.removeBootstrapConfigRow,
+      removeBootstrapProvider: deps.removeBootstrapProvider,
       setSessionMenu: deps.setSessionMenu,
       syncBootstrapProxyDefaultsForInput: deps.syncBootstrapProxyDefaultsForInput,
       syncBootstrapModelOptions: deps.syncBootstrapModelOptions

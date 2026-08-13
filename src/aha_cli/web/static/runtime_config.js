@@ -131,6 +131,14 @@
       })).filter(option => option.name);
     }
 
+    function modelSourceFilterForBackend(backend, options) {
+      const cfg = deps.bootstrapConfigData?.() || {};
+      const source = configString(cfg?.[backend]?.model_source, "both");
+      if (source === "official") return options.filter(option => !configString(option.name).startsWith(envModelPrefix));
+      if (source === "env") return options.filter(option => configString(option.name).startsWith(envModelPrefix));
+      return options;
+    }
+
     function codexModelOptions() {
       const official = backendModels.get("codex") || [];
       const officialOptions = official.map(model => ({
@@ -138,7 +146,7 @@
         label: configString(model.label, model.name || "default"),
         reasoning_efforts: Array.isArray(model.reasoning_efforts) ? model.reasoning_efforts : null
       }));
-      return [...officialOptions, ...envModelOptionsForBackend("codex")];
+      return modelSourceFilterForBackend("codex", [...officialOptions, ...envModelOptionsForBackend("codex")]);
     }
 
     function claudeModelOptions() {
@@ -148,7 +156,7 @@
         label: configString(model.label, model.name || "default"),
         reasoning_efforts: Array.isArray(model.reasoning_efforts) ? model.reasoning_efforts : null
       }));
-      return [...officialOptions, ...envModelOptionsForBackend("claude")];
+      return modelSourceFilterForBackend("claude", [...officialOptions, ...envModelOptionsForBackend("claude")]);
     }
 
     function modelOptionsForBackend(backend) {

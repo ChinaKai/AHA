@@ -3010,6 +3010,9 @@
         const name = captureEnvGroupName(group, index);
         return { name: captureEnvModelValue(name), label: captureEnvModelLabel(backendName, group, index) };
       }).filter((m) => m.name) : [];
+      const source = configString(state.captureConfig?.[backendName]?.model_source, "both");
+      if (source === "official") return official;
+      if (source === "env") return env;
       return official.concat(env);
     }
     function captureSelectableModelOptions(backendName) {

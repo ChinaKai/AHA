@@ -80,6 +80,7 @@ from aha_cli.services.service_upgrade import (
     check_user_service_upgrade,
     upgrade_user_service,
 )
+from aha_cli.services.managed_process_client import ManagedProcessClientError, managed_process_request
 from aha_cli.process_control import terminate_parent_death_children
 from aha_cli.services.tasks import create_task_and_dispatch
 from aha_cli.services.windows_tray import (
@@ -1835,6 +1836,47 @@ def cmd_service(args: argparse.Namespace) -> int:
     raise SystemExit(f"Unknown service command: {args.service_cmd}")
 
 
+def cmd_managed_process(args: argparse.Namespace) -> int:
+    root = command_aha_home(args)
+    run_id = str(args.run_id or os.environ.get("AHA_RUN_ID") or "").strip()
+    task_id = str(args.task_id or os.environ.get("AHA_TASK_ID") or "").strip()
+    agent_id = str(args.agent_id or os.environ.get("AHA_AGENT_ID") or "main").strip()
+    if not run_id or not task_id:
+        print("--run-id and --task-id are required outside an AHA backend session", file=sys.stderr)
+        return 2
+    method = "GET"
+    command = None
+    name = getattr(args, "name", None)
+    cwd = getattr(args, "cwd", None)
+    if args.managed_process_cmd == "start":
+        method = "POST"
+        command = list(args.command_argv or [])
+        if command[:1] == ["--"]:
+            command = command[1:]
+        if not command:
+            print("managed-process start requires a command after --", file=sys.stderr)
+            return 2
+    elif args.managed_process_cmd == "stop":
+        method = "DELETE"
+    try:
+        result = managed_process_request(
+            root,
+            method,
+            run_id=run_id,
+            task_id=task_id,
+            agent_id=agent_id,
+            name=name,
+            command=command,
+            cwd=cwd,
+            web_token=args.web_token,
+        )
+    except ManagedProcessClientError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+    print(json.dumps(result, ensure_ascii=False, indent=2))
+    return 0
+
+
 def _generated_by_from_task_context(root: Path, run_id: str, task_id: str, agent_id: str) -> str | None:
     try:
         detail = task_snapshot(root, run_id, task_id)
@@ -1988,6 +2030,7 @@ def command_handlers() -> dict[str, object]:
         "commit-check": cmd_commit_check,
         "package": cmd_package,
         "service": cmd_service,
+        "managed-process": cmd_managed_process,
         "codex-runner": cmd_codex_runner,
         "claude-runner": cmd_claude_runner,
         "codex-chat": cmd_codex_chat,

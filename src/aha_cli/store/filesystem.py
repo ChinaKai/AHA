@@ -1364,6 +1364,13 @@ def _start_reopen_round_if_needed(root: Path, run_id: str, task_id: str, started
 
 def reopen_task(root: Path, run_id: str, task_id: str) -> dict:
     now = utc_now()
+    current = task_snapshot(root, run_id, task_id)["task"]
+    # Import locally because chat_offsets reads task snapshots from this module.
+    # Reopen is the lifecycle boundary that intentionally abandons any failed
+    # or interrupted input that was queued before the user chose to continue.
+    from aha_cli.services.chat_offsets import reset_task_chat_for_reopen
+
+    chat_reset = reset_task_chat_for_reopen(root, run_id, current)
     task = set_task_status(root, run_id, task_id, "awaiting_user", allow_terminal_transition=True)
     _start_reopen_round_if_needed(root, run_id, task_id, now)
     task = mark_task_coordination(
@@ -1378,7 +1385,16 @@ def reopen_task(root: Path, run_id: str, task_id: str) -> dict:
         reopened_at=now,
     )
     render_task_overview_result(root, run_id, task_id, policy="journal", force=True)
-    append_event(root, run_id, "task_reopened", {"task_id": task_id, "round_id": task.get("current_round_id")})
+    append_event(
+        root,
+        run_id,
+        "task_reopened",
+        {
+            "task_id": task_id,
+            "round_id": task.get("current_round_id"),
+            "chat_boundaries": chat_reset["boundaries"],
+        },
+    )
     return task
 
 

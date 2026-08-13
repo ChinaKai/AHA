@@ -2608,3 +2608,61 @@ class ChatPromptTests(unittest.TestCase):
 
         self.assertEqual(prompt.count("browser -> host: 让 host 回复测试消息3"), 1)
         self.assertIn("Recent browser-to-host notes:\n(none)", prompt)
+
+    def test_managed_process_guidance_is_delivered_to_full_and_existing_sticky_sessions(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, output = self.run_cli("plan", "Managed process prompt", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = output.splitlines()[0].split(": ", 1)[1]
+                full_item = append_message(
+                    root,
+                    run_id,
+                    "main",
+                    "start a preview server",
+                    sender="browser",
+                    task_id="task-001",
+                    role="main",
+                )
+                full_prompt, full_metrics = chat_prompt_with_metrics(root, run_id, "main", full_item, "")
+                session_file = run_dir(root, run_id) / "tasks" / "task-001" / "sessions" / "main.json"
+                session = read_json(session_file)
+                session["backend_session_id"] = "existing-session"
+                session["delivered_context_fingerprints"] = {
+                    key: value
+                    for key, value in full_metrics["context_fingerprint_updates"].items()
+                    if key != "managed_processes"
+                }
+                write_json(session_file, session)
+                sticky_item = append_message(
+                    root,
+                    run_id,
+                    "main",
+                    "start a background server now",
+                    sender="browser",
+                    task_id="task-001",
+                    role="main",
+                    plain_sticky=True,
+                )
+                sticky_prompt, sticky_metrics = chat_prompt_with_metrics(root, run_id, "main", sticky_item, "")
+                session["delivered_context_fingerprints"] = sticky_metrics["context_fingerprint_updates"]
+                write_json(session_file, session)
+                next_item = append_message(
+                    root,
+                    run_id,
+                    "main",
+                    "status?",
+                    sender="browser",
+                    task_id="task-001",
+                    role="main",
+                    plain_sticky=True,
+                )
+                next_prompt, _next_metrics = chat_prompt_with_metrics(root, run_id, "main", next_item, "")
+
+        self.assertIn("aha managed-process start", full_prompt)
+        self.assertIn("managed_processes", full_metrics["context_fingerprint_updates"])
+        self.assertIn("aha managed-process start", sticky_prompt)
+        self.assertIn("context_delta", sticky_metrics["components"])
+        self.assertEqual(next_prompt, "status?")

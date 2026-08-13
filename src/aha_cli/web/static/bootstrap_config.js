@@ -33,48 +33,80 @@
     return 0;
   }
 
-  function detectModelsModalHtml(models = [], authStyle = "bearer") {
+  function fuzzyModelMatch(value, query) {
+    const target = String(value || "").trim().toLowerCase();
+    const needle = String(query || "").trim().toLowerCase();
+    if (!needle) return true;
+    if (target.includes(needle)) return true;
+    const compactTarget = target.replace(/[^a-z0-9]+/g, "");
+    const compactNeedle = needle.replace(/[^a-z0-9]+/g, "");
+    if (compactNeedle && compactTarget.includes(compactNeedle)) return true;
+    const terms = needle.split(/\s+/).filter(Boolean);
+    return terms.every(term => {
+      const compactTerm = term.replace(/[^a-z0-9]+/g, "");
+      if (!compactTerm) return target.includes(term);
+      let position = 0;
+      for (const character of compactTarget) {
+        if (character === compactTerm[position]) position += 1;
+        if (position === compactTerm.length) return true;
+      }
+      return false;
+    });
+  }
+
+  function detectModelsModalHtml(models = [], context = {}) {
+    const providerName = configString(context?.provider_name || context?.provider?.name);
+    const authStyle = configString(context?.auth_style, "auto");
     const rows = models.map((model, index) => {
       const id = typeof model === "string" ? model : String(model?.id || "").trim();
       const windowValue = modelContextWindow(model);
-      const windowLabel = formatContextWindow(windowValue);
-      const outputLabel = formatContextWindow(model?.max_output_tokens);
-      const modeLabel = String(model?.mode || "").trim() || "NA";
-      const metaLabel = `${windowLabel}.${outputLabel}.${modeLabel}`;
+      const metaLabel = `${formatContextWindow(windowValue)}.${formatContextWindow(model?.max_output_tokens)}.${String(model?.mode || "NA")}`;
       return `
-        <div class="bootstrap-detect-model-row" data-bootstrap-detect-model-row data-model-id="${escapeHtml(id)}" data-model-index="${index}">
-          <label class="bootstrap-detect-model-check">
-            <input type="checkbox" data-bootstrap-detect-check>
-            <span>${escapeHtml(id)}</span>
-          </label>
-          <span class="bootstrap-detect-model-meta" title="context.output.mode">${escapeHtml(metaLabel)}</span>
-          <span class="bootstrap-detect-model-actions">
-            <button class="bootstrap-add-row" type="button" data-bootstrap-detect-test>Test</button>
-          </span>
-        </div>
-      `;
+        <div class="bootstrap-detect-model-row" data-bootstrap-detect-model-row data-model-id="${escapeHtml(id)}" data-model-index="${index}" data-search-text="${escapeHtml(`${id} ${model?.mode || ""}`)}">
+          <div class="bootstrap-detect-model-summary">
+            <label class="bootstrap-detect-model-check"><input type="checkbox" data-bootstrap-detect-check><span>${escapeHtml(id)}</span></label>
+            <span class="bootstrap-detect-model-meta" title="context.output.mode">${escapeHtml(metaLabel)}</span>
+          </div>
+          <div class="bootstrap-detect-model-details">
+            <div>
+              <span class="bootstrap-detect-section-label">Interface capability</span>
+              <div class="bootstrap-capability-grid" data-bootstrap-capabilities>
+                <span data-wire-api="responses">Responses <em data-capability-status>Untested</em></span>
+                <span data-wire-api="chat_completions">Chat Completions <em data-capability-status>Untested</em></span>
+                <span data-wire-api="anthropic_messages">Messages <em data-capability-status>Untested</em></span>
+              </div>
+            </div>
+            <div>
+              <span class="bootstrap-detect-section-label">Backend binding</span>
+              <div class="bootstrap-binding-options">
+                <label><input type="checkbox" data-bootstrap-bind-backend="codex" data-wire-api="responses" disabled> Codex · Responses</label>
+                <label><input type="checkbox" data-bootstrap-bind-backend="claude" data-wire-api="chat_completions" disabled> Claude · Chat</label>
+                <label><input type="checkbox" data-bootstrap-bind-backend="claude" data-wire-api="anthropic_messages" disabled> Claude · Messages</label>
+              </div>
+            </div>
+          </div>
+        </div>`;
     }).join("");
     return `
       <div class="bootstrap-detect-modal-backdrop" data-bootstrap-detect-modal>
         <div class="bootstrap-detect-modal" role="dialog" aria-label="Detected models">
           <div class="bootstrap-detect-modal-head">
-            <strong>Detected models</strong>
+            <div><strong>Detected Models</strong><div class="field-help">${escapeHtml(providerName || "Saved provider")} · Authentication: ${escapeHtml(authStyle)}</div></div>
             <button class="bootstrap-icon-button" type="button" data-bootstrap-detect-close title="Close">x</button>
           </div>
-          <label class="field-label">
-            <span>Filter</span>
-            <input data-bootstrap-detect-filter type="search" placeholder="Search models...">
-          </label>
-          <div class="bootstrap-detect-model-list" data-bootstrap-detect-list>
-            ${rows}
+          <div class="bootstrap-detect-toolbar">
+            <label class="field-label"><span>Search</span><input data-bootstrap-detect-filter type="search" placeholder="Fuzzy search model names..." autocomplete="off"></label>
+            <span class="field-help" data-bootstrap-detect-filter-count>${models.length} models</span>
           </div>
+          <div class="bootstrap-detect-model-list" data-bootstrap-detect-list>${rows}</div>
+          <div class="field-help bootstrap-detect-empty" data-bootstrap-detect-empty hidden>No matching models.</div>
           <div class="bootstrap-detect-modal-foot">
-            <button class="bootstrap-add-row" type="button" data-bootstrap-detect-add-selected>Add selected (0)</button>
+            <button class="bootstrap-add-row" type="button" data-bootstrap-detect-test data-bootstrap-detect-test-selected>Test selected</button>
+            <button class="bootstrap-add-row" type="button" data-bootstrap-detect-add-selected>Add selected bindings (0)</button>
             <button class="bootstrap-add-row" type="button" data-bootstrap-detect-close>Cancel</button>
           </div>
         </div>
-      </div>
-    `;
+      </div>`;
   }
 
   function escapeHtml(value) {
@@ -170,26 +202,218 @@
     return rows.map((item, index) => bootstrapConfigRowHtml(`${backend}.env`, item, index, options)).join("");
   }
 
-  function bootstrapEnvDetectHtml(backend) {
+  function providerList(value) {
+    return Array.isArray(value) ? value.filter(item => item && typeof item === "object") : [];
+  }
+
+  function configuredModelList(value) {
+    return Array.isArray(value) ? value.filter(item => item && typeof item === "object") : [];
+  }
+
+  function providerRowHtml(provider = {}, index = 0, maskSecrets = false) {
+    const id = configString(provider.id);
+    const hasCredential = Boolean(provider.credential_configured || provider.api_key_configured || provider.api_key);
     return `
-      <div class="bootstrap-env-detect" data-bootstrap-detect-backend="${escapeHtml(backend)}">
-        <details class="bootstrap-env-advanced" open>
-          <summary>Auto-detect models</summary>
-          <div class="bootstrap-env-fields">
-            <label class="field-label">
-              <span>Base URL</span>
-              <input data-bootstrap-detect-url placeholder="${backend === "codex" ? "https://api.openai.com/v1" : "https://api.anthropic.com"}" value="">
-            </label>
-            <label class="field-label">
-              <span>API key / token</span>
-              <input data-bootstrap-detect-key type="password" autocomplete="off" placeholder="sk-...">
-            </label>
-            <button class="bootstrap-add-row" type="button" data-bootstrap-detect-models>Fetch models</button>
-            <div class="field-help" data-bootstrap-detect-status></div>
+      <div class="bootstrap-provider-row" data-bootstrap-provider-row data-provider-id="${escapeHtml(id)}">
+        <div class="bootstrap-provider-row-head">
+          <strong>Provider</strong>
+          <button class="bootstrap-icon-button" type="button" data-bootstrap-remove-provider title="Remove">x</button>
+        </div>
+        <div class="bootstrap-env-fields">
+          <input type="hidden" data-bootstrap-provider-field="id" value="${escapeHtml(id)}">
+          <label class="field-label"><span>Name</span><input data-bootstrap-provider-field="name" placeholder="OpenRouter" value="${escapeHtml(configString(provider.name))}"></label>
+          <label class="field-label"><span>Base URL</span><input data-bootstrap-provider-field="base_url" placeholder="https://api.example.com/v1" value="${escapeHtml(configString(provider.base_url))}"></label>
+          <label class="field-label"><span>Anthropic Base URL (optional)</span><input data-bootstrap-provider-field="anthropic_base_url" placeholder="https://api.example.com/anthropic" value="${escapeHtml(configString(provider.anthropic_base_url))}"><div class="field-help">Used by the Claude backend for Anthropic Messages. Auto-filled when detection finds it under /anthropic.</div></label>
+          <label class="field-label"><span>API key</span><input data-bootstrap-provider-field="api_key" type="password" autocomplete="off" placeholder="${escapeHtml(maskSecrets && hasCredential ? "Configured; leave blank to keep" : "sk-...")}" value="${escapeHtml(maskSecrets ? "" : configString(provider.api_key))}"></label>
+          <label class="field-label"><span>Authentication</span><select data-bootstrap-provider-field="auth_style">
+            <option value="auto" ${configString(provider.auth_style, "auto") === "auto" ? "selected" : ""}>Auto detect</option>
+            <option value="bearer" ${provider.auth_style === "bearer" ? "selected" : ""}>Bearer</option>
+            <option value="x-api-key" ${provider.auth_style === "x-api-key" ? "selected" : ""}>x-api-key</option>
+            <option value="none" ${provider.auth_style === "none" ? "selected" : ""}>None</option>
+          </select><div class="field-help">Auto detects the authentication header when models are fetched.</div></label>
+        </div>
+      </div>`;
+  }
+
+  function providerOptionsHtml(providers) {
+    const rows = providerList(providers);
+    if (!rows.length) return '<option value="">Save a provider first</option>';
+    return rows.map(provider => `<option value="${escapeHtml(configString(provider.id))}">${escapeHtml(configString(provider.name, provider.id))}</option>`).join("");
+  }
+
+  function configuredModelRowHtml(binding, providerName = "") {
+    const modelId = configString(binding.model_id || binding.model);
+    const contextWindow = Number(binding.context_window) > 0 ? Number(binding.context_window) : 0;
+    const contextBadge = contextWindow > 0
+      ? `<span class="bootstrap-model-binding-ctx" title="Context window">ctx ${escapeHtml(formatContextWindow(contextWindow))}</span>`
+      : "";
+    return `
+      <div class="bootstrap-model-binding" data-bootstrap-model-binding>
+        <input type="hidden" data-bootstrap-binding-field="provider_id" value="${escapeHtml(configString(binding.provider_id))}">
+        <input type="hidden" data-bootstrap-binding-field="model" value="${escapeHtml(modelId)}">
+        <input type="hidden" data-bootstrap-binding-field="backend" value="${escapeHtml(configString(binding.backend))}">
+        <input type="hidden" data-bootstrap-binding-field="wire_api" value="${escapeHtml(configString(binding.wire_api))}">
+        <input type="hidden" data-bootstrap-binding-field="context_window" value="${escapeHtml(contextWindow ? String(contextWindow) : "")}">
+        <input type="hidden" data-bootstrap-binding-field="max_output_tokens" value="${escapeHtml(configString(binding.max_output_tokens))}">
+        <input type="hidden" data-bootstrap-binding-field="fable_model" value="${escapeHtml(configString(binding.fable_model))}">
+        <input type="hidden" data-bootstrap-binding-field="opus_model" value="${escapeHtml(configString(binding.opus_model))}">
+        <input type="hidden" data-bootstrap-binding-field="sonnet_model" value="${escapeHtml(configString(binding.sonnet_model))}">
+        <input type="hidden" data-bootstrap-binding-field="haiku_model" value="${escapeHtml(configString(binding.haiku_model))}">
+        <div><strong>${escapeHtml(modelId)}</strong>${contextBadge}<div class="field-help">${escapeHtml(providerName || binding.provider_id)} · ${escapeHtml(configString(binding.wire_api).replaceAll("_", " "))}</div></div>
+        <div class="bootstrap-model-binding-actions">
+          <button class="bootstrap-icon-button" type="button" data-bootstrap-edit-binding title="Edit model">&#9998;</button>
+          <button class="bootstrap-icon-button" type="button" data-bootstrap-remove-binding title="Remove">x</button>
+        </div>
+      </div>`;
+  }
+
+  function configuredModelsHtml(models, providers) {
+    const names = new Map(providerList(providers).map(provider => [configString(provider.id), configString(provider.name, provider.id)]));
+    const rows = configuredModelList(models);
+    if (!rows.length) return '<div class="field-help" data-bootstrap-configured-empty>No provider models configured yet.</div>';
+    const backendLabels = { codex: "Codex", claude: "Claude" };
+    return backendOptions.map(backend => {
+      const backendRows = rows
+        .filter(binding => configString(binding.backend).toLowerCase() === backend)
+        .sort((left, right) => configString(left.model_id || left.model).localeCompare(configString(right.model_id || right.model)));
+      if (!backendRows.length) return "";
+      return `
+        <section class="bootstrap-model-backend-group" data-bootstrap-model-backend-group="${backend}">
+          <div class="bootstrap-model-backend-head"><strong>${backendLabels[backend]}</strong><span data-bootstrap-model-backend-count>${backendRows.length} model${backendRows.length === 1 ? "" : "s"}</span></div>
+          <div class="bootstrap-model-backend-items" data-bootstrap-model-backend-items>
+            ${backendRows.map(binding => configuredModelRowHtml(binding, names.get(configString(binding.provider_id)))).join("")}
           </div>
-        </details>
-      </div>
-    `;
+        </section>`;
+    }).join("");
+  }
+
+  function configuredModelEditorHtml(binding = {}, providers = []) {
+    binding = binding || {};
+    const providerId = configString(binding.provider_id);
+    const backend = configString(binding.backend, "claude");
+    const wireApi = configString(binding.wire_api, "anthropic_messages");
+    const roleLabels = { fable_model: "Fable", opus_model: "Opus", sonnet_model: "Sonnet", haiku_model: "Haiku / fast" };
+    const roleRows = Object.keys(roleLabels).map(key => `
+      <label class="field-label"><span>${escapeHtml(roleLabels[key])}</span><input data-bootstrap-model-field="${escapeHtml(key)}" placeholder="use primary model" value="${escapeHtml(configString(binding[key]))}"></label>
+    `).join("");
+    return `
+      <div class="bootstrap-detect-modal-backdrop" data-bootstrap-model-editor>
+        <div class="bootstrap-detect-modal" role="dialog" aria-label="Configured model">
+          <div class="bootstrap-detect-modal-head">
+            <div><strong>${binding.model_id ? "Edit Model" : "Add Model"}</strong><div class="field-help">Base URL and credential come from the selected Provider.</div></div>
+            <button class="bootstrap-icon-button" type="button" data-bootstrap-model-editor-close title="Close">x</button>
+          </div>
+          <div class="bootstrap-env-fields">
+            <label class="field-label"><span>Provider</span><select data-bootstrap-model-field="provider_id">${providerOptionsHtml(providers)}</select></label>
+            <label class="field-label"><span>Model ID</span><input data-bootstrap-model-field="model_id" placeholder="model-name" value="${escapeHtml(configString(binding.model_id))}"></label>
+            <label class="field-label"><span>Backend</span>
+              <select data-bootstrap-model-field="backend">
+                <option value="codex" ${backend === "codex" ? "selected" : ""}>Codex</option>
+                <option value="claude" ${backend === "claude" ? "selected" : ""}>Claude</option>
+              </select>
+            </label>
+            <label class="field-label"><span>Wire API</span>
+              <select data-bootstrap-model-field="wire_api">
+                <option value="responses" ${wireApi === "responses" ? "selected" : ""}>Responses</option>
+                <option value="chat_completions" ${wireApi === "chat_completions" ? "selected" : ""}>Chat Completions</option>
+                <option value="anthropic_messages" ${wireApi === "anthropic_messages" ? "selected" : ""}>Messages</option>
+              </select>
+            </label>
+            <label class="field-label"><span>Context window</span><input data-bootstrap-model-field="context_window" type="number" min="0" placeholder="200000" value="${escapeHtml(configString(binding.context_window))}"></label>
+            <label class="field-label"><span>Max output tokens</span><input data-bootstrap-model-field="max_output_tokens" type="number" min="0" placeholder="32768" value="${escapeHtml(configString(binding.max_output_tokens))}"></label>
+          </div>
+          <details class="bootstrap-env-advanced">
+            <summary>Claude role models (optional)</summary>
+            <div class="bootstrap-env-fields">${roleRows}<div class="field-help">Role overrides for Claude Code; leave blank to use the primary model.</div></div>
+          </details>
+          <div class="bootstrap-detect-modal-foot">
+            <button class="bootstrap-add-row" type="button" data-bootstrap-model-editor-save>Save</button>
+            <button class="bootstrap-add-row" type="button" data-bootstrap-model-editor-close>Cancel</button>
+          </div>
+        </div>
+      </div>`;
+  }
+
+  function readModelEditorFields(rootEl) {
+    const value = key => String(rootEl?.querySelector?.(`[data-bootstrap-model-field="${key}"]`)?.value || "").trim();
+    const binding = {
+      provider_id: value("provider_id"),
+      model_id: value("model_id"),
+      backend: value("backend") || "claude",
+      wire_api: value("wire_api") || "anthropic_messages"
+    };
+    for (const key of ["context_window", "max_output_tokens"]) {
+      const num = Number(value(key));
+      if (Number.isFinite(num) && num > 0) binding[key] = num;
+    }
+    for (const key of ["fable_model", "opus_model", "sonnet_model", "haiku_model"]) {
+      const text = value(key);
+      if (text) binding[key] = text;
+    }
+    return binding;
+  }
+
+  function refreshConfiguredModelGroups(list) {
+    if (!list) return;
+    list.querySelector("[data-bootstrap-configured-empty]")?.remove();
+    for (const group of list.querySelectorAll("[data-bootstrap-model-backend-group]")) {
+      const items = group.querySelector("[data-bootstrap-model-backend-items]");
+      const rows = [...(items?.querySelectorAll("[data-bootstrap-model-binding]") || [])];
+      rows.sort((left, right) => String(left.querySelector('[data-bootstrap-binding-field="model"]')?.value || "").localeCompare(String(right.querySelector('[data-bootstrap-binding-field="model"]')?.value || "")));
+      rows.forEach(row => items?.appendChild(row));
+      if (!rows.length) {
+        group.remove();
+        continue;
+      }
+      const count = group.querySelector("[data-bootstrap-model-backend-count]");
+      if (count) count.textContent = `${rows.length} model${rows.length === 1 ? "" : "s"}`;
+    }
+    backendOptions.forEach(backend => {
+      const group = list.querySelector(`[data-bootstrap-model-backend-group="${backend}"]`);
+      if (group) list.appendChild(group);
+    });
+    if (!list.querySelector("[data-bootstrap-model-binding]")) {
+      list.insertAdjacentHTML("beforeend", '<div class="field-help" data-bootstrap-configured-empty>No provider models configured yet.</div>');
+    }
+  }
+
+  function insertConfiguredModels(form, provider, bindings) {
+    const list = form.querySelector("[data-bootstrap-binding-list]");
+    if (!list) return 0;
+    list.querySelector("[data-bootstrap-configured-empty]")?.remove();
+    const existing = new Set([...list.querySelectorAll("[data-bootstrap-model-binding]")].map(row => {
+      const value = key => String(row.querySelector(`[data-bootstrap-binding-field="${key}"]`)?.value || "").trim();
+      return [value("provider_id"), value("model"), value("backend"), value("wire_api")].join("\0");
+    }));
+    let inserted = 0;
+    for (const binding of configuredModelList(bindings)) {
+      const item = { ...binding, provider_id: configString(binding.provider_id, provider?.id) };
+      const key = [item.provider_id, item.model_id || item.model, item.backend, item.wire_api].join("\0");
+      if (existing.has(key)) continue;
+      const backend = configString(item.backend).toLowerCase();
+      let group = list.querySelector(`[data-bootstrap-model-backend-group="${backend}"]`);
+      if (!group) {
+        const label = backend === "codex" ? "Codex" : "Claude";
+        list.insertAdjacentHTML("beforeend", `<section class="bootstrap-model-backend-group" data-bootstrap-model-backend-group="${escapeHtml(backend)}"><div class="bootstrap-model-backend-head"><strong>${label}</strong><span data-bootstrap-model-backend-count>0 models</span></div><div class="bootstrap-model-backend-items" data-bootstrap-model-backend-items></div></section>`);
+        group = list.querySelector(`[data-bootstrap-model-backend-group="${backend}"]`);
+      }
+      group?.querySelector("[data-bootstrap-model-backend-items]")?.insertAdjacentHTML("beforeend", configuredModelRowHtml(item, provider?.name));
+      existing.add(key);
+      inserted += 1;
+    }
+    refreshConfiguredModelGroups(list);
+    return inserted;
+  }
+
+  function bootstrapEnvDetectHtml(providers) {
+    return `
+      <div class="bootstrap-env-detect" data-bootstrap-provider-detect>
+        <div class="bootstrap-env-fields">
+          <label class="field-label"><span>Provider</span><select data-bootstrap-detect-provider>${providerOptionsHtml(providers)}</select></label>
+          <button class="bootstrap-add-row" type="button" data-bootstrap-detect-models>Fetch models</button>
+          <div class="field-help" data-bootstrap-detect-status>Select a saved Provider. Interface tests send minimal inference requests and may incur a small charge.</div>
+        </div>
+      </div>`;
   }
 
   function _setEnvRowFields(row, data, backend) {
@@ -313,6 +537,27 @@
     return text.startsWith(claudeEnvModelPrefix) ? text.slice(claudeEnvModelPrefix.length).trim() : "";
   }
 
+  function bootstrapModelFilterValue(form, backend) {
+    const value = String(form?.querySelector?.(`[data-bootstrap-config-field="${backend}.model_source"]`)?.value || "both").trim();
+    return value === "official" || value === "env" ? value : "both";
+  }
+
+  function filterBootstrapModelOptions(options, mode, selected = "") {
+    const list = Array.isArray(options) ? options : [];
+    let filtered = list;
+    if (mode === "official") {
+      filtered = list.filter(option => !configString(option?.name).startsWith(claudeEnvModelPrefix));
+    } else if (mode === "env") {
+      filtered = list.filter(option => configString(option?.name).startsWith(claudeEnvModelPrefix));
+    }
+    const selectedValue = configString(selected);
+    if (selectedValue && !filtered.some(option => configString(option?.name) === selectedValue)) {
+      const selectedOption = list.find(option => configString(option?.name) === selectedValue);
+      if (selectedOption) filtered = [...filtered, selectedOption];
+    }
+    return filtered;
+  }
+
   function selectableBootstrapModelOptions(models) {
     const named = models.filter(model => configString(model?.name));
     return named.length ? named : models;
@@ -369,7 +614,9 @@
   }
 
   function bootstrapFormModelOptions(form, backend, context = {}) {
-    const envOptions = bootstrapConfigEnvGroups(form, backend, context)
+    const formGroups = bootstrapConfigEnvGroups(form, backend, context);
+    const envGroups = formGroups.length ? formGroups : bootstrapEnvGroups(context.config?.[backend]?.env, backend);
+    const envOptions = envGroups
       .map((group, index) => {
         const name = bootstrapEnvGroupName(group, index);
         const model = configString(group[envGroupModelKey(backend)], "not configured");
@@ -379,7 +626,11 @@
         };
       })
       .filter(option => option.name);
-    return [...officialOptions(backend, context), ...envOptions];
+    return filterBootstrapModelOptions(
+      [...officialOptions(backend, context), ...envOptions],
+      bootstrapModelFilterValue(form, backend),
+      bootstrapConfigText(form, `${backend}.model`)
+    );
   }
 
   function bootstrapFormModelSelectOptions(form, backend, current, context = {}) {
@@ -518,13 +769,13 @@
     const claudeProxy = claude.proxy || {};
     const backend = backendOptions.includes(configString(cfg.backend)) ? configString(cfg.backend) : "codex";
     const maskSecrets = mode === "settings";
-    const codexDetailsOpen = mode === "settings" ? "" : " open";
+    const sectionOpen = mode === "settings" ? "" : " open";
     const codexModel = selectedBackendModel("codex", codex.model || envModelValue(codex.env_active), options);
     const claudeModel = selectedBackendModel("claude", claude.model || envModelValue(claude.env_active), options);
     return `
       <form class="bootstrap-form" data-bootstrap-config-form data-bootstrap-config-mode="${escapeHtml(mode)}">
-        <details class="bootstrap-config-section" open>
-          <summary>Core Settings</summary>
+        <details class="bootstrap-config-section"${sectionOpen}>
+          <summary>Core</summary>
           <div class="bootstrap-config-stack">
             <label class="field-label">
               <span>Default backend</span>
@@ -538,15 +789,15 @@
             </label>
           </div>
         </details>
-        <details class="bootstrap-config-section" open>
-          <summary>Proxy Settings</summary>
+        <details class="bootstrap-config-section"${sectionOpen}>
+          <summary>Proxy</summary>
           <div class="bootstrap-config-grid">
             ${bootstrapSharedProxyFieldsHtml(proxy)}
           </div>
           <div class="field-help">Shared by Codex, Claude, Web upgrades, and other AHA network operations.</div>
         </details>
-        <details class="bootstrap-config-section" open>
-          <summary>Workspaces</summary>
+        <details class="bootstrap-config-section"${sectionOpen}>
+          <summary>Workspace</summary>
           <label class="field-label">
             <span>Workspace roots</span>
             <div class="bootstrap-config-list" data-bootstrap-config-list="workspace_roots">
@@ -561,69 +812,110 @@
             <div class="field-help">Optional workspace for web game static assets.</div>
           </label>
         </details>
-        <details class="bootstrap-config-section"${codexDetailsOpen}>
-          <summary>Codex defaults</summary>
-          <div class="bootstrap-config-grid">
-            <label class="field-label">
-              <span>Bin</span>
-              <input data-bootstrap-config-field="codex.bin" value="${escapeHtml(configString(codex.bin, "codex"))}">
-              <div class="field-help">Codex CLI executable name or path.</div>
-            </label>
-            <label class="field-label">
-              <span>Model</span>
-              <select data-bootstrap-config-field="codex.model">${backendModelSelectOptions("codex", codexModel, options)}</select>
-              <div class="field-help">Official Codex model or custom OpenAI-compatible provider.</div>
-            </label>
-            <label class="field-label">
-              <span>Reasoning effort</span>
-              <select data-bootstrap-config-field="codex.reasoning_effort">${backendReasoningEffortSelectOptions("codex", codexModel, codex.reasoning_effort, options)}</select>
-              <div class="field-help">Default Codex thinking depth for tasks and distill jobs.</div>
-            </label>
+        <details class="bootstrap-config-section bootstrap-backend-section"${sectionOpen}>
+          <summary>Backend</summary>
+          <div class="field-help bootstrap-section-intro">Configure the Codex and Claude runtimes, then connect models from API providers without changing the existing backend configuration format.</div>
+          <div class="bootstrap-backend-runtime-grid">
+            <section class="bootstrap-backend-card" data-bootstrap-backend-card="codex">
+              <div class="bootstrap-backend-card-head">
+                <div>
+                  <strong>Codex</strong>
+                  <div class="field-help">Codex CLI runtime and configured model.</div>
+                </div>
+                <span class="bootstrap-backend-kind">Responses</span>
+              </div>
+              <div class="bootstrap-config-grid">
+                <label class="field-label">
+                  <span>Bin</span>
+                  <input data-bootstrap-config-field="codex.bin" value="${escapeHtml(configString(codex.bin, "codex"))}">
+                  <div class="field-help">Codex CLI executable name or path.</div>
+                </label>
+                <label class="field-label">
+                  <span>Model</span>
+                  <select data-bootstrap-config-field="codex.model">${backendModelSelectOptions("codex", codexModel, options)}</select>
+                  <div class="field-help">Official model or one of the provider connections below.</div>
+                </label>
+                <label class="field-label">
+                  <span>Model source</span>
+                  <select data-bootstrap-config-field="codex.model_source">
+                    <option value="both"${configString(codex.model_source, "both") !== "official" && configString(codex.model_source, "both") !== "env" ? " selected" : ""}>BOTH</option>
+                    <option value="official"${configString(codex.model_source, "both") === "official" ? " selected" : ""}>Official</option>
+                    <option value="env"${configString(codex.model_source, "both") === "env" ? " selected" : ""}>ENV</option>
+                  </select>
+                  <div class="field-help">Model pickers for tasks, agents and KB distill show only these sources. Save to apply.</div>
+                </label>
+                <label class="field-label">
+                  <span>Reasoning effort</span>
+                  <select data-bootstrap-config-field="codex.reasoning_effort">${backendReasoningEffortSelectOptions("codex", codexModel, codex.reasoning_effort, options)}</select>
+                  <div class="field-help">Default Codex thinking depth for tasks and distill jobs.</div>
+                </label>
+                ${bootstrapBackendProxySwitchHtml("codex", codexProxy)}
+              </div>
+            </section>
+            <section class="bootstrap-backend-card" data-bootstrap-backend-card="claude">
+              <div class="bootstrap-backend-card-head">
+                <div>
+                  <strong>Claude</strong>
+                  <div class="field-help">Claude Code CLI runtime and configured model.</div>
+                </div>
+                <span class="bootstrap-backend-kind">Messages</span>
+              </div>
+              <div class="bootstrap-config-grid">
+                <label class="field-label">
+                  <span>Bin</span>
+                  <input data-bootstrap-config-field="claude.bin" value="${escapeHtml(configString(claude.bin, "claude"))}">
+                  <div class="field-help">Claude CLI executable name or path.</div>
+                </label>
+                <label class="field-label">
+                  <span>Model</span>
+                  <select data-bootstrap-config-field="claude.model">${backendModelSelectOptions("claude", claudeModel, options)}</select>
+                  <div class="field-help">Official model or one of the provider connections below.</div>
+                </label>
+                <label class="field-label">
+                  <span>Model source</span>
+                  <select data-bootstrap-config-field="claude.model_source">
+                    <option value="both"${configString(claude.model_source, "both") !== "official" && configString(claude.model_source, "both") !== "env" ? " selected" : ""}>BOTH</option>
+                    <option value="official"${configString(claude.model_source, "both") === "official" ? " selected" : ""}>Official</option>
+                    <option value="env"${configString(claude.model_source, "both") === "env" ? " selected" : ""}>ENV</option>
+                  </select>
+                  <div class="field-help">Model pickers for tasks, agents and KB distill show only these sources. Save to apply.</div>
+                </label>
+                <label class="field-label">
+                  <span>Reasoning effort</span>
+                  <select data-bootstrap-config-field="claude.reasoning_effort">${backendReasoningEffortSelectOptions("claude", claudeModel, claude.reasoning_effort, options)}</select>
+                  <div class="field-help">Default Claude effort for tasks and distill jobs.</div>
+                </label>
+                ${bootstrapBackendProxySwitchHtml("claude", claudeProxy)}
+              </div>
+            </section>
           </div>
-          <div class="bootstrap-config-grid">
-            ${bootstrapBackendProxySwitchHtml("codex", codexProxy)}
-          </div>
-          <label class="field-label">
-            <span>Provider groups</span>
-            ${bootstrapEnvDetectHtml("codex")}
-            <div class="bootstrap-config-list" data-bootstrap-config-list="codex.env">
-              ${bootstrapEnvRows(codex.env, codex.env_active, { maskSecrets }, "codex")}
-              <button class="bootstrap-add-row" type="button" data-bootstrap-add-row="codex.env">Add provider group</button>
+          <div class="bootstrap-provider-heading">
+            <div>
+              <strong>Provider Connections</strong>
+              <div class="field-help">Save each API endpoint and credential once, then reuse it for model discovery and multiple Backend bindings.</div>
             </div>
-            <div class="field-help">Each group becomes a custom Codex model option using Codex provider override.</div>
-          </label>
-        </details>
-        <details class="bootstrap-config-section">
-          <summary>Claude defaults</summary>
-          <div class="bootstrap-config-grid">
-            <label class="field-label">
-              <span>Bin</span>
-              <input data-bootstrap-config-field="claude.bin" value="${escapeHtml(configString(claude.bin, "claude"))}">
-              <div class="field-help">Claude CLI executable name or path.</div>
-            </label>
-            <label class="field-label">
-              <span>Model</span>
-              <select data-bootstrap-config-field="claude.model">${backendModelSelectOptions("claude", claudeModel, options)}</select>
-              <div class="field-help">Official Claude model or custom gateway group.</div>
-            </label>
-            <label class="field-label">
-              <span>Reasoning effort</span>
-              <select data-bootstrap-config-field="claude.reasoning_effort">${backendReasoningEffortSelectOptions("claude", claudeModel, claude.reasoning_effort, options)}</select>
-              <div class="field-help">Default Claude effort for tasks and distill jobs.</div>
-            </label>
           </div>
-          <div class="bootstrap-config-grid">
-            ${bootstrapBackendProxySwitchHtml("claude", claudeProxy)}
+          <div class="bootstrap-config-list bootstrap-provider-list" data-bootstrap-provider-list>
+            ${(providerList(cfg.providers).length ? providerList(cfg.providers) : [{}]).map((provider, index) => providerRowHtml(provider, index, maskSecrets)).join("")}
+            <button class="bootstrap-add-row" type="button" data-bootstrap-add-provider>Add Provider</button>
           </div>
-          <label class="field-label">
-            <span>Gateway groups</span>
-            ${bootstrapEnvDetectHtml("claude")}
-            <div class="bootstrap-config-list" data-bootstrap-config-list="claude.env">
-              ${bootstrapEnvRows(claude.env, claude.env_active, { maskSecrets })}
-              <button class="bootstrap-add-row" type="button" data-bootstrap-add-row="claude.env">Add gateway group</button>
+          <div class="bootstrap-provider-heading">
+            <div>
+              <strong>Discover Models</strong>
+              <div class="field-help">Fetch a saved Provider's models, test selected interface capabilities, then bind each model to one or more Backends.</div>
             </div>
-            <div class="field-help">Each group defines one gateway connection. AHA derives Claude Code role, timeout, discovery, traffic and compaction variables at launch.</div>
-          </label>
+          </div>
+          ${bootstrapEnvDetectHtml(cfg.providers)}
+          <div class="bootstrap-provider-heading">
+            <div>
+              <strong>Configured Models</strong>
+              <div class="field-help">The same Provider model may be bound to both Codex and Claude with different wire APIs. Edit or add models manually when detection misses fields.</div>
+            </div>
+            <button class="bootstrap-add-row" type="button" data-bootstrap-add-binding>Add Model</button>
+          </div>
+          <div class="bootstrap-config-list bootstrap-model-binding-list" data-bootstrap-binding-list>
+            ${configuredModelsHtml(cfg.configured_models, cfg.providers)}
+          </div>
         </details>
         <div class="bootstrap-form-actions">
           <button type="submit">${escapeHtml(submitLabel)}</button>
@@ -797,6 +1089,33 @@
     syncBootstrapModelOptions(list.closest("[data-bootstrap-config-form]"), context);
   }
 
+  function bootstrapProviders(form, context = {}) {
+    const existing = new Map(providerList(context.config?.providers).map(provider => [configString(provider.id), provider]));
+    return [...form.querySelectorAll("[data-bootstrap-provider-row]")].map((row, index) => {
+      const value = key => String(row.querySelector(`[data-bootstrap-provider-field="${key}"]`)?.value || "").trim();
+      const id = value("id");
+      const provider = { id, name: value("name"), base_url: value("base_url"), anthropic_base_url: value("anthropic_base_url") || "", auth_style: value("auth_style") || "auto", credential: value("api_key") };
+      if (!provider.credential && existing.get(id)?.credential_configured) provider.credential_configured = true;
+      return provider;
+    }).filter(provider => provider.name || provider.base_url);
+  }
+
+  function bootstrapConfiguredModels(form) {
+    return [...form.querySelectorAll("[data-bootstrap-model-binding]")].map(row => {
+      const value = key => String(row.querySelector(`[data-bootstrap-binding-field="${key}"]`)?.value || "").trim();
+      const binding = { provider_id: value("provider_id"), model_id: value("model"), backend: value("backend"), wire_api: value("wire_api") };
+      const contextWindow = Number(value("context_window"));
+      if (Number.isFinite(contextWindow) && contextWindow > 0) binding.context_window = contextWindow;
+      const maxOutput = Number(value("max_output_tokens"));
+      if (Number.isFinite(maxOutput) && maxOutput > 0) binding.max_output_tokens = maxOutput;
+      for (const key of ["fable_model", "opus_model", "sonnet_model", "haiku_model"]) {
+        const text = value(key);
+        if (text) binding[key] = text;
+      }
+      return binding;
+    }).filter(binding => binding.provider_id && binding.model_id && binding.backend && binding.wire_api);
+  }
+
   function bootstrapConfigPayload(form, context = {}) {
     const config = context.config || {};
     const body = {
@@ -810,6 +1129,8 @@
         no_proxy: bootstrapConfigText(form, "proxy.no_proxy")
       },
       retention_policy: config.retention_policy || {},
+      providers: bootstrapProviders(form, context),
+      configured_models: bootstrapConfiguredModels(form),
       codex: {
         bin: bootstrapConfigText(form, "codex.bin") || "codex",
         model: bootstrapConfigCodexModel(form),
@@ -819,6 +1140,7 @@
         json: true,
         session_policy: "sticky",
         env_active: bootstrapConfigCodexActiveEnvGroup(form, context),
+        model_source: bootstrapConfigText(form, "codex.model_source") || "both",
         env: bootstrapConfigEnvGroups(form, "codex", context),
         proxy: {
           enabled: Boolean(bootstrapConfigField(form, "codex.proxy.enabled")?.checked)
@@ -832,6 +1154,7 @@
         permission_mode: "",
         session_policy: "sticky",
         env_active: bootstrapConfigClaudeActiveEnvGroup(form, context),
+        model_source: bootstrapConfigText(form, "claude.model_source") || "both",
         env: bootstrapConfigEnvGroups(form, "claude", context),
         proxy: {
           enabled: Boolean(bootstrapConfigField(form, "claude.proxy.enabled")?.checked)
@@ -856,15 +1179,28 @@
     bootstrapBackendOptions,
     bootstrapEnvGroups,
     bootstrapEnvGroupName,
+    providerList,
+    configuredModelList,
+    providerRowHtml,
+    configuredModelsHtml,
+    configuredModelRowHtml,
+    insertConfiguredModels,
     bootstrapEnvDetectHtml,
     bootstrapConfigFormHtml,
     bootstrapConfigMode,
     bootstrapConfigPayload,
+    bootstrapConfiguredModels,
     detectEnvGroupFromModel,
     detectEnvGroupFromModels,
     detectModelsModalHtml,
+    fuzzyModelMatch,
     formatContextWindow,
     modelContextWindow,
+    bootstrapModelFilterValue,
+    filterBootstrapModelOptions,
+    configuredModelEditorHtml,
+    readModelEditorFields,
+    refreshConfiguredModelGroups,
     syncBootstrapModelOptions,
     fillBootstrapProxyDefaultFor,
     syncBootstrapProxyDefaultsForInput,

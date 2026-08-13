@@ -1929,13 +1929,24 @@ class WebTaskApiTests(unittest.TestCase):
                 self.assertEqual(code, 0)
                 run_id = plan_output.splitlines()[0].split(": ", 1)[1]
                 complete_task(root, run_id, "task-001", 0)
+                append_message(
+                    root,
+                    run_id,
+                    "main",
+                    "stale message before resume",
+                    sender="browser",
+                    task_id="task-001",
+                )
+                resume_boundary = inbox_path(root, run_id, "main").stat().st_size
 
                 response = asyncio.run(fetch_ui_response(root, run_id, "/api/task/task-001/resume", method="POST"))
                 body = json_response_body(response)
+                offset = read_json(chat_offset_path(run_dir(root, run_id), "main", "task-001"))["offset"]
 
         self.assertTrue(response.startswith(b"HTTP/1.1 200 OK"))
         self.assertTrue(body["ok"])
         self.assertEqual(body["task"]["status"], "awaiting_user")
+        self.assertEqual(offset, resume_boundary)
 
     def test_task_action_complete_marks_complete_without_finalization(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -8703,14 +8703,19 @@ body.empty-run .panel {
 }
 .bootstrap-detect-modal {
   display: grid;
-  gap: 10px;
-  width: min(640px, 100%);
-  max-height: 80vh;
+  gap: 14px;
+  width: min(820px, 100%);
+  max-height: 86vh;
   background: var(--color-surface);
   border: 1px solid var(--color-border);
   border-radius: 10px;
   padding: 14px;
   box-shadow: 0 10px 30px rgba(15, 23, 42, 0.2);
+}
+
+.bootstrap-detect-modal-backdrop[data-bootstrap-model-editor] .bootstrap-detect-modal {
+  overflow-y: auto;
+  align-content: start;
 }
 .bootstrap-detect-modal-head {
   display: flex;
@@ -8718,20 +8723,58 @@ body.empty-run .panel {
   justify-content: space-between;
   gap: 10px;
 }
+.bootstrap-detect-toolbar {
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  gap: 12px;
+}
+.bootstrap-detect-toolbar .field-label {
+  flex: 1 1 auto;
+  margin: 0;
+}
+.bootstrap-detect-toolbar > .field-help {
+  flex: 0 0 auto;
+  padding-bottom: 9px;
+}
 .bootstrap-detect-model-list {
   display: grid;
-  gap: 6px;
+  gap: 8px;
   overflow-y: auto;
-  max-height: 46vh;
+  max-height: 54vh;
+  padding-right: 3px;
 }
 .bootstrap-detect-model-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 96px auto;
-  gap: 10px;
-  align-items: center;
-  padding: 6px 8px;
+  gap: 9px;
+  padding: 10px 12px;
   border: 1px solid var(--color-border-subtle);
-  border-radius: 6px;
+  border-radius: 8px;
+  background: var(--color-surface-subtle);
+}
+.bootstrap-detect-model-row[hidden],
+.bootstrap-detect-empty[hidden] {
+  display: none !important;
+}
+.bootstrap-detect-model-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+}
+.bootstrap-detect-model-details {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(220px, 0.8fr);
+  gap: 14px;
+  padding-left: 26px;
+}
+.bootstrap-detect-section-label {
+  display: block;
+  margin-bottom: 5px;
+  color: var(--color-text-muted);
+  font-size: var(--fs-xs);
+  font-weight: 600;
 }
 .bootstrap-detect-model-check {
   display: flex;
@@ -8763,6 +8806,7 @@ body.empty-run .panel {
 .bootstrap-detect-modal-foot {
   display: flex;
   justify-content: flex-end;
+  flex-wrap: wrap;
   gap: 8px;
 }
 .bootstrap-detect-ok {
@@ -8818,8 +8862,220 @@ body.empty-run .panel {
 }
 .bootstrap-config-section > .bootstrap-config-grid,
 .bootstrap-config-section > .bootstrap-config-stack,
-.bootstrap-config-section > .field-label {
+.bootstrap-config-section > .field-label,
+.bootstrap-config-section > .bootstrap-section-intro,
+.bootstrap-config-section > .bootstrap-backend-runtime-grid,
+.bootstrap-config-section > .bootstrap-provider-heading,
+.bootstrap-config-section > .bootstrap-provider-grid {
   margin-top: 10px;
+}
+.bootstrap-backend-runtime-grid,
+.bootstrap-provider-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  align-items: start;
+}
+.bootstrap-backend-card,
+.bootstrap-provider-column {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid var(--color-border);
+  border-radius: 10px;
+  background: var(--color-surface-subtle);
+}
+.bootstrap-backend-card-head,
+.bootstrap-provider-column-head,
+.bootstrap-provider-row {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--panel) 92%, transparent);
+}
+
+.bootstrap-provider-row-head,
+.bootstrap-model-binding {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.bootstrap-model-binding {
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--color-surface);
+}
+
+.bootstrap-model-binding-actions {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 6px;
+}
+
+.bootstrap-model-binding-ctx {
+  display: inline-block;
+  margin-left: 8px;
+  padding: 1px 6px;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--panel) 92%, transparent);
+  color: var(--color-text-muted);
+  font-size: var(--fs-xs);
+  white-space: nowrap;
+  vertical-align: middle;
+}
+
+.bootstrap-capability-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+  font-size: 12px;
+}
+
+.bootstrap-capability-grid > span {
+  display: grid;
+  gap: 2px;
+  padding: 6px 8px;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: 6px;
+  background: var(--color-surface);
+}
+
+.bootstrap-capability-grid em {
+  color: var(--color-text-muted);
+  font-size: 11px;
+  font-style: normal;
+  text-transform: capitalize;
+}
+
+.bootstrap-capability-grid > [data-status="supported"] {
+  border-color: var(--color-success-strong-3);
+}
+.bootstrap-capability-grid > [data-status="supported"] em {
+  color: var(--color-success-strong-3);
+}
+.bootstrap-capability-grid > [data-status="auth_error"],
+.bootstrap-capability-grid > [data-status="unsupported"] {
+  border-color: var(--color-danger-strong);
+}
+.bootstrap-capability-grid > [data-status="auth_error"] em,
+.bootstrap-capability-grid > [data-status="unsupported"] em {
+  color: var(--color-danger-strong);
+}
+
+.bootstrap-binding-options {
+  display: grid;
+  gap: 5px;
+  font-size: 12px;
+}
+
+.bootstrap-binding-options label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.bootstrap-provider-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+.bootstrap-model-backend-group {
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid var(--color-border);
+  border-radius: 10px;
+  background: var(--color-surface-subtle);
+}
+.bootstrap-model-backend-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 0 2px;
+}
+.bootstrap-model-backend-head > span {
+  color: var(--color-text-muted);
+  font-size: var(--fs-xs);
+}
+.bootstrap-model-backend-items {
+  display: grid;
+  gap: 8px;
+}
+@media (max-width: 680px) {
+  .bootstrap-detect-modal-backdrop {
+    align-items: stretch;
+    padding: 8px;
+  }
+  .bootstrap-detect-modal {
+    max-height: 96vh;
+    padding: 12px;
+  }
+  .bootstrap-detect-model-details,
+  .bootstrap-capability-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .bootstrap-detect-model-details {
+    padding-left: 0;
+  }
+  .bootstrap-detect-toolbar {
+    align-items: stretch;
+    flex-direction: column;
+  }
+  .bootstrap-detect-toolbar > .field-help {
+    padding-bottom: 0;
+  }
+  .bootstrap-model-binding {
+    align-items: flex-start;
+    flex-wrap: wrap;
+  }
+  .bootstrap-model-binding-actions {
+    margin-left: auto;
+  }
+  .bootstrap-provider-heading {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .bootstrap-provider-heading .bootstrap-add-row {
+    align-self: flex-start;
+  }
+  .bootstrap-detect-modal-foot {
+    justify-content: stretch;
+  }
+  .bootstrap-detect-modal-foot .bootstrap-add-row {
+    flex: 1 1 auto;
+  }
+}
+.bootstrap-backend-card-head strong,
+.bootstrap-provider-column-head strong,
+.bootstrap-provider-heading strong {
+  color: var(--color-text-strong-2);
+}
+.bootstrap-backend-kind {
+  flex: 0 0 auto;
+  padding: 3px 7px;
+  border: 1px solid var(--color-border);
+  border-radius: 999px;
+  color: var(--color-text-muted);
+  background: var(--color-surface);
+  font-size: var(--fs-xs);
+  font-weight: 700;
+}
+.bootstrap-provider-heading {
+  padding-top: 4px;
+  border-top: 1px solid var(--color-border);
+}
+.bootstrap-provider-column > .bootstrap-env-detect {
+  margin-bottom: 0;
 }
 .proxy-toggle {
   display: grid;
@@ -8867,7 +9123,9 @@ body.empty-run .panel {
 }
 @media (max-width: 720px) {
   .bootstrap-config-grid,
-  .bootstrap-pair-row {
+  .bootstrap-pair-row,
+  .bootstrap-backend-runtime-grid,
+  .bootstrap-provider-grid {
     grid-template-columns: 1fr;
   }
   .bootstrap-list-row {

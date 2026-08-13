@@ -138,6 +138,16 @@ claude
 Claude Code 在 Windows 可直接使用 PowerShell；如需 Bash，可额外执行
 `winget install --id Git.Git -e`。
 
+Agent 需要启动跨对话回合存活的预览服务、watcher 或 tunnel 时，应使用 AHA Web 托管进程，而不是 Codex/Claude 工具自身的后台任务：
+
+```powershell
+aha managed-process start preview --cwd . -- python -m http.server 8790
+aha managed-process status preview
+aha managed-process stop preview
+```
+
+在 AHA backend session 内，run/task/agent 范围由环境变量自动继承。托管进程随模型回合保持运行，但所属任务进入终态或 AHA Web 服务重启/退出时会受控停止。
+
 可选能力：
 
 ```powershell

@@ -140,6 +140,24 @@
       bootstrapConfigHelpers.removeBootstrapConfigRow?.(button, configContext());
     }
 
+    function addProvider(button) {
+      const list = button?.closest?.("[data-bootstrap-provider-list]");
+      if (!list) return;
+      const index = list.querySelectorAll("[data-bootstrap-provider-row]").length;
+      button.insertAdjacentHTML("beforebegin", bootstrapConfigHelpers.providerRowHtml?.({}, index, true) || "");
+    }
+
+    function removeProvider(button) {
+      const row = button?.closest?.("[data-bootstrap-provider-row]");
+      const list = row?.closest?.("[data-bootstrap-provider-list]");
+      if (!row || !list) return;
+      if (list.querySelectorAll("[data-bootstrap-provider-row]").length <= 1) {
+        row.querySelectorAll("input").forEach(input => { input.value = ""; });
+        return;
+      }
+      row.remove();
+    }
+
     let detectModalState = null;
 
     function closeDetectModal() {
@@ -148,81 +166,173 @@
       detectModalState = null;
     }
 
-    async function openDetectModal({ form, backend, models, authStyle, baseUrl, credential }) {
+    async function openDetectModal({ form, provider, models }) {
       closeDetectModal();
       const modalEl = document.createElement("div");
-      modalEl.innerHTML = bootstrapConfigHelpers.detectModelsModalHtml?.(models, authStyle) || "";
+      modalEl.innerHTML = bootstrapConfigHelpers.detectModelsModalHtml?.(models, {
+        provider_name: provider?.name,
+        auth_style: provider?.auth_style
+      }) || "";
       const rootEl = modalEl.firstElementChild;
       if (!rootEl) return;
       document.body.appendChild(rootEl);
-      detectModalState = { form, backend, models, authStyle, baseUrl, credential, modalEl: rootEl };
-      const selectedCount = () => [...rootEl.querySelectorAll("[data-bootstrap-detect-check]:checked")].length;
+      detectModalState = { form, provider, models, modalEl: rootEl };
+      const selectedRows = () => [...rootEl.querySelectorAll("[data-bootstrap-detect-check]:checked")].map(input => input.closest("[data-bootstrap-detect-model-row]")).filter(Boolean);
       const updateSelectedLabel = () => {
+        const count = selectedRows().reduce((total, row) => total + row.querySelectorAll("[data-bootstrap-bind-backend]:checked").length, 0);
         const btn = rootEl.querySelector("[data-bootstrap-detect-add-selected]");
-        if (btn) btn.textContent = `Add selected (${selectedCount()})`;
+        if (btn) btn.textContent = `Add selected bindings (${count})`;
       };
       rootEl.querySelector("[data-bootstrap-detect-filter]")?.addEventListener("input", event => {
-        const query = String(event.target?.value || "").trim().toLowerCase();
+        const query = String(event.target?.value || "").trim();
+        let visible = 0;
         rootEl.querySelectorAll("[data-bootstrap-detect-model-row]").forEach(row => {
-          const id = String(row.dataset.modelId || "").toLowerCase();
-          row.hidden = Boolean(query) && !id.includes(query);
+          const searchText = String(row.dataset.searchText || row.dataset.modelId || "");
+          const matches = bootstrapConfigHelpers.fuzzyModelMatch?.(searchText, query) ?? searchText.toLowerCase().includes(query.toLowerCase());
+          row.hidden = !matches;
+          if (matches) visible += 1;
         });
+        const count = rootEl.querySelector("[data-bootstrap-detect-filter-count]");
+        if (count) count.textContent = query ? `${visible} of ${models.length} models` : `${models.length} models`;
+        const empty = rootEl.querySelector("[data-bootstrap-detect-empty]");
+        if (empty) empty.hidden = visible !== 0;
       });
+      rootEl.querySelector("[data-bootstrap-detect-filter]")?.focus();
       rootEl.querySelectorAll("[data-bootstrap-detect-check]").forEach(checkbox => {
         checkbox.addEventListener("change", updateSelectedLabel);
       });
+      rootEl.addEventListener("change", event => {
+        if (event.target instanceof HTMLInputElement && event.target.matches("[data-bootstrap-bind-backend]")) updateSelectedLabel();
+      });
       rootEl.querySelector("[data-bootstrap-detect-add-selected]")?.addEventListener("click", () => {
-        const checked = [...rootEl.querySelectorAll("[data-bootstrap-detect-check]:checked")]
-          .map(checkbox => checkbox.closest("[data-bootstrap-detect-model-row]")?.dataset?.modelIndex)
-          .map(index => models[Number(index)])
-          .filter(Boolean);
-        if (checked.length) {
-          bootstrapConfigHelpers.insertDetectedEnvGroups?.(form, backend, checked, baseUrl, credential, authStyle, configContext());
-        }
+        const bindings = selectedRows().flatMap(row => {
+          const modelId = String(row.dataset.modelId || "");
+          const model = models.find(item => (typeof item === "string" ? item : String(item?.id || "").trim()) === modelId) || null;
+          const contextWindow = Number(model?.max_input_tokens) > 0 ? Number(model.max_input_tokens) : "";
+          const maxOutput = Number(model?.max_output_tokens) > 0 ? Number(model.max_output_tokens) : "";
+          return [...row.querySelectorAll("[data-bootstrap-bind-backend]:checked")].map(input => ({
+            provider_id: provider.id,
+            model_id: modelId,
+            backend: String(input.dataset.bootstrapBindBackend || ""),
+            wire_api: String(input.dataset.wireApi || ""),
+            context_window: contextWindow,
+            max_output_tokens: maxOutput
+          }));
+        });
+        if (bindings.length) bootstrapConfigHelpers.insertConfiguredModels?.(form, provider, bindings);
         closeDetectModal();
       });
-      rootEl.querySelectorAll("[data-bootstrap-detect-close]").forEach(closeBtn => {
-        closeBtn.addEventListener("click", closeDetectModal);
-      });
-      rootEl.querySelectorAll("[data-bootstrap-detect-test]").forEach(testBtn => {
-        testBtn.addEventListener("click", async () => {
-          const row = testBtn.closest("[data-bootstrap-detect-model-row]");
-          const model = models[Number(row?.dataset?.modelIndex)];
-          const id = model && (typeof model === "string" ? model : model.id);
-          if (!id) return;
-          testBtn.disabled = true;
-          testBtn.textContent = "Testing...";
-          try {
-            await deps.fetchJson?.("/api/detect-models/test", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ base_url: baseUrl, api_key: credential, model: id, auth_style: authStyle })
-            }, "Test failed");
-            testBtn.textContent = "OK";
-            testBtn.classList.add("bootstrap-detect-ok");
-          } catch (err) {
-            testBtn.textContent = "Fail";
-            testBtn.title = err?.message || String(err);
-            testBtn.classList.add("bootstrap-detect-fail");
-          } finally {
-            testBtn.disabled = false;
+      rootEl.querySelectorAll("[data-bootstrap-detect-close]").forEach(closeBtn => closeBtn.addEventListener("click", closeDetectModal));
+      rootEl.querySelector("[data-bootstrap-detect-test-selected]")?.addEventListener("click", async event => {
+        const testButton = event.currentTarget;
+        const rows = selectedRows();
+        const modelIds = rows.map(row => String(row.dataset.modelId || "")).filter(Boolean);
+        if (!modelIds.length) return;
+        testButton.disabled = true;
+        testButton.textContent = "Testing...";
+        try {
+          const payload = await deps.fetchJson?.("/api/detect-models/test", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ provider_id: provider.id, auth_style: provider.auth_style, models: modelIds })
+          }, "Interface test failed");
+          const results = Array.isArray(payload?.results) ? payload.results : [];
+          for (const result of results) {
+            const row = rootEl.querySelector(`[data-bootstrap-detect-model-row][data-model-id="${CSS.escape(String(result.model_id || ""))}"]`);
+            if (!row) continue;
+            const anthropicBase = String(result.anthropic_base_url || "").trim();
+            if (anthropicBase && detectModalState?.provider) {
+              detectModalState.provider = { ...detectModalState.provider, anthropic_base_url: anthropicBase };
+              const providerRow = detectModalState.form?.querySelector?.(`[data-bootstrap-provider-row][data-provider-id="${CSS.escape(String(detectModalState.provider.id || ""))}"]`);
+              const baseInput = providerRow?.querySelector?.('[data-bootstrap-provider-field="anthropic_base_url"]');
+              if (baseInput instanceof HTMLInputElement) baseInput.value = anthropicBase;
+            }
+            for (const [wireApi, capability] of Object.entries(result.capabilities || {})) {
+              const status = String(capability?.status || "inconclusive");
+              const label = row.querySelector(`[data-bootstrap-capabilities] [data-wire-api="${wireApi}"]`);
+              if (label) {
+                label.dataset.status = status;
+                const statusEl = label.querySelector("[data-capability-status]");
+                if (statusEl) statusEl.textContent = status.replaceAll("_", " ");
+              }
+              const binding = row.querySelector(`[data-bootstrap-bind-backend][data-wire-api="${wireApi}"]`);
+              if (binding) {
+                binding.disabled = status !== "supported";
+                if (binding.disabled) binding.checked = false;
+              }
+            }
           }
-        });
+          updateSelectedLabel();
+          testButton.textContent = "Test selected";
+        } catch (err) {
+          testButton.textContent = "Test failed";
+          testButton.title = err?.message || String(err);
+        } finally {
+          testButton.disabled = false;
+        }
+      });
+    }
+
+    let modelEditorState = null;
+
+    function closeModelEditor() {
+      if (!modelEditorState) return;
+      modelEditorState.modalEl?.remove();
+      modelEditorState = null;
+    }
+
+    function upsertConfiguredModelBinding(form, originalKey, binding, providers) {
+      const list = form?.querySelector?.("[data-bootstrap-binding-list]");
+      if (!list) return;
+      const names = new Map((bootstrapConfigHelpers.providerList?.(providers) || []).map(provider => [String(provider.id || ""), bootstrapConfigHelpers.configString?.(provider.name, provider.id) || provider.id]));
+      const keyOf = item => [String(item.provider_id || ""), String(item.model_id || item.model || ""), String(item.backend || ""), String(item.wire_api || "")].join("\0");
+      const rowValue = (row, field) => String(row.querySelector(`[data-bootstrap-binding-field="${field}"]`)?.value || "").trim();
+      const rows = [...list.querySelectorAll("[data-bootstrap-model-binding]")];
+      const existingRow = (originalKey && rows.find(row => [rowValue(row, "provider_id"), rowValue(row, "model"), rowValue(row, "backend"), rowValue(row, "wire_api")].join("\0") === originalKey))
+        || rows.find(row => [rowValue(row, "provider_id"), rowValue(row, "model"), rowValue(row, "backend"), rowValue(row, "wire_api")].join("\0") === keyOf(binding));
+      if (existingRow) {
+        existingRow.outerHTML = bootstrapConfigHelpers.configuredModelRowHtml?.(binding, names.get(String(binding.provider_id || ""))) || existingRow.outerHTML;
+      } else {
+        bootstrapConfigHelpers.insertConfiguredModels?.(form, { id: binding.provider_id, name: names.get(String(binding.provider_id || "")) }, [binding]);
+      }
+      bootstrapConfigHelpers.refreshConfiguredModelGroups?.(list);
+      syncModelOptions(form);
+    }
+
+    function openModelEditor({ form, binding, providers }) {
+      closeModelEditor();
+      const modalEl = document.createElement("div");
+      modalEl.innerHTML = bootstrapConfigHelpers.configuredModelEditorHtml?.(binding || {}, providers) || "";
+      const rootEl = modalEl.firstElementChild;
+      if (!rootEl) return;
+      document.body.appendChild(rootEl);
+      const originalKey = binding && binding.provider_id && binding.model_id
+        ? [binding.provider_id, binding.model_id, binding.backend, binding.wire_api].join("\0")
+        : null;
+      modelEditorState = { form, originalKey, modalEl: rootEl };
+      rootEl.querySelectorAll("[data-bootstrap-model-editor-close]").forEach(btn => btn.addEventListener("click", closeModelEditor));
+      rootEl.querySelector("[data-bootstrap-model-editor-save]")?.addEventListener("click", () => {
+        const next = bootstrapConfigHelpers.readModelEditorFields?.(rootEl) || {};
+        if (!next.provider_id || !next.model_id) {
+          const modelEl = rootEl.querySelector('[data-bootstrap-model-field="model_id"]');
+          if (modelEl && !next.model_id) modelEl.focus();
+          return;
+        }
+        upsertConfiguredModelBinding(form, originalKey, next, providers);
+        closeModelEditor();
       });
     }
 
     async function detectEnvModels(button) {
       const form = button?.closest?.("[data-bootstrap-config-form]");
-      const block = button?.closest?.("[data-bootstrap-detect-backend]");
+      const block = button?.closest?.("[data-bootstrap-provider-detect]");
       if (!form || !block) return;
-      const backend = String(block.dataset.bootstrapDetectBackend || "claude");
-      const urlEl = block.querySelector("[data-bootstrap-detect-url]");
-      const keyEl = block.querySelector("[data-bootstrap-detect-key]");
       const statusEl = block.querySelector("[data-bootstrap-detect-status]");
-      const baseUrl = String(urlEl?.value || "").trim();
-      const credential = String(keyEl?.value || "").trim();
-      if (!baseUrl || !credential) {
-        if (statusEl) statusEl.textContent = "Enter API base URL and key first.";
+      const providerId = String(block.querySelector("[data-bootstrap-detect-provider]")?.value || "").trim();
+      const provider = (bootstrapConfigHelpers.providerList?.(configData().providers) || []).find(item => String(item.id || "") === providerId)
+        || { id: providerId, name: block.querySelector("[data-bootstrap-detect-provider] option:checked")?.textContent || providerId };
+      if (!providerId || !provider) {
+        if (statusEl) statusEl.textContent = "Save and select a Provider first.";
         return;
       }
       if (button instanceof HTMLButtonElement) button.disabled = true;
@@ -231,22 +341,40 @@
         const payload = await deps.fetchJson?.("/api/detect-models", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ base_url: baseUrl, api_key: credential, backend })
+          body: JSON.stringify({ provider_id: providerId })
         }, "Failed to detect models");
         const models = Array.isArray(payload?.models) ? payload.models : [];
         if (!models.length) {
           if (statusEl) statusEl.textContent = "No models found.";
           return;
         }
-        const authStyle = payload?.auth_style === "x-api-key" ? "x-api-key" : "bearer";
-        if (statusEl) statusEl.textContent = "";
-        await openDetectModal({ form, backend, models, authStyle, baseUrl, credential });
+        const detectedAuthStyle = String(payload?.auth_style || provider.auth_style || "auto");
+        const detectedProvider = { ...provider, auth_style: detectedAuthStyle };
+        if (provider.auth_style === "auto" && detectedAuthStyle !== "auto") {
+          const providerRow = form.querySelector(`[data-bootstrap-provider-row][data-provider-id="${CSS.escape(providerId)}"]`);
+          const authSelect = providerRow?.querySelector('[data-bootstrap-provider-field="auth_style"]');
+          if (authSelect instanceof HTMLSelectElement) authSelect.value = detectedAuthStyle;
+        }
+        if (statusEl) statusEl.textContent = `Detected ${models.length} models · Authentication: ${detectedAuthStyle}`;
+        await openDetectModal({ form, provider: detectedProvider, models });
       } catch (err) {
         if (statusEl) statusEl.textContent = err?.message || String(err);
         else deps.alertError?.(err?.message || String(err));
       } finally {
         if (button instanceof HTMLButtonElement) button.disabled = false;
       }
+    }
+
+    function maskSavedBackendCredentials(form) {
+      form.querySelectorAll("[data-bootstrap-provider-row] input[type='password'], [data-bootstrap-row='codex.env'] input[type='password'], [data-bootstrap-row='claude.env'] input[type='password']")
+        .forEach(input => {
+          if (!(input instanceof HTMLInputElement)) return;
+          if (input.value.trim()) input.placeholder = "Configured; leave blank to keep";
+          input.value = "";
+        });
+      form.querySelectorAll("[data-bootstrap-detect-key]").forEach(input => {
+        if (input instanceof HTMLInputElement) input.value = "";
+      });
     }
 
     async function saveConfigForm(form) {
@@ -265,7 +393,10 @@
         }, mode === "settings" ? "Failed to save settings" : "Failed to initialize AHA");
         deps.applyBootstrapPayload?.(payload);
         if (state) state.textContent = mode === "settings" ? "Saved." : "";
-        if (mode === "settings") return;
+        if (mode === "settings") {
+          maskSavedBackendCredentials(form);
+          return;
+        }
         if (deps.currentRunId?.()) {
           await deps.loadStatus?.({ forceAgents: true });
         } else {
@@ -301,7 +432,9 @@
 
     return Object.freeze({
       addConfigRow,
+      addProvider,
       closeDetectModal,
+      closeModelEditor,
       configContext,
       configData,
       configMode,
@@ -309,7 +442,9 @@
       createRunFromForm,
       detectEnvModels,
       formHtml,
+      openModelEditor,
       removeConfigRow,
+      removeProvider,
       renderBootstrapConfigState,
       renderBootstrapError,
       renderBootstrapLoadingState,

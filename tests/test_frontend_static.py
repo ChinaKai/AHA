@@ -329,6 +329,55 @@ if (customStartRoot.children[0].start !== 3) {
         self.assertIn("const codexModel = selectedBackendModel", bootstrap)
         self.assertIn("const claudeModel = selectedBackendModel", bootstrap)
 
+    def test_runtime_model_source_filters_official_env_options(self) -> None:
+        node = shutil.which("node")
+        if not node:
+            self.skipTest("node is not available")
+        script = static_root().joinpath("runtime_config.js").read_text(encoding="utf-8")
+        assertion = r'''
+const fs = require("fs");
+const vm = require("vm");
+const context = { window: {} };
+vm.createContext(context);
+vm.runInContext(fs.readFileSync(0, "utf8"), context);
+const factory = context.window.AHARuntimeConfig;
+const deps = {
+  configString: (v, f = "") => String(v || f || "").trim(),
+  escapeHtml: v => String(v ?? ""),
+  claudeEnvModelPrefix: "env:",
+  bootstrapConfigData: () => ({
+    codex: { model_source: "official", env: [{ name: "gw", OPENAI_MODEL: "deepseek-v4" }] },
+    claude: { model_source: "env", env: [{ name: "gw", ANTHROPIC_MODEL: "claude-sonnet-5" }] }
+  }),
+  bootstrapEnvGroups: (value) => Array.isArray(value) ? value : [],
+  bootstrapEnvGroupName: (group, index) => group.name || "env-" + (index + 1)
+};
+const ctrl = factory.createRuntimeOptionsController({}, deps);
+ctrl.applyBackendData([
+  { name: "codex", models: [{ name: "gpt-5.5", label: "GPT 5.5" }], reasoning_efforts: [] },
+  { name: "claude", models: [{ name: "claude-opus-4-7", label: "Opus" }], reasoning_efforts: [] }
+]);
+const codexOpts = ctrl.codexModelOptions();
+if (codexOpts.length !== 1 || codexOpts[0].name !== "gpt-5.5") process.exit(1);
+const claudeOpts = ctrl.claudeModelOptions();
+if (claudeOpts.length !== 1 || !claudeOpts[0].name.startsWith("env:")) process.exit(1);
+'''
+        result = subprocess.run(
+            [node, "-e", assertion],
+            input=script,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_knowledge_capture_models_honor_model_source(self) -> None:
+        root = static_root()
+        knowledge = (root / "knowledge.html").read_text(encoding="utf-8")
+        self.assertIn('state.captureConfig?.[backendName]?.model_source', knowledge)
+        self.assertIn('if (source === "official") return official;', knowledge)
+        self.assertIn('if (source === "env") return env;', knowledge)
+
     def test_waiting_for_subagents_does_not_block_main_input(self) -> None:
         script = (static_root() / "backend_status.js").read_text(encoding="utf-8")
         block = script[
@@ -375,6 +424,41 @@ if (!html.includes('value="gpt-catalog-first" selected')) process.exit(1);
         )
         self.assertEqual(result.returncode, 0, result.stderr)
 
+    def test_settings_sections_are_collapsed_and_backends_share_one_module(self) -> None:
+        node = shutil.which("node")
+        if not node:
+            self.skipTest("node is not available")
+        script = static_root().joinpath("bootstrap_config.js").read_text(encoding="utf-8")
+        assertion = r'''
+const fs = require("fs");
+const vm = require("vm");
+const context = { window: {} };
+vm.createContext(context);
+vm.runInContext(fs.readFileSync(0, "utf8"), context);
+const config = context.window.AHABootstrapConfig;
+const settings = config.bootstrapConfigFormHtml({ mode: "settings", config: { codex: {}, claude: {} } });
+for (const summary of ["Core", "Proxy", "Workspace", "Backend"]) {
+  if (!settings.includes(`<summary>${summary}</summary>`)) process.exit(1);
+}
+if ((settings.match(/bootstrap-config-section/g) || []).length !== 4) process.exit(1);
+if (/bootstrap-config-section[^>]* open/.test(settings)) process.exit(1);
+if (!settings.includes('data-bootstrap-backend-card="codex"')) process.exit(1);
+if (!settings.includes('data-bootstrap-backend-card="claude"')) process.exit(1);
+if (!settings.includes('data-bootstrap-config-field="codex.model_source"')) process.exit(1);
+if (!settings.includes('data-bootstrap-config-field="claude.model_source"')) process.exit(1);
+if (settings.includes("Codex defaults") || settings.includes("Claude defaults")) process.exit(1);
+const init = config.bootstrapConfigFormHtml({ mode: "init", config: { codex: {}, claude: {} } });
+if ((init.match(/bootstrap-config-section[^>]*" open/g) || []).length !== 4) process.exit(1);
+'''
+        result = subprocess.run(
+            [node, "-e", assertion],
+            input=script,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_claude_gateway_groups_render_simple_fields_and_derive_runtime_policy(self) -> None:
         node = shutil.which("node")
         if not node:
@@ -406,33 +490,11 @@ const html = config.bootstrapConfigFormHtml({
     }
   }
 });
-for (const field of [
-  "ANTHROPIC_DEFAULT_FABLE_MODEL",
-  "ANTHROPIC_DEFAULT_OPUS_MODEL",
-  "ANTHROPIC_DEFAULT_SONNET_MODEL",
-  "ANTHROPIC_DEFAULT_HAIKU_MODEL",
-  "CLAUDE_CODE_MAX_CONTEXT_TOKENS"
-]) {
-  if (!html.includes(`data-bootstrap-env-field="${field}"`)) process.exit(1);
-}
-for (const internalField of [
-  "ANTHROPIC_SMALL_FAST_MODEL",
-  "CLAUDE_CODE_SUBAGENT_MODEL",
-  "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY",
-  "CLAUDE_CODE_AUTO_COMPACT_WINDOW",
-  "DISABLE_COMPACT",
-  "API_TIMEOUT_MS",
-  "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC",
-  "AHA_CLAUDE_CLEAN_PROVIDER_ENV"
-]) {
-  if (html.includes(`data-bootstrap-env-field="${internalField}"`)) process.exit(1);
-}
+// The settings form is provider-based; env group rows are no longer rendered
+// directly. Gateway secrets must still never leak into the rendered markup.
 if (html.includes("hidden-auth-token")) process.exit(1);
-if (!html.includes("data-bootstrap-claude-credential")) process.exit(1);
-if (html.includes("data-bootstrap-claude-auth-mode")) process.exit(1);
-if (!html.includes("Advanced (optional)")) process.exit(1);
-if (!html.includes('data-bootstrap-env-field="ANTHROPIC_API_KEY"')) process.exit(1);
-if (!html.includes('option value="256000" selected>256K</option>')) process.exit(1);
+// The model source filter is present for both backend cards.
+if (!html.includes('data-bootstrap-config-field="claude.model_source"')) process.exit(1);
 
 const values = { ANTHROPIC_MODEL: "claude-custom", CLAUDE_CODE_MAX_CONTEXT_TOKENS: "256000", ANTHROPIC_API_KEY: "" };
 let credential = "replacement-token";
@@ -534,24 +596,9 @@ if (apiKeyGroups[0].OPENAI_API_KEY !== "sk-codex") process.exit(1);
 const html = config.bootstrapEnvDetectHtml("claude");
 if (!html.includes("data-bootstrap-detect-models")) process.exit(1);
 if (html.includes("data-bootstrap-detect-credential-type")) process.exit(1);
-// Env group row: main Credential input maps to AUTH_TOKEN, advanced API_KEY field exists
-const rowHtml = config.bootstrapConfigFormHtml({
-  mode: "init",
-  config: {
-    backend: "claude",
-    claude: {
-      env: [{
-        name: "gw",
-        ANTHROPIC_BASE_URL: "https://gw.test",
-        ANTHROPIC_MODEL: "claude-sonnet-5",
-        ANTHROPIC_AUTH_TOKEN: "sk-token"
-      }]
-    }
-  }
-});
-if (!rowHtml.includes("data-bootstrap-claude-credential")) process.exit(1);
-if (rowHtml.includes("data-bootstrap-claude-auth-mode")) process.exit(1);
-if (!rowHtml.includes('data-bootstrap-env-field="ANTHROPIC_API_KEY"')) process.exit(1);
+// The settings form no longer renders claude.env rows directly; env groups are
+// derived from Configured Models, so the detect card stays provider-based.
+if (!html.includes("data-bootstrap-provider-detect")) process.exit(1);
 // Structured model dicts carry context window from the API response only
 const structured = config.detectEnvGroupFromModels(
   "claude",
@@ -568,14 +615,14 @@ if (windowValue !== 0) process.exit(1);
 if (config.formatContextWindow(0) !== "NA") process.exit(1);
 if (config.formatContextWindow(1000000) !== "1M") process.exit(1);
 if (config.formatContextWindow(262144) !== "262K") process.exit(1);
-// Modal HTML: merged context.output.mode with NA placeholders, Test per row, batch Add only
+// Modal HTML: clear model/capability/binding sections with batch actions
 const modalHtml = config.detectModelsModalHtml(
   [
     { id: "claude-sonnet-5", max_input_tokens: 1000000, max_output_tokens: 64000, mode: "chat" },
     { id: "kimi-k3" },
     { id: "gpt-5.3-codex", max_input_tokens: 272000, max_output_tokens: 128000, mode: "responses" }
   ],
-  "bearer"
+  { provider_name: "Gateway", auth_style: "bearer" }
 );
 if (!modalHtml.includes("data-bootstrap-detect-model-row")) process.exit(1);
 if (!modalHtml.includes("data-bootstrap-detect-test")) process.exit(1);
@@ -585,11 +632,40 @@ if (!modalHtml.includes(">NA.NA.NA<")) process.exit(1);
 if (!modalHtml.includes(">272K.128K.responses<")) process.exit(1);
 if (modalHtml.includes("data-bootstrap-detect-add\"") || /data-bootstrap-detect-add\b/.test(modalHtml.replace('data-bootstrap-detect-add-selected', ""))) process.exit(1);
 if (!modalHtml.includes("data-bootstrap-detect-add-selected")) process.exit(1);
-if (!modalHtml.includes("Add selected (0)")) process.exit(1);
-// Fuzzy search: substring match
-const filterQuery = "sonnet";
-const filteredIds = ["claude-sonnet-5", "kimi-k3", "gpt-5.3-codex"].filter(id => id.includes(filterQuery));
-if (filteredIds.length !== 1) process.exit(1);
+if (!modalHtml.includes("Add selected bindings (0)")) process.exit(1);
+if (!modalHtml.includes("Authentication: bearer")) process.exit(1);
+if (!modalHtml.includes("Interface capability")) process.exit(1);
+if (!modalHtml.includes("Backend binding")) process.exit(1);
+// Fuzzy search supports substrings, separator-insensitive input, and ordered characters.
+if (!config.fuzzyModelMatch("claude-sonnet-5", "sonnet")) process.exit(1);
+if (!config.fuzzyModelMatch("gpt-5.3-codex", "gpt53")) process.exit(1);
+if (!config.fuzzyModelMatch("claude-sonnet-5", "cs5")) process.exit(1);
+if (config.fuzzyModelMatch("kimi-k3", "gpt53")) process.exit(1);
+// Authentication defaults to automatic discovery.
+const providerHtml = config.providerRowHtml({}, 0, false);
+if (!providerHtml.includes('<option value="auto" selected>Auto detect</option>')) process.exit(1);
+// Provider rows carry an optional Anthropic base URL used by the Claude backend.
+if (!providerHtml.includes('data-bootstrap-provider-field="anthropic_base_url"')) process.exit(1);
+if (!providerHtml.includes("Auto-filled when detection finds it under /anthropic")) process.exit(1);
+const anthropicProviderHtml = config.providerRowHtml({ id: "p1", anthropic_base_url: "https://api.deepseek.com/anthropic" }, 0, false);
+if (!anthropicProviderHtml.includes('value="https://api.deepseek.com/anthropic"')) process.exit(1);
+if (!anthropicProviderHtml.includes('data-bootstrap-provider-field="anthropic_base_url"')) process.exit(1);
+// Configured models are grouped by backend and sorted by model ID.
+const configuredHtml = config.configuredModelsHtml([
+  { provider_id: "p1", model_id: "z-model", backend: "claude", wire_api: "anthropic_messages" },
+  { provider_id: "p1", model_id: "b-model", backend: "codex", wire_api: "responses" },
+  { provider_id: "p1", model_id: "a-model", backend: "codex", wire_api: "responses" }
+], [{ id: "p1", name: "Gateway" }]);
+if (configuredHtml.indexOf('data-bootstrap-model-backend-group="codex"') > configuredHtml.indexOf('data-bootstrap-model-backend-group="claude"')) process.exit(1);
+if (configuredHtml.indexOf("a-model") > configuredHtml.indexOf("b-model")) process.exit(1);
+// Binding rows carry hidden role-model fields so editing preserves them.
+const roleRowHtml = config.configuredModelsHtml([
+  { provider_id: "p1", model_id: "deepseek-v4", backend: "claude", wire_api: "anthropic_messages", context_window: 262144, opus_model: "claude-opus-5" }
+], [{ id: "p1", name: "Gateway" }]);
+if (!roleRowHtml.includes('data-bootstrap-binding-field="opus_model" value="claude-opus-5"')) process.exit(1);
+if (!roleRowHtml.includes('data-bootstrap-binding-field="fable_model"')) process.exit(1);
+if (!roleRowHtml.includes('data-bootstrap-binding-field="sonnet_model"')) process.exit(1);
+if (!roleRowHtml.includes('data-bootstrap-binding-field="haiku_model"')) process.exit(1);
 '''
         result = subprocess.run(
             [node, "-e", assertion],
@@ -599,6 +675,172 @@ if (filteredIds.length !== 1) process.exit(1);
             check=False,
         )
         self.assertEqual(result.returncode, 0, result.stderr)
+        controller = static_root().joinpath("bootstrap_controller.js").read_text(encoding="utf-8")
+        self.assertIn('wire_api: String(input.dataset.wireApi || "")', controller)
+        self.assertIn("bootstrapBindBackend", controller)
+        self.assertIn("function maskSavedBackendCredentials(form)", controller)
+        self.assertIn('input.placeholder = "Configured; leave blank to keep"', controller)
+        self.assertIn("maskSavedBackendCredentials(form);", controller)
+
+    def test_configured_model_row_html_is_exported_for_edit_save(self) -> None:
+        node = shutil.which("node")
+        if not node:
+            self.skipTest("node is not available")
+        script = static_root().joinpath("bootstrap_config.js").read_text(encoding="utf-8")
+        assertion = r'''
+const fs = require("fs");
+const vm = require("vm");
+const context = { window: {} };
+vm.createContext(context);
+vm.runInContext(fs.readFileSync(0, "utf8"), context);
+const config = context.window.AHABootstrapConfig;
+if (typeof config.configuredModelRowHtml !== "function") process.exit(1);
+// The row html the edit-save upsert uses must expose the model fields.
+const row = config.configuredModelRowHtml(
+  { provider_id: "p1", model_id: "deepseek-v4", backend: "claude", wire_api: "anthropic_messages", context_window: 262144, opus_model: "claude-opus-5" },
+  "Gateway"
+);
+if (!row.includes('data-bootstrap-binding-field="model" value="deepseek-v4"')) process.exit(1);
+if (!row.includes('data-bootstrap-binding-field="opus_model" value="claude-opus-5"')) process.exit(1);
+if (!row.includes('data-bootstrap-binding-field="context_window" value="262144"')) process.exit(1);
+'''
+        result = subprocess.run(
+            [node, "-e", assertion],
+            input=script,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_configured_models_carry_context_window_and_model_filter(self) -> None:
+        node = shutil.which("node")
+        if not node:
+            self.skipTest("node is not available")
+        script = static_root().joinpath("bootstrap_config.js").read_text(encoding="utf-8")
+        assertion = r'''
+const fs = require("fs");
+const vm = require("vm");
+const context = { window: {} };
+vm.createContext(context);
+vm.runInContext(fs.readFileSync(0, "utf8"), context);
+const config = context.window.AHABootstrapConfig;
+// Configured model rows render a context badge and persist context_window / max_output_tokens.
+const configuredHtml = config.configuredModelsHtml([
+  { provider_id: "p1", model_id: "deepseek-v4-flash", backend: "claude", wire_api: "anthropic_messages", context_window: 262144, max_output_tokens: 32768 },
+  { provider_id: "p1", model_id: "claude-sonnet-5", backend: "claude", wire_api: "anthropic_messages" }
+], [{ id: "p1", name: "Gateway" }]);
+if (!configuredHtml.includes('data-bootstrap-binding-field="context_window" value="262144"')) process.exit(1);
+if (!configuredHtml.includes('data-bootstrap-binding-field="max_output_tokens" value="32768"')) process.exit(1);
+if (!configuredHtml.includes("bootstrap-model-binding-ctx")) process.exit(1);
+if (!configuredHtml.includes("ctx 262K")) process.exit(1);
+if ((configuredHtml.match(/bootstrap-model-binding-ctx/g) || []).length !== 1) process.exit(1);
+// bootstrapConfiguredModels reads the context window back into the payload.
+const rows = [{
+  querySelector(sel) {
+    const values = {
+      'data-bootstrap-binding-field="provider_id"': "p1",
+      'data-bootstrap-binding-field="model"': "deepseek-v4-flash",
+      'data-bootstrap-binding-field="backend"': "claude",
+      'data-bootstrap-binding-field="wire_api"': "anthropic_messages",
+      'data-bootstrap-binding-field="context_window"': "262144",
+      'data-bootstrap-binding-field="max_output_tokens"': "32768",
+      'data-bootstrap-binding-field="opus_model"': "claude-opus-5"
+    };
+    return { value: values[sel.replace(/[\[\]]/g, "")] || "" };
+  }
+}];
+const payload = config.bootstrapConfiguredModels({ querySelectorAll: () => rows });
+if (payload.length !== 1) process.exit(1);
+if (payload[0].context_window !== 262144 || payload[0].max_output_tokens !== 32768) process.exit(1);
+// Role models survive the save round-trip (editing a saved model must not drop them).
+if (payload[0].opus_model !== "claude-opus-5") process.exit(1);
+// Model source filter: official / env / both.
+const opts = [
+  { name: "gpt-5.5", label: "GPT 5.5" },
+  { name: "env:gw", label: "deepseek-v4-flash (gw)" }
+];
+if (config.filterBootstrapModelOptions(opts, "both").length !== 2) process.exit(1);
+const official = config.filterBootstrapModelOptions(opts, "official");
+if (official.length !== 1 || official[0].name !== "gpt-5.5") process.exit(1);
+const env = config.filterBootstrapModelOptions(opts, "env");
+if (env.length !== 1 || env[0].name !== "env:gw") process.exit(1);
+// A selected value hidden by the filter is preserved as an extra option.
+const preserve = config.filterBootstrapModelOptions(opts, "official", "env:gw");
+if (preserve.length !== 2 || preserve[1].name !== "env:gw") process.exit(1);
+// Settings form renders one model_source select per backend card.
+const settings = config.bootstrapConfigFormHtml({ mode: "settings", config: { codex: {}, claude: {} } });
+if (!settings.includes('data-bootstrap-config-field="codex.model_source"')) process.exit(1);
+if (!settings.includes('data-bootstrap-config-field="claude.model_source"')) process.exit(1);
+if (!settings.includes('<option value="both" selected>BOTH</option>')) process.exit(1);
+if (!settings.includes('<option value="official">Official</option>')) process.exit(1);
+if (!settings.includes('<option value="env">ENV</option>')) process.exit(1);
+// The configured model_source drives the persisted backend card selection.
+const officialSettings = config.bootstrapConfigFormHtml({ mode: "settings", config: { codex: { model_source: "official" }, claude: { model_source: "env" } } });
+if (!officialSettings.includes('<option value="official" selected>Official</option>')) process.exit(1);
+if (!officialSettings.includes('<option value="env" selected>ENV</option>')) process.exit(1);
+// bootstrapModelFilterValue reads the config field, not a UI-only filter.
+function formWithSource(value) {
+  return { querySelector(sel) { return sel.includes("model_source") ? { value } : { value: "" }; } };
+}
+if (config.bootstrapModelFilterValue(formWithSource("official"), "codex") !== "official") process.exit(1);
+if (config.bootstrapModelFilterValue(formWithSource("bogus"), "codex") !== "both") process.exit(1);
+// The editor renders model-level fields and readModelEditorFields parses them back.
+const editorHtml = config.configuredModelEditorHtml({
+  provider_id: "p1", model_id: "deepseek-v4-flash", backend: "claude", wire_api: "anthropic_messages",
+  context_window: 262144, max_output_tokens: 32768, opus_model: "claude-opus-5"
+}, [{ id: "p1", name: "Gateway" }]);
+if (!editorHtml.includes('data-bootstrap-model-field="provider_id"')) process.exit(1);
+if (!editorHtml.includes('data-bootstrap-model-field="model_id"') || !editorHtml.includes('value="deepseek-v4-flash"')) process.exit(1);
+if (!editorHtml.includes('data-bootstrap-model-field="context_window"')) process.exit(1);
+if (!editorHtml.includes('data-bootstrap-model-field="max_output_tokens"')) process.exit(1);
+if (!editorHtml.includes('data-bootstrap-model-field="opus_model"') || !editorHtml.includes('value="claude-opus-5"')) process.exit(1);
+if (!editorHtml.includes("Edit Model")) process.exit(1);
+const addEditor = config.configuredModelEditorHtml({}, [{ id: "p1", name: "Gateway" }]);
+if (!addEditor.includes("Add Model")) process.exit(1);
+// A null binding (the Add Model flow) must not throw: defaults only apply for undefined.
+const nullEditor = config.configuredModelEditorHtml(null, [{ id: "p1", name: "Gateway" }]);
+if (!nullEditor.includes("Add Model")) process.exit(1);
+if (!nullEditor.includes('data-bootstrap-model-field="model_id"')) process.exit(1);
+function editorRoot(fields) {
+  return { querySelector(sel) {
+    const m = sel.match(/data-bootstrap-model-field="([^"]+)"/);
+    return { value: fields[m ? m[1] : ""] || "" };
+  } };
+}
+const parsed = config.readModelEditorFields(editorRoot({
+  provider_id: "p1", model_id: "new-model", backend: "codex", wire_api: "responses",
+  context_window: "258000", max_output_tokens: "64000", fable_model: "fable-a"
+}));
+if (parsed.provider_id !== "p1" || parsed.model_id !== "new-model") process.exit(1);
+if (parsed.backend !== "codex" || parsed.wire_api !== "responses") process.exit(1);
+if (parsed.context_window !== 258000 || parsed.max_output_tokens !== 64000) process.exit(1);
+if (parsed.fable_model !== "fable-a") process.exit(1);
+// bootstrapConfigPayload persists model_source per backend.
+const sourceForm = {
+  dataset: { bootstrapConfigMode: "settings" },
+  querySelector(sel) {
+    const fields = { "codex.model_source": "official", "claude.model_source": "env", "codex.model": "", "claude.model": "" };
+    const m = sel.match(/data-bootstrap-config-field="([^"]+)"/);
+    return { value: m ? (fields[m[1]] || "") : "", checked: false };
+  },
+  querySelectorAll() { return []; }
+};
+const sourcePayload = config.bootstrapConfigPayload(sourceForm, { config: { codex: {}, claude: {} } });
+if (sourcePayload.codex.model_source !== "official") process.exit(1);
+if (sourcePayload.claude.model_source !== "env") process.exit(1);
+'''
+        result = subprocess.run(
+            [node, "-e", assertion],
+            input=script,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        settings_controller = static_root().joinpath("settings_controller.js").read_text(encoding="utf-8")
+        self.assertIn("[data-bootstrap-config-field$='.model_source']", settings_controller)
+        self.assertIn("deps.syncBootstrapModelOptions?.(filter.closest(\"[data-bootstrap-config-form]\"))", settings_controller)
 
     def test_global_settings_omit_feishu_and_preserve_existing_integration(self) -> None:
         node = shutil.which("node")
@@ -1210,7 +1452,7 @@ controller.unmount();
         self.assertIn('id="token-usage"', integration_actions)
         self.assertNotIn('id="token-usage-popover"', integration_actions)
         self.assertLess(html.index('id="skills-console-popover"'), html.index('id="token-usage-popover"'))
-        self.assertIn('<link rel="stylesheet" href="/static/styles.css?v=permissions-v6">', html)
+        self.assertIn('<link rel="stylesheet" href="/static/styles.css?v=provider-models-v7">', html)
         self.assertIn('<script src="/static/i18n.js?v=permissions-v6"></script>', html)
         self.assertIn('"task.open": "任务"', i18n)
         self.assertIn('"agents.open": "智能体"', i18n)
@@ -4804,17 +5046,20 @@ if (fallback.length !== 1 || fallback[0] !== fallbackFile) {
         self.assertIn("initSettingsDialog", script)
         self.assertIn('data-bootstrap-config-mode="${escapeHtml(mode)}"', script)
         self.assertIn('bootstrapConfigFormHtml({ mode: "settings"', script)
-        self.assertIn('const codexDetailsOpen = mode === "settings" ? "" : " open";', script)
-        self.assertIn('<details class="bootstrap-config-section"${codexDetailsOpen}>', script)
+        self.assertIn('const sectionOpen = mode === "settings" ? "" : " open";', script)
+        self.assertIn('<details class="bootstrap-config-section"${sectionOpen}>', script)
         self.assertIn("body.force = true", script)
         self.assertIn("confirmConfigSave", script)
         self.assertIn("Save AHA Settings?", script)
         self.assertIn(".aha/config.json", script)
         self.assertIn("data-bootstrap-config-form", script)
         self.assertIn("data-bootstrap-config-field", script)
-        self.assertIn("Core Settings", script)
+        self.assertIn("<summary>Core</summary>", script)
         self.assertIn("Task concurrency", script)
-        self.assertIn("Proxy Settings", script)
+        self.assertIn("<summary>Proxy</summary>", script)
+        self.assertIn("<summary>Workspace</summary>", script)
+        self.assertIn("<summary>Backend</summary>", script)
+        self.assertIn("Provider Connections", script)
         self.assertIn("bootstrapSharedProxyFieldsHtml(proxy)", script)
         self.assertIn('bootstrapBackendProxySwitchHtml("codex"', script)
         self.assertIn('bootstrapBackendProxySwitchHtml("claude"', script)
@@ -4867,16 +5112,22 @@ if (fallback.length !== 1 || fallback[0] !== fallbackFile) {
         self.assertIn('data-bootstrap-config-field="codex.model"', script)
         self.assertIn('data-bootstrap-config-field="codex.reasoning_effort"', script)
         self.assertIn('bootstrapConfigText(form, "codex.reasoning_effort")', script)
-        self.assertIn("Official Codex model or custom OpenAI-compatible provider.", script)
+        self.assertIn("Official model or one of the provider connections below.", script)
         self.assertIn('data-bootstrap-config-field="claude.model"', script)
         self.assertIn('data-bootstrap-config-field="claude.reasoning_effort"', script)
         self.assertIn('bootstrapConfigText(form, "claude.reasoning_effort")', script)
-        self.assertIn("Official Claude model or custom gateway group.", script)
-        self.assertIn("data-bootstrap-env-name", script)
-        self.assertIn("data-bootstrap-env-field", script)
-        self.assertIn('data-bootstrap-config-list="codex.env"', script)
-        self.assertIn('data-bootstrap-add-row="codex.env"', script)
-        self.assertIn("Provider groups", script)
+        self.assertIn("Claude Code CLI runtime and configured model.", script)
+        self.assertIn("data-bootstrap-provider-row", script)
+        self.assertIn("data-bootstrap-provider-field", script)
+        self.assertIn('anthropic_base_url: value("anthropic_base_url") || ""', script)
+        self.assertIn('data-bootstrap-provider-field="anthropic_base_url"', script)
+        self.assertIn("data-bootstrap-add-provider", script)
+        self.assertIn("Discover Models", script)
+        self.assertIn("data-bootstrap-detect-provider", script)
+        self.assertIn("data-bootstrap-binding-list", script)
+        self.assertIn("data-bootstrap-bind-backend", script)
+        self.assertIn("configured_models: bootstrapConfiguredModels(form)", script)
+        self.assertIn("providers: bootstrapProviders(form, context)", script)
         self.assertIn("CODEX_WIRE_API", script)
         self.assertIn("CODEX_ENV_KEY", script)
         self.assertIn("OPENAI_BASE_URL", script)
@@ -4888,7 +5139,7 @@ if (fallback.length !== 1 || fallback[0] !== fallbackFile) {
         self.assertIn("ANTHROPIC_AUTH_TOKEN", script)
         self.assertIn("ANTHROPIC_DEFAULT_OPUS_MODEL", script)
         self.assertIn("CLAUDE_CODE_MAX_CONTEXT_TOKENS", script)
-        self.assertIn("Gateway groups", script)
+        self.assertIn("Configured Models", script)
         self.assertNotIn("data-bootstrap-env-key", script)
         self.assertNotIn("data-bootstrap-env-active", script)
         self.assertNotIn("data-bootstrap-context-tokens", script)
@@ -5591,8 +5842,8 @@ if (resetCount !== 1 || emptyWorkspaceCount !== 1) {
         self.assertIn('<script src="/static/i18n.js?v=permissions-v6"></script>', html)
         self.assertIn('<script src="/static/app_helpers.js"></script>', html)
         self.assertIn('<script src="/static/task_metadata.js?v=hardware-terminal-v1"></script>', html)
-        self.assertIn('<script src="/static/bootstrap_config.js?v=claude-gateway-v3"></script>', html)
-        self.assertIn('<script src="/static/bootstrap_controller.js"></script>', html)
+        self.assertIn('<script src="/static/bootstrap_config.js?v=provider-models-v7"></script>', html)
+        self.assertIn('<script src="/static/bootstrap_controller.js?v=provider-models-v7"></script>', html)
         self.assertIn('<script src="/static/task_form.js?v=hardware-terminal-v1"></script>', html)
         self.assertIn('<script src="/static/task_config_controller.js?v=browser-profile-select-v47"></script>', html)
         self.assertIn('<script src="/static/agent_config_controller.js?v=reasoning-effort-v1"></script>', html)
@@ -5637,16 +5888,16 @@ if (resetCount !== 1 || emptyWorkspaceCount !== 1) {
         self.assertIn('<script src="/static/run_actions.js?v=web-upgrade-v12"></script>', html)
         self.assertIn('<script src="/static/task_create_controller.js?v=browser-profile-select-v47"></script>', html)
         self.assertIn('<script src="/static/app_actions.js"></script>', html)
-        self.assertIn('<script src="/static/settings_controller.js?v=token-saving-v8"></script>', html)
+        self.assertIn('<script src="/static/settings_controller.js?v=provider-models-v7"></script>', html)
         self.assertIn('<script src="/static/run_controller.js?v=permissions-v1"></script>', html)
         self.assertIn('<script src="/static/message_flow.js?v=hardware-terminal-v1"></script>', html)
         self.assertIn('<script src="/static/render_scheduler.js"></script>', html)
         self.assertIn('<script src="/static/confirm_dialog.js"></script>', html)
         self.assertIn('<script src="/static/controller_registry.js?v=permissions-v1"></script>', html)
         self.assertIn('<script src="/static/app_bridge.js?v=permissions-v1"></script>', html)
-        self.assertIn('<script src="/static/app_controller_factory.js?v=permissions-v1"></script>', html)
+        self.assertIn('<script src="/static/app_controller_factory.js?v=provider-models-v7"></script>', html)
         self.assertIn('<script src="/static/app_runtime_setup.js?v=permissions-v1"></script>', html)
-        self.assertIn('<script src="/static/app_runtime_wiring.js?v=permissions-v1"></script>', html)
+        self.assertIn('<script src="/static/app_runtime_wiring.js?v=provider-models-v7"></script>', html)
         self.assertIn('<script src="/static/app.js"></script>', html)
         self.assertLess(html.find("time_format.js"), html.find("app.js"))
         self.assertLess(html.find("time_format.js"), html.find("i18n.js"))

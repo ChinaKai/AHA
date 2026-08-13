@@ -82,6 +82,7 @@ runs/<run-id>/runtime/chat-offset-<task-id>-<agent-id>.json
 runs/<run-id>/runtime/chat-offset-<task-id>-<agent-id>.json.lock
 runs/<run-id>/runtime/chat-consumer-<task-id>-<agent-id>.lock
 runs/<run-id>/runtime/chat-turn-<task-id>-<agent-id>.json
+runs/<run-id>/runtime/managed-process-<task-id>-<agent-id>-<name>.json
 ```
 
 Runtime files contain child process pid, command, sandbox, approval, log path, and managed status. They are excluded from run exports because they are tied to one machine and one process tree.

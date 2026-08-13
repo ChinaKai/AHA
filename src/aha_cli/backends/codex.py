@@ -716,9 +716,22 @@ def run_codex_exec(
             process.stdin.close()
         except BrokenPipeError:
             pass
+        last_agent_message = ""
+
         def handle_line(raw_line: str) -> None:
+            nonlocal last_agent_message
             print(raw_line, end="", flush=True)
             line = raw_line.strip()
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError:
+                event = None
+            if isinstance(event, dict) and event.get("type") == "item.completed":
+                item = event.get("item")
+                if isinstance(item, dict) and item.get("type") == "agent_message":
+                    message = str(item.get("text") or "").strip()
+                    if message:
+                        last_agent_message = message
             handle_codex_event(
                 line,
                 events_file=events_file,
@@ -755,6 +768,9 @@ def run_codex_exec(
                 },
             )
         final_text = output_file.read_text(encoding="utf-8") if output_file.exists() else ""
+        if not final_text.strip() and last_agent_message:
+            final_text = last_agent_message
+            output_file.write_text(final_text, encoding="utf-8")
         return stream_result.exit_code, final_text, session
     except OSError as exc:
         exit_code = 127 if isinstance(exc, FileNotFoundError) else 1

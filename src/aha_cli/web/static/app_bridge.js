@@ -606,6 +606,14 @@
       controllers.bootstrapController?.()?.removeConfigRow(button);
     }
 
+    function addBootstrapProvider(button) {
+      controllers.bootstrapController?.()?.addProvider(button);
+    }
+
+    function removeBootstrapProvider(button) {
+      controllers.bootstrapController?.()?.removeProvider(button);
+    }
+
     async function detectEnvModels(button) {
       await controllers.bootstrapController?.()?.detectEnvModels(button);
     }
@@ -620,6 +628,7 @@
 
     return Object.freeze({
       addBootstrapConfigRow,
+      addBootstrapProvider,
       addOptimisticSendFeedback,
       agentStatusSession,
       agentStatusTiming,
@@ -684,6 +693,7 @@
       realtimeDebug,
       realtimeTransportText,
       removeBootstrapConfigRow,
+      removeBootstrapProvider,
       removeOptimisticEventsMatchedBy,
       renderAccessControlStatus,
       renderAgents,

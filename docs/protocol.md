@@ -63,6 +63,9 @@ backend_session_reset
 backend_start_failed
 backend_stopped
 backend_completion_grace_exceeded
+managed_process_started
+managed_process_stop_requested
+managed_process_finished
 run_imported
 ```
 
@@ -73,6 +76,25 @@ includes `backend`, `pid`, `grace_seconds`, `process_exit_code`, and the reason
 `native_completion_without_stdout_eof`. The logical turn remains successful;
 the event is a diagnostic for an inherited long-running child or pipe handle.
 Before a native completion record, AHA does not apply this timeout.
+
+## Managed Processes
+
+The local Web API exposes task-scoped process ownership:
+
+```text
+POST   /api/managed-processes
+GET    /api/managed-processes?run_id=...&task_id=...&agent_id=...
+GET    /api/managed-processes?run_id=...&task_id=...&agent_id=...&name=...
+DELETE /api/managed-processes
+```
+
+Start payloads contain `run_id`, `task_id`, `agent_id`, `name`, `command` as an
+argv string array, and optional workspace-relative `cwd`. The endpoint requires
+loopback access or valid Web authentication. State and logs are machine-local,
+excluded from archives, and owned by the current AHA Web instance. A live PID
+from a different owner instance is reported as `unmanaged` and cannot be killed
+through the API, preventing stale PID reuse from terminating an unrelated
+process.
 
 ## Web Upgrade
 

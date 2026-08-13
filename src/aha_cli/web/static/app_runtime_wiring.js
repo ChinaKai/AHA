@@ -677,6 +677,7 @@ const appActions = window.AHAAppActions.createAppActions({
 const featureControllers = window.AHAAppControllerFactory.createFeatureControllers(domRefs, {
   activeTab: () => activeTab,
   addBootstrapConfigRow,
+  addBootstrapProvider,
   applyBootstrapPayload,
   detectEnvModels,
   agentBackendProcessStatus,
@@ -713,6 +714,8 @@ const featureControllers = window.AHAAppControllerFactory.createFeatureControlle
   initialSearchField,
   initialSearchQuery,
   fillBootstrapProxyDefaultFor: bootstrapConfigHelpers.fillBootstrapProxyDefaultFor,
+  openModelEditor: opts => bootstrapController.openModelEditor?.(opts),
+  providerList: bootstrapConfigHelpers.providerList,
   formatDuration,
   formatLocalTimestamp,
   handleComposerSubmit,
@@ -732,7 +735,9 @@ const featureControllers = window.AHAAppControllerFactory.createFeatureControlle
   readAgentConfigEditor,
   readAskUserGateControls,
   realtimeDebug,
+  refreshConfiguredModelGroups: bootstrapConfigHelpers.refreshConfiguredModelGroups,
   removeBootstrapConfigRow,
+  removeBootstrapProvider,
   renderAgents,
   renderPanel,
   resetEventWebSocketReconnectState,
@@ -1238,6 +1243,7 @@ window.AHAControllerRegistry.bindTopLevelEvents(domRefs, {
   positionPromptMetricsPopover: promptMetricsPopover.position,
   realtimeDebug,
   removeBootstrapConfigRow,
+  removeBootstrapProvider,
   removePendingMessage,
   refreshContextEvidence: async () => {
     if (!selectedTaskId) return;

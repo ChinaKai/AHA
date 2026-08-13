@@ -14,6 +14,7 @@ from aha_cli.services.run_retention_policy import (
 )
 from aha_cli.services.feishu_runtime import run_feishu_channel
 from aha_cli.services.service_runtime import write_service_runtime
+from aha_cli.services.managed_processes import reconcile_managed_processes, stop_all_managed_processes
 from aha_cli.services.weixin import WeixinError, fetch_updates, load_account, notify_channel_start, notify_channel_stop
 from aha_cli.store.config import load_config
 from aha_cli.store.paths import config_path
@@ -39,6 +40,7 @@ from aha_cli.web.local_terminal import (
     local_terminal_options_response,
     local_terminal_peer_allowed,
 )
+from aha_cli.web.managed_process_routes import managed_process_route_response
 from aha_cli.web.run_routes import handle_run_workspace_route
 from aha_cli.web.session_debug import backend_session_jsonl_info
 from aha_cli.web.skill_routes import skill_route_response
@@ -62,6 +64,7 @@ from aha_cli.web.task_routes import route_task_agent_request, task_final_view_sn
 WEIXIN_KEEPALIVE_INTERVAL_SECONDS = 30
 WEB_RESTART_EXIT_DELAY_SECONDS = 0.25
 RETENTION_POLICY_REPORT_MIN_SLEEP_SECONDS = 60
+MANAGED_PROCESS_RECONCILE_SECONDS = 1.0
 UI_WS_INTERVAL_SECONDS = 0.1
 
 
@@ -106,13 +109,15 @@ async def handle_ui_client(
         token_authorized = False
         auth_required = bool(auth_token)
         auth_mode = "token" if auth_token else "none"
+        loopback_peer = local_terminal_peer_allowed(writer.get_extra_info("peername"))
         public_ui_shell = method in {"GET", "HEAD"} and (path == "/" or path.startswith("/static/"))
         public_auth_route = path in {"/api/login", "/api/logout"}
         public_health = method in {"GET", "HEAD"} and path == "/api/health"
         # Browser detection is not sensitive and is needed before login to render
         # the picker, so serve it publicly (like /api/health).
         public_browser_options = method == "GET" and path == "/api/browser/options"
-        public_route = public_ui_shell or public_health or public_auth_route or public_browser_options
+        public_managed_process = path == "/api/managed-processes" and loopback_peer
+        public_route = public_ui_shell or public_health or public_auth_route or public_browser_options or public_managed_process
         if auth_token and public_ui_shell:
             token_authorized, set_auth_cookie = optional_authorized_request(auth_token, target, headers)
             if not token_authorized:
@@ -136,8 +141,7 @@ async def handle_ui_client(
 
         if method == "GET" and path == "/ws/terminal" and headers.get("upgrade", "").lower() == "websocket":
             terminal_peer_allowed = (
-                local_terminal_peer_allowed(writer.get_extra_info("peername"))
-                or token_authorized
+                loopback_peer or token_authorized
             )
             if not terminal_peer_allowed:
                 writer.write(
@@ -157,8 +161,7 @@ async def handle_ui_client(
 
         if method == "GET" and path == "/ws/browser-session" and headers.get("upgrade", "").lower() == "websocket":
             browser_peer_allowed = (
-                local_terminal_peer_allowed(writer.get_extra_info("peername"))
-                or token_authorized
+                loopback_peer or token_authorized
             )
             if not browser_peer_allowed:
                 writer.write(
@@ -233,6 +236,17 @@ async def handle_ui_client(
                     bind_host=bind_host,
                     bind_port=bind_port,
                 )
+            if response is None:
+                managed_process_peer_allowed = (
+                    loopback_peer or token_authorized
+                )
+                if path == "/api/managed-processes" and not managed_process_peer_allowed:
+                    response = json_response(
+                        {"ok": False, "error": "managed processes require loopback access or Web auth"},
+                        "403 Forbidden",
+                    )
+                else:
+                    response = await managed_process_route_response(root, run_id, method, path, query, body)
             if response is None:
                 route_result = await asyncio.to_thread(route_task_agent_request, root, run_id, method, path, query, body, headers)
                 response = task_agent_response(route_result, method)
@@ -329,12 +343,14 @@ async def run_ui_server(root: Path, run_id: str, host: str, port: int, _poll_int
     weixin_keepalive = None
     feishu_channel = None
     retention_policy_reporter = None
+    managed_process_reconciler = None
     try:
         server = await asyncio.start_server(lambda r, w: handle_ui_client(root, run_id, r, w, auth_token, host, port), host, port)
         write_service_runtime(root, host=host, port=port, auth_required=bool(auth_token), status="running")
         weixin_keepalive = asyncio.create_task(weixin_keepalive_loop(root)) if weixin_integration_enabled(root) else None
         feishu_channel = asyncio.create_task(run_feishu_channel(root, run_id))
         retention_policy_reporter = asyncio.create_task(retention_policy_report_loop(root, run_id))
+        managed_process_reconciler = asyncio.create_task(managed_process_reconcile_loop(root))
         addresses = ", ".join(str(sock.getsockname()) for sock in server.sockets or [])
         if run_id:
             print(f"AHA dashboard for run {run_id}: http://{host}:{port}")
@@ -346,6 +362,11 @@ async def run_ui_server(root: Path, run_id: str, host: str, port: int, _poll_int
         async with server:
             await server.serve_forever()
     finally:
+        if managed_process_reconciler is not None:
+            managed_process_reconciler.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await managed_process_reconciler
+        await asyncio.to_thread(stop_all_managed_processes, root)
         write_service_runtime(root, host=host, port=port, auth_required=bool(auth_token), status="stopped")
         if weixin_keepalive is not None:
             weixin_keepalive.cancel()
@@ -353,7 +374,7 @@ async def run_ui_server(root: Path, run_id: str, host: str, port: int, _poll_int
             feishu_channel.cancel()
         if retention_policy_reporter is not None:
             retention_policy_reporter.cancel()
-        for task in (weixin_keepalive, feishu_channel, retention_policy_reporter):
+        for task in (weixin_keepalive, feishu_channel, retention_policy_reporter, managed_process_reconciler):
             if task is None:
                 continue
             with contextlib.suppress(asyncio.CancelledError):
@@ -361,3 +382,14 @@ async def run_ui_server(root: Path, run_id: str, host: str, port: int, _poll_int
         if weixin_keepalive is not None:
             with contextlib.suppress(WeixinError, RuntimeError):
                 await asyncio.to_thread(notify_channel_stop, root)
+
+
+async def managed_process_reconcile_loop(root: Path) -> None:
+    while True:
+        await asyncio.sleep(MANAGED_PROCESS_RECONCILE_SECONDS)
+        try:
+            await asyncio.to_thread(reconcile_managed_processes, root)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            pass
