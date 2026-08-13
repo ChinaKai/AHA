@@ -739,13 +739,13 @@ const context = { window: {} };
 vm.createContext(context);
 vm.runInContext(fs.readFileSync(0, "utf8"), context);
 const config = context.window.AHABootstrapConfig;
-// Configured model rows render a context badge and persist context_window / max_output_tokens.
+// Configured model rows render a context badge and persist context_window.
 const configuredHtml = config.configuredModelsHtml([
-  { provider_id: "p1", model_id: "deepseek-v4-flash", backend: "claude", wire_api: "anthropic_messages", context_window: 262144, max_output_tokens: 32768 },
+  { provider_id: "p1", model_id: "deepseek-v4-flash", backend: "claude", wire_api: "anthropic_messages", context_window: 262144 },
   { provider_id: "p1", model_id: "claude-sonnet-5", backend: "claude", wire_api: "anthropic_messages" }
 ], [{ id: "p1", name: "Gateway" }]);
 if (!configuredHtml.includes('data-bootstrap-binding-field="context_window" value="262144"')) process.exit(1);
-if (!configuredHtml.includes('data-bootstrap-binding-field="max_output_tokens" value="32768"')) process.exit(1);
+if (configuredHtml.includes("max_output_tokens")) process.exit(1);
 if (!configuredHtml.includes("bootstrap-model-binding-ctx")) process.exit(1);
 if (!configuredHtml.includes("ctx 262K")) process.exit(1);
 if ((configuredHtml.match(/bootstrap-model-binding-ctx/g) || []).length !== 1) process.exit(1);
@@ -758,7 +758,6 @@ const rows = [{
       'data-bootstrap-binding-field="backend"': "claude",
       'data-bootstrap-binding-field="wire_api"': "anthropic_messages",
       'data-bootstrap-binding-field="context_window"': "262144",
-      'data-bootstrap-binding-field="max_output_tokens"': "32768",
       'data-bootstrap-binding-field="opus_model"': "claude-opus-5"
     };
     return { value: values[sel.replace(/[\[\]]/g, "")] || "" };
@@ -766,7 +765,8 @@ const rows = [{
 }];
 const payload = config.bootstrapConfiguredModels({ querySelectorAll: () => rows });
 if (payload.length !== 1) process.exit(1);
-if (payload[0].context_window !== 262144 || payload[0].max_output_tokens !== 32768) process.exit(1);
+if (payload[0].context_window !== 262144) process.exit(1);
+if (payload[0].max_output_tokens !== undefined) process.exit(1);
 // Role models survive the save round-trip (editing a saved model must not drop them).
 if (payload[0].opus_model !== "claude-opus-5") process.exit(1);
 // Model source filter: official / env / both.
@@ -810,12 +810,12 @@ if (config.bootstrapModelFilterValue(formWithSource("bogus"), "codex") !== "both
 // The editor renders model-level fields and readModelEditorFields parses them back.
 const editorHtml = config.configuredModelEditorHtml({
   provider_id: "p1", model_id: "deepseek-v4-flash", backend: "claude", wire_api: "anthropic_messages",
-  context_window: 262144, max_output_tokens: 32768, opus_model: "claude-opus-5"
+  context_window: 262144, opus_model: "claude-opus-5"
 }, [{ id: "p1", name: "Gateway" }]);
 if (!editorHtml.includes('data-bootstrap-model-field="provider_id"')) process.exit(1);
 if (!editorHtml.includes('data-bootstrap-model-field="model_id"') || !editorHtml.includes('value="deepseek-v4-flash"')) process.exit(1);
 if (!editorHtml.includes('data-bootstrap-model-field="context_window"')) process.exit(1);
-if (!editorHtml.includes('data-bootstrap-model-field="max_output_tokens"')) process.exit(1);
+if (editorHtml.includes('data-bootstrap-model-field="max_output_tokens"')) process.exit(1);
 if (!editorHtml.includes('data-bootstrap-model-field="opus_model"') || !editorHtml.includes('value="claude-opus-5"')) process.exit(1);
 if (!editorHtml.includes("Edit Model")) process.exit(1);
 const addEditor = config.configuredModelEditorHtml({}, [{ id: "p1", name: "Gateway" }]);
@@ -832,11 +832,12 @@ function editorRoot(fields) {
 }
 const parsed = config.readModelEditorFields(editorRoot({
   provider_id: "p1", model_id: "new-model", backend: "codex", wire_api: "responses",
-  context_window: "258000", max_output_tokens: "64000", fable_model: "fable-a"
+  context_window: "258000", fable_model: "fable-a"
 }));
 if (parsed.provider_id !== "p1" || parsed.model_id !== "new-model") process.exit(1);
 if (parsed.backend !== "codex" || parsed.wire_api !== "responses") process.exit(1);
-if (parsed.context_window !== 258000 || parsed.max_output_tokens !== 64000) process.exit(1);
+if (parsed.context_window !== 258000) process.exit(1);
+if (parsed.max_output_tokens !== undefined) process.exit(1);
 if (parsed.fable_model !== "fable-a") process.exit(1);
 // bootstrapConfigPayload persists model_source per backend.
 const sourceForm = {

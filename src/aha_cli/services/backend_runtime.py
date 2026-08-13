@@ -514,6 +514,34 @@ def _discover_backend_process(root: Path, run_id: str, target: str, task_id: str
     return None
 
 
+def _provider_id_for_model(cfg: dict, backend: str, model: str | None) -> str | None:
+    """Resolve the provider id behind a model selector.
+
+    The active model is usually ``env:<env-group-name>`` (e.g.
+    ``env:deepseek-deepseek-v4-flash-452b42ce``); the env group carries the
+    provider's ``AHA_PROVIDER_ID``. This lets context-window resolution match the
+    exact provider so the same model_id bound to two providers does not share a
+    window. Returns ``None`` when the provider cannot be determined.
+    """
+    selector = str(model or "").strip()
+    if not selector:
+        return None
+    group_name = selector[len("env:") :].strip() if selector.startswith("env:") else ""
+    if not group_name:
+        return None
+    section = cfg.get(backend) if isinstance(cfg.get(backend), dict) else {}
+    raw_groups = section.get("env")
+    if isinstance(raw_groups, dict):
+        raw_groups = [raw_groups]
+    for group in raw_groups if isinstance(raw_groups, list) else []:
+        if not isinstance(group, dict):
+            continue
+        if str(group.get("name") or "").strip() == group_name:
+            provider_id = str(group.get("AHA_PROVIDER_ID") or "").strip()
+            return provider_id or None
+    return None
+
+
 def backend_status(root: Path, run_id: str, target: str = "main", task_id: str | None = None) -> dict:
     require_plan(root, run_id)
     target = target or "main"
@@ -534,6 +562,7 @@ def backend_status(root: Path, run_id: str, target: str = "main", task_id: str |
     status = "busy" if running and activity["busy"] else "running" if running else "stopped"
     backend_name = _backend_name_from_state(state, discovered_backend or "unknown")
     resolved_model = state.get("resolved_model") or state.get("model")
+    requested_model = state.get("requested_model") or state.get("model") or resolved_model
     latest_usage = event_runtime["latest_usage"]
     latest_prompt_metrics = event_runtime["latest_prompt_metrics"]
     cfg = load_config(root)
@@ -551,6 +580,7 @@ def backend_status(root: Path, run_id: str, target: str = "main", task_id: str |
             or _positive_int(latest_usage.get("context_window"))
             or _positive_int(latest_usage.get("model_context_window"))
         )
+    provider_id = _provider_id_for_model(cfg, normalized_backend_name, requested_model)
     runtime_context_usage = runtime_context.get("last_token_usage") if isinstance(runtime_context.get("last_token_usage"), dict) else {}
     pressure_runtime_usage = runtime_context_usage
     return {
@@ -581,6 +611,7 @@ def backend_status(root: Path, run_id: str, target: str = "main", task_id: str |
             runtime_token_usage=pressure_runtime_usage,
             cfg=cfg,
             prefer_runtime_context_window=normalized_backend_name == "claude" and runtime_context_window is not None,
+            provider_id=provider_id,
         ),
         **activity,
     }

@@ -80,6 +80,8 @@ def run_codex_task(args) -> int:
         session=session,
         proxy_env=proxy_env_for_agent(agent, task, plan, cfg),
         codex_config=codex_config,
+        aha_home=root,
+        config=cfg,
     )
     if session:
         save_session(root, session)

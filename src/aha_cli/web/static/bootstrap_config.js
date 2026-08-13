@@ -260,7 +260,6 @@
         <input type="hidden" data-bootstrap-binding-field="backend" value="${escapeHtml(configString(binding.backend))}">
         <input type="hidden" data-bootstrap-binding-field="wire_api" value="${escapeHtml(configString(binding.wire_api))}">
         <input type="hidden" data-bootstrap-binding-field="context_window" value="${escapeHtml(contextWindow ? String(contextWindow) : "")}">
-        <input type="hidden" data-bootstrap-binding-field="max_output_tokens" value="${escapeHtml(configString(binding.max_output_tokens))}">
         <input type="hidden" data-bootstrap-binding-field="fable_model" value="${escapeHtml(configString(binding.fable_model))}">
         <input type="hidden" data-bootstrap-binding-field="opus_model" value="${escapeHtml(configString(binding.opus_model))}">
         <input type="hidden" data-bootstrap-binding-field="sonnet_model" value="${escapeHtml(configString(binding.sonnet_model))}">
@@ -326,7 +325,6 @@
               </select>
             </label>
             <label class="field-label"><span>Context window</span><input data-bootstrap-model-field="context_window" type="number" min="0" placeholder="200000" value="${escapeHtml(configString(binding.context_window))}"></label>
-            <label class="field-label"><span>Max output tokens</span><input data-bootstrap-model-field="max_output_tokens" type="number" min="0" placeholder="32768" value="${escapeHtml(configString(binding.max_output_tokens))}"></label>
           </div>
           <details class="bootstrap-env-advanced">
             <summary>Claude role models (optional)</summary>
@@ -348,10 +346,8 @@
       backend: value("backend") || "claude",
       wire_api: value("wire_api") || "anthropic_messages"
     };
-    for (const key of ["context_window", "max_output_tokens"]) {
-      const num = Number(value(key));
-      if (Number.isFinite(num) && num > 0) binding[key] = num;
-    }
+    const contextWindow = Number(value("context_window"));
+    if (Number.isFinite(contextWindow) && contextWindow > 0) binding.context_window = contextWindow;
     for (const key of ["fable_model", "opus_model", "sonnet_model", "haiku_model"]) {
       const text = value(key);
       if (text) binding[key] = text;
@@ -1115,8 +1111,6 @@
       const binding = { provider_id: value("provider_id"), model_id: value("model"), backend: value("backend"), wire_api: value("wire_api") };
       const contextWindow = Number(value("context_window"));
       if (Number.isFinite(contextWindow) && contextWindow > 0) binding.context_window = contextWindow;
-      const maxOutput = Number(value("max_output_tokens"));
-      if (Number.isFinite(maxOutput) && maxOutput > 0) binding.max_output_tokens = maxOutput;
       for (const key of ["fable_model", "opus_model", "sonnet_model", "haiku_model"]) {
         const text = value(key);
         if (text) binding[key] = text;

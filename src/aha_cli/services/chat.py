@@ -1234,6 +1234,8 @@ def agent_chat(root: Path, run_id: str, args, *, backend_name: str) -> int:
                             session=session,
                             proxy_env=effective_proxy_env,
                             codex_config=effective_codex_config,
+                            aha_home=root,
+                            config=cfg,
                         )
                     session = returned_session if returned_session is not None else runner_session
                 except Exception as exc:

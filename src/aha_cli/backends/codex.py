@@ -344,6 +344,115 @@ def _toml_bool(value: object) -> str:
     return "true" if bool(value) else "false"
 
 
+CODEX_MODELS_CATALOG_FILE = "codex-models.json"
+CODEX_CATALOG_TEMPLATE_SLUG = "gpt-5.5"
+
+
+def _positive_int(value: object) -> int | None:
+    try:
+        parsed = int(str(value).replace("_", "").replace(",", ""))
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed > 0 else None
+
+
+def _codex_models_catalog_path(aha_home: Path) -> Path:
+    return aha_home / CODEX_MODELS_CATALOG_FILE
+
+
+def _codex_catalog_template() -> dict | None:
+    """Return a full model metadata template from codex's bundled catalog.
+
+    Codex requires complete entries (including ``base_instructions``); a
+    partial entry is rejected with ``missing field base_instructions``. We copy
+    a bundled model and override slug/window fields so custom models are treated
+    like built-in ones.
+    """
+    try:
+        cache_path = Path.home() / ".codex" / "models_cache.json"
+        if not cache_path.exists():
+            return None
+        payload = json.loads(cache_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    models = payload.get("models") if isinstance(payload.get("models"), list) else []
+    for item in models:
+        if isinstance(item, dict) and item.get("slug") == CODEX_CATALOG_TEMPLATE_SLUG:
+            return item
+    for item in models:
+        if isinstance(item, dict) and isinstance(item.get("slug"), str):
+            return item
+    return None
+
+
+def ensure_codex_models_catalog(
+    cfg: dict | None,
+    aha_home: Path,
+    provider_id: str | None = None,
+) -> Path | None:
+    """Write ``~/.codex``-style model catalog entries for configured codex models.
+
+    For every ``configured_models`` entry with ``backend == "codex"`` and an
+    explicit ``context_window``, emit a full catalog entry declaring that window
+    so Codex uses it instead of its 258K fallback. When ``provider_id`` is given
+    only entries for that provider are emitted, so the same model_id bound to
+    two providers with different windows does not share a catalog entry (Codex
+    matches the catalog by model slug, so a per-process catalog scoped to the
+    active provider is the correct way to keep windows distinct). Returns the
+    catalog path, or ``None`` when there is nothing to declare.
+    """
+    configured = cfg.get("configured_models") if isinstance(cfg, dict) else []
+    if not isinstance(configured, list):
+        return None
+    entries: list[dict] = []
+    seen: set[str] = set()
+    normalized_provider = str(provider_id or "").strip()
+    template = _codex_catalog_template()
+    for item in configured:
+        if not isinstance(item, dict):
+            continue
+        if str(item.get("backend") or "").strip().lower() != "codex":
+            continue
+        if normalized_provider:
+            item_provider = str(item.get("provider_id") or "").strip()
+            if item_provider != normalized_provider:
+                continue
+        model_id = str(item.get("model_id") or "").strip()
+        if not model_id or model_id in seen:
+            continue
+        window = _positive_int(item.get("context_window"))
+        if not window:
+            continue
+        seen.add(model_id)
+        if template:
+            entry = json.loads(json.dumps(template))
+            entry["slug"] = model_id
+            entry["display_name"] = str(item.get("name") or model_id)
+            entry["context_window"] = window
+            entry["max_context_window"] = max(window, _positive_int(template.get("max_context_window")) or 0)
+            entry["effective_context_window_percent"] = 95
+            entry.pop("auto_compact_token_limit", None)
+        else:
+            entry = {
+                "slug": model_id,
+                "context_window": window,
+                "max_context_window": window,
+                "effective_context_window_percent": 95,
+                "supported_in_api": True,
+                "visibility": "list",
+            }
+        entries.append(entry)
+    if not entries:
+        return None
+    path = _codex_models_catalog_path(aha_home)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({"models": entries}, indent=2, ensure_ascii=False), encoding="utf-8")
+    except OSError:
+        return None
+    return path
+
+
 def _provider_override(codex_config: dict | None) -> dict:
     if not isinstance(codex_config, dict):
         return {}
@@ -427,12 +536,27 @@ def codex_config_with_observe_provider_override(
     return cfg
 
 
-def codex_config_overrides(codex_config: dict | None) -> list[str]:
+def codex_config_overrides(
+    codex_config: dict | None,
+    *,
+    aha_home: Path | None = None,
+    cfg: dict | None = None,
+) -> list[str]:
     overrides: list[str] = []
     if isinstance(codex_config, dict):
         reasoning_effort = normalize_reasoning_effort(codex_config.get("reasoning_effort"), "codex")
         if reasoning_effort:
             overrides.extend(["-c", f"model_reasoning_effort={_toml_string(reasoning_effort)}"])
+    # Declare configured model windows via a codex model catalog so custom models
+    # (e.g. deepseek-v4-flash at 1M) are honored instead of the 258K fallback.
+    # Scope the catalog to the active provider so the same model_id bound to two
+    # providers with different windows does not share an entry.
+    if aha_home is not None:
+        active_provider = _provider_override(codex_config)
+        active_provider_id = str(active_provider.get("provider_id") or "").strip() or None
+        catalog_path = ensure_codex_models_catalog(cfg, aha_home, provider_id=active_provider_id)
+        if catalog_path is not None:
+            overrides.extend(["-c", f"model_catalog_json={_toml_string(str(catalog_path))}"])
     provider = _provider_override(codex_config)
     base_url = str(provider.get("base_url") or "").strip()
     if not base_url:
@@ -639,6 +763,8 @@ def run_codex_exec(
     event_callback: Callable[[str, dict], None] | None = None,
     start_new_session: bool = False,
     completion_grace_seconds: float = BACKEND_COMPLETION_GRACE_SECONDS,
+    aha_home: Path | None = None,
+    config: dict | None = None,
 ) -> tuple[int, str, dict | None]:
     output_file.parent.mkdir(parents=True, exist_ok=True)
     requested_model = session.get("requested_model") if session is not None and "requested_model" in session else model
@@ -670,7 +796,7 @@ def run_codex_exec(
             output_file=output_file,
             json_events=json_events,
             session_id=session_id,
-            config_overrides=codex_config_overrides(codex_config),
+            config_overrides=codex_config_overrides(codex_config, aha_home=aha_home, cfg=config),
         )
         for raw in extra_args or []:
             insert_at = -1 if cmd[-1] == "-" else len(cmd)

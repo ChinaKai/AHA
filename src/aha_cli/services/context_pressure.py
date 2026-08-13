@@ -43,17 +43,38 @@ def _config_context_window(cfg: Mapping[str, object], backend: str, model: str) 
     return None
 
 
-def _configured_model_context_window(cfg: Mapping[str, object], backend: str, model: str) -> int | None:
+def _configured_model_context_window(
+    cfg: Mapping[str, object],
+    backend: str,
+    model: str,
+    provider_id: str | None = None,
+) -> int | None:
+    """Find a configured model's context window.
+
+    When ``provider_id`` is provided it must match exactly, so the same model_id
+    bound to different providers does not leak one provider's window onto the
+    other (e.g. hualai-claw deepseek-v4-flash at 1M must not be used for the
+    deepseek deepseek-v4-flash that has no configured window). Without a
+    provider we fall back to backend+model_id for backward compatibility.
+    """
     configured = cfg.get("configured_models")
     if not isinstance(configured, list):
         return None
+    normalized_provider = str(provider_id or "").strip()
     for item in configured:
         if not isinstance(item, dict):
             continue
-        if str(item.get("backend") or "").strip().lower() == backend and str(item.get("model_id") or "").strip() == model:
-            window = _positive_int(item.get("context_window"))
-            if window:
-                return window
+        if str(item.get("backend") or "").strip().lower() != backend:
+            continue
+        if str(item.get("model_id") or "").strip() != model:
+            continue
+        if normalized_provider:
+            item_provider = str(item.get("provider_id") or "").strip()
+            if item_provider != normalized_provider:
+                continue
+        window = _positive_int(item.get("context_window"))
+        if window:
+            return window
     return None
 
 
@@ -65,6 +86,7 @@ def context_window_for_model(
     cfg: Mapping[str, object] | None = None,
     environ: Mapping[str, str] | None = None,
     prefer_runtime_context_window: bool = False,
+    provider_id: str | None = None,
 ) -> tuple[int | None, str]:
     normalized_backend = str(backend or "").removesuffix("-chat").strip().lower()
     normalized_model = str(model or "").strip()
@@ -89,7 +111,12 @@ def context_window_for_model(
     if from_config:
         return from_config, "config"
 
-    from_configured = _configured_model_context_window(cfg or {}, normalized_backend, normalized_model)
+    from_configured = _configured_model_context_window(
+        cfg or {},
+        normalized_backend,
+        normalized_model,
+        provider_id=provider_id,
+    )
     if from_configured:
         return from_configured, "configured"
 
@@ -112,6 +139,7 @@ def context_pressure(
     cfg: Mapping[str, object] | None = None,
     environ: Mapping[str, str] | None = None,
     prefer_runtime_context_window: bool = False,
+    provider_id: str | None = None,
 ) -> dict:
     normalized_backend = str(backend or "").removesuffix("-chat").strip().lower() or None
     metrics = prompt_metrics or {}
@@ -138,6 +166,7 @@ def context_pressure(
         cfg=cfg,
         environ=environ,
         prefer_runtime_context_window=prefer_runtime_context_window,
+        provider_id=provider_id,
     )
     runtime_effective_input_tokens = runtime_input_tokens
     if normalized_backend == "claude" and runtime_input_tokens is not None:

@@ -108,7 +108,7 @@ def normalize_configured_models(value: object, provider_ids: Iterable[str]) -> l
             "backend": backend,
             "wire_api": wire_api,
         }
-        for field in ("name", "context_window", "max_output_tokens", "fable_model", "opus_model", "sonnet_model", "haiku_model"):
+        for field in ("name", "context_window", "fable_model", "opus_model", "sonnet_model", "haiku_model"):
             if item.get(field) not in (None, ""):
                 model[field] = item[field]
         models.append(model)

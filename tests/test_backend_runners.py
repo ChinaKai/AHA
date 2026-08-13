@@ -29,6 +29,7 @@ from aha_cli.backends.codex import (
     codex_config_for_model,
     codex_config_overrides,
     codex_config_with_provider_override,
+    ensure_codex_models_catalog,
     handle_codex_event,
     is_context_overflow_message,
     run_codex_exec,
@@ -317,6 +318,68 @@ class BackendRunnerSessionTests(unittest.TestCase):
         overrides = codex_config_overrides({"reasoning_effort": "xhigh"})
 
         self.assertEqual(overrides, ["-c", 'model_reasoning_effort="xhigh"'])
+
+    def test_ensure_codex_models_catalog_declares_configured_windows(self) -> None:
+        cfg = {
+            "configured_models": [
+                {"provider_id": "p1", "model_id": "deepseek-v4-flash", "backend": "codex", "wire_api": "responses", "context_window": 1000000},
+                {"provider_id": "p1", "model_id": "gpt-5.6-sol", "backend": "codex", "wire_api": "responses"},
+            ],
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            aha_home = Path(tmp) / "aha"
+            path = ensure_codex_models_catalog(cfg, aha_home)
+
+            self.assertIsNotNone(path)
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            self.assertEqual(len(payload["models"]), 1)
+            self.assertEqual(payload["models"][0]["slug"], "deepseek-v4-flash")
+            self.assertEqual(payload["models"][0]["context_window"], 1000000)
+
+    def test_ensure_codex_models_catalog_scopes_to_provider(self) -> None:
+        cfg = {
+            "configured_models": [
+                {"provider_id": "hualai", "model_id": "deepseek-v4-flash", "backend": "codex", "wire_api": "responses", "context_window": 1000000},
+                {"provider_id": "deepseek", "model_id": "deepseek-v4-flash", "backend": "codex", "wire_api": "responses", "context_window": 258000},
+            ],
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            aha_home = Path(tmp) / "aha"
+            hualai_path = ensure_codex_models_catalog(cfg, aha_home, provider_id="hualai")
+            hualai = json.loads(hualai_path.read_text(encoding="utf-8"))
+            self.assertEqual(hualai["models"][0]["context_window"], 1000000)
+
+            deepseek_path = ensure_codex_models_catalog(cfg, aha_home, provider_id="deepseek")
+            deepseek = json.loads(deepseek_path.read_text(encoding="utf-8"))
+            self.assertEqual(deepseek["models"][0]["context_window"], 258000)
+
+    def test_ensure_codex_models_catalog_returns_none_without_windows(self) -> None:
+        cfg = {
+            "configured_models": [
+                {"provider_id": "p1", "model_id": "gpt-5.6-sol", "backend": "codex", "wire_api": "responses"},
+            ],
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            path = ensure_codex_models_catalog(cfg, Path(tmp) / "aha")
+
+            self.assertIsNone(path)
+
+    def test_codex_config_overrides_inject_catalog_json(self) -> None:
+        cfg = {
+            "configured_models": [
+                {"provider_id": "p1", "model_id": "deepseek-v4-flash", "backend": "codex", "wire_api": "responses", "context_window": 1000000},
+            ],
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            aha_home = Path(tmp) / "aha"
+            overrides = codex_config_overrides({"reasoning_effort": "xhigh"}, aha_home=aha_home, cfg=cfg)
+
+            joined = " ".join(overrides)
+            self.assertIn("model_catalog_json=", joined)
+            catalog_path = aha_home / "codex-models.json"
+            self.assertTrue(catalog_path.exists())
+            payload = json.loads(catalog_path.read_text(encoding="utf-8"))
+            self.assertEqual(payload["models"][0]["slug"], "deepseek-v4-flash")
 
     def test_codex_exec_records_resolved_default_model_in_session(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

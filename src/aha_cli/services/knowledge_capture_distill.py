@@ -193,6 +193,8 @@ def default_capture_agent(context: dict) -> str:
                     reasoning_effort=reasoning_effort,
                     event_callback=progress_callback if callable(progress_callback) else None,
                     start_new_session=True,
+                    aha_home=cwd,
+                    config=config,
                 )
             else:
                 from aha_cli.backends.claude import claude_cli_model, claude_config_for_model, run_claude_exec

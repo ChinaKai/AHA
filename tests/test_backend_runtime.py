@@ -16,6 +16,7 @@ from aha_cli.cli import main
 from aha_cli.services import backend_runtime as backend_runtime_module
 from aha_cli.services.backend_runtime import (
     _process_matches_home,
+    _provider_id_for_model,
     backend_status,
     detect_runtime_context_compaction,
     start_backend,
@@ -25,6 +26,24 @@ from aha_cli.store.filesystem import add_agent, append_event, read_json, session
 
 
 class BackendRuntimeTests(unittest.TestCase):
+    def test_provider_id_for_model_resolves_env_group_provider(self) -> None:
+        cfg = {
+            "codex": {
+                "env": [
+                    {"name": "deepseek-deepseek-v4-flash-452b42ce", "AHA_PROVIDER_ID": "deepseek-provider"},
+                    {"name": "hualai-deepseek-v4-flash", "AHA_PROVIDER_ID": "hualai-provider"},
+                ],
+            },
+        }
+
+        # env: selector resolves to the matching group's provider.
+        self.assertEqual(
+            _provider_id_for_model(cfg, "codex", "env:deepseek-deepseek-v4-flash-452b42ce"),
+            "deepseek-provider",
+        )
+        # Non-env selector (already resolved model name) cannot resolve a provider.
+        self.assertIsNone(_provider_id_for_model(cfg, "codex", "deepseek-v4-flash"))
+
     def run_cli(self, *args: str) -> tuple[int, str]:
         out = io.StringIO()
         with mock.patch("sys.stdout", out):

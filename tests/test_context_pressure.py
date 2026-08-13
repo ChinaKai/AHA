@@ -5,6 +5,16 @@ import unittest
 from aha_cli.services.context_pressure import context_pressure, context_window_for_model
 
 
+def _cfg_with_configured_models() -> dict:
+    return {
+        "configured_models": [
+            {"provider_id": "hualai-claw", "model_id": "deepseek-v4-flash", "backend": "codex", "wire_api": "responses", "context_window": 1000000},
+            {"provider_id": "deepseek", "model_id": "deepseek-v4-flash", "backend": "codex", "wire_api": "responses"},
+        ],
+        "context_windows": {},
+    }
+
+
 class ContextPressureTests(unittest.TestCase):
     def test_codex_gpt55_uses_prompt_tokens_for_context_pressure(self) -> None:
         pressure = context_pressure("codex-chat", "gpt-5.5", {"total": {"tokens": 735000, "chars": 1234, "bytes": 1234}})
@@ -27,6 +37,26 @@ class ContextPressureTests(unittest.TestCase):
         self.assertEqual(pressure["prompt_estimate_percent"], 284.88)
         self.assertFalse(pressure["pressure_is_runtime"])
         self.assertTrue(pressure["pressure_is_estimate"])
+
+    def test_configured_window_respects_provider_id(self) -> None:
+        cfg = _cfg_with_configured_models()
+
+        # hualai-claw deepseek-v4-flash has a 1M window.
+        win, src = context_window_for_model("codex", "deepseek-v4-flash", cfg=cfg, provider_id="hualai-claw")
+        self.assertEqual(win, 1000000)
+        self.assertEqual(src, "configured")
+
+        # deepseek deepseek-v4-flash has no configured window, so it must NOT
+        # inherit hualai-claw's 1M (the "same model_id different provider" leak).
+        win, src = context_window_for_model("codex", "deepseek-v4-flash", cfg=cfg, provider_id="deepseek")
+        self.assertIsNone(win)
+
+    def test_configured_window_falls_back_to_model_match_without_provider(self) -> None:
+        cfg = _cfg_with_configured_models()
+
+        # Backward compatible: no provider id matches the first entry by model.
+        win, src = context_window_for_model("codex", "deepseek-v4-flash", cfg=cfg)
+        self.assertEqual(win, 1000000)
 
     def test_runtime_context_window_takes_priority_over_table(self) -> None:
         pressure = context_pressure(

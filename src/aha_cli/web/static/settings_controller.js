@@ -116,10 +116,8 @@
           if (!row || !form) return;
           const value = key => String(row.querySelector(`[data-bootstrap-binding-field="${key}"]`)?.value || "").trim();
           const binding = { provider_id: value("provider_id"), model_id: value("model"), backend: value("backend"), wire_api: value("wire_api") };
-          for (const key of ["context_window", "max_output_tokens"]) {
-            const num = Number(value(key));
-            if (Number.isFinite(num) && num > 0) binding[key] = num;
-          }
+          const contextWindow = Number(value("context_window"));
+          if (Number.isFinite(contextWindow) && contextWindow > 0) binding.context_window = contextWindow;
           for (const key of ["fable_model", "opus_model", "sonnet_model", "haiku_model"]) {
             const text = value(key);
             if (text) binding[key] = text;
