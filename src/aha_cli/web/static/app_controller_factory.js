@@ -591,6 +591,7 @@
       sessionMenuEl
     }, {
       apiUrl: deps.apiUrl,
+      bootstrapConfigData: deps.bootstrapConfigData,
       escapeHtml: deps.escapeHtml,
       fetchJson: deps.fetchJson,
       setLocalTerminalOpen: deps.setLocalTerminalOpen,

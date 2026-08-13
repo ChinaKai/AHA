@@ -223,53 +223,68 @@
         closeDetectModal();
       });
       rootEl.querySelectorAll("[data-bootstrap-detect-close]").forEach(closeBtn => closeBtn.addEventListener("click", closeDetectModal));
-      rootEl.querySelector("[data-bootstrap-detect-test-selected]")?.addEventListener("click", async event => {
-        const testButton = event.currentTarget;
-        const rows = selectedRows();
-        const modelIds = rows.map(row => String(row.dataset.modelId || "")).filter(Boolean);
+      const applyDetectResults = results => {
+        for (const result of Array.isArray(results) ? results : []) {
+          const row = rootEl.querySelector(`[data-bootstrap-detect-model-row][data-model-id="${CSS.escape(String(result.model_id || ""))}"]`);
+          if (!row) continue;
+          const anthropicBase = String(result.anthropic_base_url || "").trim();
+          if (anthropicBase && detectModalState?.provider) {
+            detectModalState.provider = { ...detectModalState.provider, anthropic_base_url: anthropicBase };
+            const providerRow = detectModalState.form?.querySelector?.(`[data-bootstrap-provider-row][data-provider-id="${CSS.escape(String(detectModalState.provider.id || ""))}"]`);
+            const baseInput = providerRow?.querySelector?.('[data-bootstrap-provider-field="anthropic_base_url"]');
+            if (baseInput instanceof HTMLInputElement) baseInput.value = anthropicBase;
+          }
+          for (const [wireApi, capability] of Object.entries(result.capabilities || {})) {
+            const status = String(capability?.status || "inconclusive");
+            const label = row.querySelector(`[data-bootstrap-capabilities] [data-wire-api="${wireApi}"]`);
+            if (label) {
+              label.dataset.status = status;
+              const statusEl = label.querySelector("[data-capability-status]");
+              if (statusEl) statusEl.textContent = status.replaceAll("_", " ");
+            }
+            const binding = row.querySelector(`[data-bootstrap-bind-backend][data-wire-api="${wireApi}"]`);
+            if (binding) {
+              binding.disabled = status !== "supported";
+              if (binding.disabled) binding.checked = false;
+            }
+          }
+        }
+        updateSelectedLabel();
+      };
+
+      const testModels = async (modelIds, button, doneLabel) => {
         if (!modelIds.length) return;
-        testButton.disabled = true;
-        testButton.textContent = "Testing...";
+        button.disabled = true;
+        button.textContent = "Testing...";
         try {
           const payload = await deps.fetchJson?.("/api/detect-models/test", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ provider_id: provider.id, auth_style: provider.auth_style, models: modelIds })
           }, "Interface test failed");
-          const results = Array.isArray(payload?.results) ? payload.results : [];
-          for (const result of results) {
-            const row = rootEl.querySelector(`[data-bootstrap-detect-model-row][data-model-id="${CSS.escape(String(result.model_id || ""))}"]`);
-            if (!row) continue;
-            const anthropicBase = String(result.anthropic_base_url || "").trim();
-            if (anthropicBase && detectModalState?.provider) {
-              detectModalState.provider = { ...detectModalState.provider, anthropic_base_url: anthropicBase };
-              const providerRow = detectModalState.form?.querySelector?.(`[data-bootstrap-provider-row][data-provider-id="${CSS.escape(String(detectModalState.provider.id || ""))}"]`);
-              const baseInput = providerRow?.querySelector?.('[data-bootstrap-provider-field="anthropic_base_url"]');
-              if (baseInput instanceof HTMLInputElement) baseInput.value = anthropicBase;
-            }
-            for (const [wireApi, capability] of Object.entries(result.capabilities || {})) {
-              const status = String(capability?.status || "inconclusive");
-              const label = row.querySelector(`[data-bootstrap-capabilities] [data-wire-api="${wireApi}"]`);
-              if (label) {
-                label.dataset.status = status;
-                const statusEl = label.querySelector("[data-capability-status]");
-                if (statusEl) statusEl.textContent = status.replaceAll("_", " ");
-              }
-              const binding = row.querySelector(`[data-bootstrap-bind-backend][data-wire-api="${wireApi}"]`);
-              if (binding) {
-                binding.disabled = status !== "supported";
-                if (binding.disabled) binding.checked = false;
-              }
-            }
-          }
-          updateSelectedLabel();
-          testButton.textContent = "Test selected";
+          applyDetectResults(payload?.results);
+          button.textContent = doneLabel;
         } catch (err) {
-          testButton.textContent = "Test failed";
-          testButton.title = err?.message || String(err);
+          button.textContent = "Test failed";
+          button.title = err?.message || String(err);
         } finally {
-          testButton.disabled = false;
+          button.disabled = false;
         }
+      };
+
+      rootEl.querySelector("[data-bootstrap-detect-test-selected]")?.addEventListener("click", event => {
+        const testButton = event.currentTarget;
+        const rows = selectedRows();
+        const modelIds = rows.map(row => String(row.dataset.modelId || "")).filter(Boolean);
+        void testModels(modelIds, testButton, "Test selected");
+      });
+
+      rootEl.querySelectorAll("[data-bootstrap-detect-model-test]").forEach(button => {
+        button.addEventListener("click", () => {
+          const row = button.closest("[data-bootstrap-detect-model-row]");
+          const modelId = String(row?.dataset?.modelId || "");
+          void testModels(modelId ? [modelId] : [], button, "⚡");
+        });
       });
     }
 

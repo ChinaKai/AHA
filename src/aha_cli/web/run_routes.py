@@ -762,8 +762,7 @@ def handle_detect_model_test(root: Path, body: bytes) -> bytes:
         selected_models = []
     if not selected_models:
         return json_response({"error": "at least one model is required"}, "400 Bad Request")
-    results = []
-    for model in dict.fromkeys(selected_models):
+    def _probe_one_model(model: str) -> dict[str, object]:
         capabilities = {
             wire_api: _probe_status(provider, model, wire_api)
             for wire_api in ("responses", "chat_completions")
@@ -773,7 +772,18 @@ def handle_detect_model_test(root: Path, body: bytes) -> bytes:
         result: dict[str, object] = {"model_id": model, "capabilities": capabilities}
         if anthropic_base_url:
             result["anthropic_base_url"] = anthropic_base_url
-        results.append(result)
+        return result
+
+    unique_models = list(dict.fromkeys(selected_models))
+    if len(unique_models) > 1:
+        # Probe models concurrently so a slow/failing model does not block the
+        # others; each probe already catches transport/auth errors per status.
+        from concurrent.futures import ThreadPoolExecutor
+
+        with ThreadPoolExecutor(max_workers=min(8, len(unique_models))) as executor:
+            results = list(executor.map(_probe_one_model, unique_models))
+    else:
+        results = [_probe_one_model(unique_models[0])] if unique_models else []
     return json_response({"provider_id": provider["id"], "results": results})
 
 

@@ -66,6 +66,7 @@
           <div class="bootstrap-detect-model-summary">
             <label class="bootstrap-detect-model-check"><input type="checkbox" data-bootstrap-detect-check><span>${escapeHtml(id)}</span></label>
             <span class="bootstrap-detect-model-meta" title="context.output.mode">${escapeHtml(metaLabel)}</span>
+            <button class="bootstrap-icon-button bootstrap-detect-model-test-single" type="button" data-bootstrap-detect-model-test title="Test this model">&#9889;</button>
           </div>
           <div class="bootstrap-detect-model-details">
             <div>

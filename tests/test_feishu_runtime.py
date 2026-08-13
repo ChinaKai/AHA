@@ -13,6 +13,7 @@ from aha_cli.domain.models import (
 )
 from aha_cli.services.feishu_runtime import (
     _create_feishu_channel,
+    _feishu_env_groups,
     _install_bot_menu_dispatcher,
     feishu_credentials,
     feishu_runtime_path,
@@ -99,6 +100,36 @@ class FeishuRuntimeTests(unittest.TestCase):
             feishu_credentials(config, {"CUSTOM_SECRET": "environment-secret"}),
             ("cli_settings", "settings-secret"),
         )
+
+    def test_feishu_env_groups_honor_model_source(self) -> None:
+        config = {
+            "codex": {
+                "model_source": "official",
+                "env": [{"name": "codex-gw", "OPENAI_MODEL": "deepseek-v4-flash"}],
+            },
+            "claude": {
+                "model_source": "env",
+                "env": [{"name": "claude-gw", "ANTHROPIC_MODEL": "claude-deepseek-v4-flash"}],
+            },
+        }
+
+        groups = _feishu_env_groups(config)
+
+        # codex official -> no env groups listed.
+        self.assertEqual(groups["codex"], [])
+        # claude env -> env group listed.
+        self.assertEqual(groups["claude"], [{"name": "claude-gw", "model": "claude-deepseek-v4-flash"}])
+
+    def test_feishu_env_groups_default_to_both(self) -> None:
+        config = {
+            "codex": {"env": [{"name": "codex-gw", "OPENAI_MODEL": "gpt-5.6-sol"}]},
+            "claude": {"env": [{"name": "claude-gw", "ANTHROPIC_MODEL": "deepseek-v4-flash"}]},
+        }
+
+        groups = _feishu_env_groups(config)
+
+        self.assertEqual(groups["codex"], [{"name": "codex-gw", "model": "gpt-5.6-sol"}])
+        self.assertEqual(groups["claude"], [{"name": "claude-gw", "model": "deepseek-v4-flash"}])
 
     def test_status_never_returns_app_secret(self) -> None:
         with tempfile.TemporaryDirectory() as tmp, mock.patch.dict(

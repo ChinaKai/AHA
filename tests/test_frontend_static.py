@@ -627,6 +627,9 @@ const modalHtml = config.detectModelsModalHtml(
 if (!modalHtml.includes("data-bootstrap-detect-model-row")) process.exit(1);
 if (!modalHtml.includes("data-bootstrap-detect-test")) process.exit(1);
 if (!modalHtml.includes("bootstrap-detect-model-meta")) process.exit(1);
+// Each model row carries its own single-model test button (data-bootstrap-detect-model-test).
+if ((modalHtml.match(/data-bootstrap-detect-model-test/g) || []).length !== 3) process.exit(1);
+if (!modalHtml.includes("Test this model")) process.exit(1);
 if (!modalHtml.includes(">1M.64K.chat<")) process.exit(1);
 if (!modalHtml.includes(">NA.NA.NA<")) process.exit(1);
 if (!modalHtml.includes(">272K.128K.responses<")) process.exit(1);
@@ -1143,7 +1146,7 @@ if (payload.claude.proxy.enabled !== false || Object.keys(payload.claude.proxy).
         self.assertIn('aria-controls="feishu-console-popover"', html)
         self.assertNotIn('id="feishu-console" class="button-ghost" href=', html)
         self.assertIn('id="feishu-console-popover" class="feishu-console-popover" hidden', html)
-        self.assertIn('/static/feishu_console.js?v=feishu-groups-v1', html)
+        self.assertIn('/static/feishu_console.js?v=feishu-groups-v2', html)
         self.assertIn('id="weixin-console"', html)
         self.assertIn('data-i18n="run.tools_weixin" hidden', html)
         self.assertIn('feishuConsoleEl: "feishu-console"', registry)
@@ -1473,7 +1476,7 @@ controller.unmount();
         self.assertIn('id="token-usage"', integration_actions)
         self.assertNotIn('id="token-usage-popover"', integration_actions)
         self.assertLess(html.index('id="skills-console-popover"'), html.index('id="token-usage-popover"'))
-        self.assertIn('<link rel="stylesheet" href="/static/styles.css?v=provider-models-v10">', html)
+        self.assertIn('<link rel="stylesheet" href="/static/styles.css?v=provider-models-v11">', html)
         self.assertIn('<script src="/static/i18n.js?v=permissions-v6"></script>', html)
         self.assertIn('"task.open": "任务"', i18n)
         self.assertIn('"agents.open": "智能体"', i18n)
@@ -5863,8 +5866,8 @@ if (resetCount !== 1 || emptyWorkspaceCount !== 1) {
         self.assertIn('<script src="/static/i18n.js?v=permissions-v6"></script>', html)
         self.assertIn('<script src="/static/app_helpers.js"></script>', html)
         self.assertIn('<script src="/static/task_metadata.js?v=hardware-terminal-v1"></script>', html)
-        self.assertIn('<script src="/static/bootstrap_config.js?v=provider-models-v10"></script>', html)
-        self.assertIn('<script src="/static/bootstrap_controller.js?v=provider-models-v10"></script>', html)
+        self.assertIn('<script src="/static/bootstrap_config.js?v=provider-models-v11"></script>', html)
+        self.assertIn('<script src="/static/bootstrap_controller.js?v=provider-models-v11"></script>', html)
         self.assertIn('<script src="/static/task_form.js?v=hardware-terminal-v1"></script>', html)
         self.assertIn('<script src="/static/task_config_controller.js?v=browser-profile-select-v47"></script>', html)
         self.assertIn('<script src="/static/agent_config_controller.js?v=reasoning-effort-v1"></script>', html)
@@ -5909,16 +5912,16 @@ if (resetCount !== 1 || emptyWorkspaceCount !== 1) {
         self.assertIn('<script src="/static/run_actions.js?v=web-upgrade-v12"></script>', html)
         self.assertIn('<script src="/static/task_create_controller.js?v=browser-profile-select-v47"></script>', html)
         self.assertIn('<script src="/static/app_actions.js"></script>', html)
-        self.assertIn('<script src="/static/settings_controller.js?v=provider-models-v10"></script>', html)
+        self.assertIn('<script src="/static/settings_controller.js?v=provider-models-v11"></script>', html)
         self.assertIn('<script src="/static/run_controller.js?v=permissions-v1"></script>', html)
         self.assertIn('<script src="/static/message_flow.js?v=hardware-terminal-v1"></script>', html)
         self.assertIn('<script src="/static/render_scheduler.js"></script>', html)
         self.assertIn('<script src="/static/confirm_dialog.js"></script>', html)
         self.assertIn('<script src="/static/controller_registry.js?v=permissions-v1"></script>', html)
         self.assertIn('<script src="/static/app_bridge.js?v=permissions-v1"></script>', html)
-        self.assertIn('<script src="/static/app_controller_factory.js?v=provider-models-v10"></script>', html)
+        self.assertIn('<script src="/static/app_controller_factory.js?v=provider-models-v11"></script>', html)
         self.assertIn('<script src="/static/app_runtime_setup.js?v=permissions-v1"></script>', html)
-        self.assertIn('<script src="/static/app_runtime_wiring.js?v=provider-models-v10"></script>', html)
+        self.assertIn('<script src="/static/app_runtime_wiring.js?v=provider-models-v11"></script>', html)
         self.assertIn('<script src="/static/app.js"></script>', html)
         self.assertLess(html.find("time_format.js"), html.find("app.js"))
         self.assertLess(html.find("time_format.js"), html.find("i18n.js"))

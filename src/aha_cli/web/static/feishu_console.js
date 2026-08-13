@@ -132,13 +132,22 @@
       return options.join("");
     }
 
+    function modelSourceForBackend(backend) {
+      const cfg = deps.bootstrapConfigData?.() || {};
+      return String(cfg?.[backend]?.model_source || "both").trim().toLowerCase();
+    }
+
     function modelOptionsHtml(backend, selected) {
       const effectiveBackend = backend || String(status.effective_backend || "codex");
       const inherited = backend && backend !== String(status.backend || "")
         ? t("common.default", "default")
         : String(status.effective_model || t("common.default", "default"));
       const catalog = backendOptions().find(item => item.name === effectiveBackend);
+      const modelSource = modelSourceForBackend(effectiveBackend);
       const models = Array.isArray(catalog?.models) ? catalog.models : [];
+      // Honor model_source: official mode hides env groups (backend already
+      // filters them), env mode hides the official catalog.
+      const officialModels = modelSource === "env" ? [] : models;
       const envGroups = Array.isArray(status.env_groups?.[effectiveBackend])
         ? status.env_groups[effectiveBackend]
         : [];
@@ -152,7 +161,7 @@
             : `${name} (${t("feishu.env_group", "env group")})`
         };
       });
-      const allModels = [...models, ...envModels].filter((item, index, items) => {
+      const allModels = [...officialModels, ...envModels].filter((item, index, items) => {
         const name = String(item?.name || "");
         return name && items.findIndex(candidate => String(candidate?.name || "") === name) === index;
       });

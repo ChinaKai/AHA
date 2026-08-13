@@ -76,21 +76,29 @@ def feishu_sdk_available() -> bool:
 
 
 def _feishu_env_groups(config: dict) -> dict[str, list[dict[str, str]]]:
-    """Return model selectors for configured backend env groups, without secrets."""
+    """Return model selectors for configured backend env groups, without secrets.
+
+    Honors each backend's ``model_source``: when it is ``"official"`` no env
+    groups are listed, and when it is ``"env"`` only env groups are listed (the
+    official catalog is always shown separately by the frontend). ``"both"``
+    (the default) lists env groups as before.
+    """
     result: dict[str, list[dict[str, str]]] = {}
     for backend, model_key in (("codex", "OPENAI_MODEL"), ("claude", "ANTHROPIC_MODEL")):
         backend_config = config.get(backend)
+        model_source = str(backend_config.get("model_source") or "both").strip().lower()
         raw_groups = backend_config.get("env") if isinstance(backend_config, dict) else []
         if isinstance(raw_groups, dict):
             raw_groups = [raw_groups]
         groups: list[dict[str, str]] = []
-        for index, raw_group in enumerate(raw_groups if isinstance(raw_groups, list) else []):
-            if not isinstance(raw_group, dict):
-                continue
-            name = str(raw_group.get("name") or f"env-{index + 1}").strip()
-            if not name:
-                continue
-            groups.append({"name": name, "model": str(raw_group.get(model_key) or "").strip()})
+        if model_source != "official":
+            for index, raw_group in enumerate(raw_groups if isinstance(raw_groups, list) else []):
+                if not isinstance(raw_group, dict):
+                    continue
+                name = str(raw_group.get("name") or f"env-{index + 1}").strip()
+                if not name:
+                    continue
+                groups.append({"name": name, "model": str(raw_group.get(model_key) or "").strip()})
         result[backend] = groups
     return result
 

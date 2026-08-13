@@ -8912,6 +8912,17 @@ body.empty-run .panel {
   background: var(--color-surface);
 }
 
+.bootstrap-detect-model-summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.bootstrap-detect-model-test-single {
+  margin-left: auto;
+  color: var(--color-text-muted);
+}
+
 .bootstrap-model-binding-actions {
   display: flex;
   flex: 0 0 auto;
