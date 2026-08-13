@@ -5,6 +5,7 @@ from aha_cli import locking, platform, process_control
 import hashlib
 import os
 from pathlib import Path
+import shlex
 import signal
 import subprocess
 import sys
@@ -195,20 +196,51 @@ def _positive_int(value: object) -> int | None:
     return parsed if parsed > 0 else None
 
 
-def _codex_session_jsonl_path(session_id: str) -> Path | None:
+def _codex_session_jsonl_path(
+    session_id: str,
+    *,
+    distro: str | None = None,
+    native_home: str | None = None,
+) -> Path | None:
     safe_id = str(session_id or "").strip()
     if not safe_id:
         return None
     candidates = list((Path.home() / ".codex" / "sessions").glob(f"**/*{safe_id}.jsonl"))
+    if not candidates and distro and native_home:
+        candidates = list(_wsl_session_paths(distro, native_home, Path(".codex") / "sessions", f"**/*{safe_id}.jsonl"))
     return candidates[0] if candidates else None
 
 
-def _claude_session_jsonl_path(session_id: str) -> Path | None:
+def _claude_session_jsonl_path(
+    session_id: str,
+    *,
+    distro: str | None = None,
+    native_home: str | None = None,
+) -> Path | None:
     safe_id = str(session_id or "").strip()
     if not safe_id:
         return None
     candidates = list((Path.home() / ".claude" / "projects").glob(f"*/*{safe_id}.jsonl"))
+    if not candidates and distro and native_home:
+        candidates = list(_wsl_session_paths(distro, native_home, Path(".claude") / "projects", f"*/*{safe_id}.jsonl"))
     return candidates[0] if candidates else None
+
+
+def _wsl_session_paths(distro: str, native_home: str, rel: Path, pattern: str) -> list[Path]:
+    """Resolve claude/codex session files under a WSL native home via UNC.
+
+    The Web service runs on Windows and uses ``Path.home()`` for session
+    lookup; a WSL backend writes its claude/codex sessions under the distro's
+    native home (e.g. ``/home/kaikai/.claude``), which is unreachable from a
+    Windows ``Path.home()``. Map the native home to ``\\wsl.localhost\\<distro>\\...``
+    so the Windows process can read the same session files (single copy).
+    """
+    from aha_cli.store.ws_target import wsl_unc_from_native
+
+    unc = wsl_unc_from_native(distro, native_home)
+    if not unc:
+        return []
+    return list((Path(unc) / rel).glob(pattern))
 
 
 def _claude_assistant_usage(record: dict) -> tuple[str, dict] | None:
@@ -368,7 +400,15 @@ def detect_runtime_context_compaction(root: Path, run_id: str, target: str, task
     return detected
 
 
-def _codex_runtime_context(root: Path, run_id: str, target: str, task_id: str | None = None) -> dict:
+def _codex_runtime_context(
+    root: Path,
+    run_id: str,
+    target: str,
+    task_id: str | None = None,
+    *,
+    distro: str | None = None,
+    native_home: str | None = None,
+) -> dict:
     session_file = session_path(root, run_id, task_id, target)
     if not session_file.exists():
         return {}
@@ -376,7 +416,7 @@ def _codex_runtime_context(root: Path, run_id: str, target: str, task_id: str | 
         session = read_json(session_file)
     except (OSError, ValueError):
         return {}
-    path = _codex_session_jsonl_path(str(session.get("backend_session_id") or ""))
+    path = _codex_session_jsonl_path(str(session.get("backend_session_id") or ""), distro=distro, native_home=native_home)
     if not path:
         return {}
     scanned = 0
@@ -431,7 +471,9 @@ def _claude_runtime_context(
     selected_config = claude_config_for_model(claude_cfg, requested_model)
     context_window = claude_context_window(selected_config)
 
-    path = _claude_session_jsonl_path(str(session.get("backend_session_id") or ""))
+    distro = str(state.get("wsl_distro") or "").strip() or None
+    native_home = str(state.get("wsl_native_home") or "").strip() or None
+    path = _claude_session_jsonl_path(str(session.get("backend_session_id") or ""), distro=distro, native_home=native_home)
     if not path:
         return {"context_window": context_window, "last_token_usage": {}, "source": "runtime"}
 
@@ -514,6 +556,18 @@ def _discover_backend_process(root: Path, run_id: str, target: str, task_id: str
     return None
 
 
+def _task_workspace_path(root: Path, run_id: str, task_id: str | None) -> str | None:
+    """Return the workspace_path for a task, or None when unavailable."""
+    if not task_id:
+        return None
+    try:
+        task = task_snapshot(root, run_id, task_id)["task"]
+    except (KeyError, SystemExit):
+        return None
+    workspace = str(task.get("workspace_path") or "").strip()
+    return workspace or None
+
+
 def _provider_id_for_model(cfg: dict, backend: str, model: str | None) -> str | None:
     """Resolve the provider id behind a model selector.
 
@@ -542,6 +596,37 @@ def _provider_id_for_model(cfg: dict, backend: str, model: str | None) -> str | 
     return None
 
 
+def _state_wsl_context(state: dict) -> tuple[str | None, str | None]:
+    """Return (distro, native_home) for a WSL backend from its state.
+
+    Prefers the fields stored by ``start_backend``. Backends started before WSL
+    home probing stored no home; derive it from the recorded launch command
+    (e.g. ``wsl.exe -d <distro> ... --claude-bin /home/<user>/...``) so session
+    lookup still works for already-running WSL tasks.
+    """
+    distro = str(state.get("wsl_distro") or "").strip() or None
+    native_home = str(state.get("wsl_native_home") or "").strip() or None
+    if distro and native_home:
+        return distro, native_home
+    command = state.get("command")
+    if not isinstance(command, list) or not command or not str(command[0]).endswith("wsl.exe"):
+        return distro, native_home
+    if len(command) > 3 and str(command[1]) == "-d":
+        distro = distro or str(command[2])
+    # The inner command is a single ``bash -c`` script string, so also scan the
+    # joined command line for --claude-bin/--codex-bin (e.g.
+    # ``--claude-bin /home/kaikai/.local/bin/claude``).
+    joined = " ".join(str(part) for part in command)
+    for flag in ("--claude-bin", "--codex-bin"):
+        marker = f"{flag} "
+        if marker in joined:
+            value = joined.split(marker, 1)[1].strip().split()[0]
+            parts = value.split("/")
+            if len(parts) >= 3 and parts[0] == "" and parts[1] == "home":
+                native_home = native_home or f"/home/{parts[2]}"
+    return distro, native_home
+
+
 def backend_status(root: Path, run_id: str, target: str = "main", task_id: str | None = None) -> dict:
     require_plan(root, run_id)
     target = target or "main"
@@ -567,9 +652,19 @@ def backend_status(root: Path, run_id: str, target: str = "main", task_id: str |
     latest_prompt_metrics = event_runtime["latest_prompt_metrics"]
     cfg = load_config(root)
     normalized_backend_name = str(backend_name).removesuffix("-chat")
+    wsl_distro, wsl_native_home = _state_wsl_context(state)
     if normalized_backend_name == "codex":
-        runtime_context = _codex_runtime_context(root, run_id, target, task_id)
+        runtime_context = _codex_runtime_context(
+            root,
+            run_id,
+            target,
+            task_id,
+            distro=wsl_distro,
+            native_home=wsl_native_home,
+        )
     elif normalized_backend_name == "claude":
+        if wsl_distro or wsl_native_home:
+            state = {**state, "wsl_distro": wsl_distro, "wsl_native_home": wsl_native_home}
         runtime_context = _claude_runtime_context(root, run_id, target, task_id, state=state, cfg=cfg)
     else:
         runtime_context = {}
@@ -582,7 +677,12 @@ def backend_status(root: Path, run_id: str, target: str = "main", task_id: str |
         )
     provider_id = _provider_id_for_model(cfg, normalized_backend_name, requested_model)
     runtime_context_usage = runtime_context.get("last_token_usage") if isinstance(runtime_context.get("last_token_usage"), dict) else {}
-    pressure_runtime_usage = runtime_context_usage
+    # The runtime context reads claude/codex session files under the process
+    # HOME. For a WSL backend the Windows-side Web service cannot always reach
+    # them (they live in the distro's native home); fall back to the latest
+    # agent_usage event, which the backend already wrote to the single-copy
+    # events.jsonl, so context pressure keeps refreshing in WSL workspaces.
+    pressure_runtime_usage = runtime_context_usage or latest_usage
     return {
         "target": target,
         "task_id": task_id,
@@ -701,6 +801,59 @@ def _aha_cli_invocation() -> list[str]:
     return [sys.executable, "-m", "aha_cli"]
 
 
+def _shlex_quote_each(parts: list[str]) -> list[str]:
+    return [shlex.quote(str(part)) for part in parts]
+
+
+def _resolve_wsl_target(
+    root: Path,
+    workspace: str | None,
+    backend: str,
+) -> dict | None:
+    """Build a WSL launch target when the workspace is a WSL path.
+
+    Returns a dict with ``distro``, ``aha_home`` (WSL-native), ``aha_bin``
+    (onebin path as seen from WSL), and ``backend_bin`` (native codex/claude),
+    or ``None`` when the workspace is not WSL or no native backend is available.
+    """
+    from aha_cli.store.ws_target import is_wsl_workspace, wsl_distro_and_path, wsl_native_home
+    from aha_cli.services.wsl_backend import wsl_backends_for_workspace
+
+    if not is_wsl_workspace(workspace):
+        return None
+    distro, _native = wsl_distro_and_path(workspace)
+    if not distro:
+        return None
+    backends = wsl_backends_for_workspace(root, distro)
+    backend_bin = backends.get(backend)
+    if not backend_bin:
+        return None
+    wsl_home = wsl_native_home(root)
+    if not wsl_home:
+        return None
+    # The WSL watcher needs the same AHA onebin reachable inside the distro. When
+    # AHA is not running from a zipapp (source/editable install), there is no
+    # portable binary to hand to WSL, so fall back to the Windows backend rather
+    # than launching a WSL process that cannot start aha_cli.
+    onebin_path = _running_zipapp_path()
+    if not onebin_path:
+        return None
+    aha_bin = wsl_native_home(onebin_path) or str(onebin_path)
+    return {
+        "distro": distro,
+        "aha_home": wsl_home,
+        "aha_bin": aha_bin,
+        "backend_bin": backend_bin,
+        # WSL native home of the backend user (e.g. /home/kaikai), probed from
+        # the distro so the Windows Web service can reach backend session files.
+        "native_home": str(backends.get("home") or "").strip() or None,
+        # Native python inside the distro (excludes /mnt/* shims) used to run
+        # the onebin; without it we would fall back to PATH "python3", which can
+        # resolve to a Windows shim and fail to launch.
+        "python": str(backends.get("python3") or "").strip() or None,
+    }
+
+
 def _agent_chat_command(
     run_id: str,
     target: str,
@@ -719,6 +872,7 @@ def _agent_chat_command(
     extra_args: list[str] | None = None,
     prompt_prefix: str = render_prompt_template("backend_prompt_prefix.md").strip(),
     task_id: str | None = None,
+    wsl_target: dict | None = None,
 ) -> list[str]:
     if backend not in PROCESS_AGENT_BACKENDS:
         raise ValueError(f"backend {backend} does not have a chat process")
@@ -759,7 +913,68 @@ def _agent_chat_command(
         command.append("--no-json")
     for item in extra_args or []:
         command.extend(["--extra-arg", item])
-    return command
+    if not wsl_target:
+        return command
+    # Run the whole backend watcher inside the WSL distro so codex/claude operate
+    # on native Linux paths. The inner command is a Python invocation of the same
+    # onebin via the WSL-mapped AHA home.
+    distro = str(wsl_target.get("distro") or "").strip()
+    wsl_home = str(wsl_target.get("aha_home") or "").strip()
+    default_bin = codex_bin if backend == "codex" else claude_bin
+    inner_bin = str(wsl_target.get("backend_bin") or default_bin).strip()
+    inner_python = str(wsl_target.get("python") or "python3").strip()
+    aha_bin = str(wsl_target.get("aha_bin") or "").strip()
+    if not distro or not wsl_home or not aha_bin:
+        return command
+    # Rebuild the inner command with the WSL-mapped home and bin paths. Prefer a
+    # native python probed from the distro (absolute path, excludes /mnt/* shims)
+    # so the onebin never launches through a Windows python3 shim. Only fall back
+    # to PATH "python3" when the probe returned nothing.
+    inner: list[str] = [inner_python]
+    if aha_bin == "-m":
+        # Fallback when the running AHA is not a zipapp: python -m aha_cli.
+        inner.extend(["-m", "aha_cli"])
+    else:
+        inner.append(aha_bin)
+    inner.extend([
+        "--home",
+        wsl_home,
+        f"{backend}-chat",
+        run_id,
+        target,
+        "--sender",
+        target,
+        "--sandbox",
+        sandbox,
+        "--approval",
+        approval,
+        "--interval",
+        str(interval),
+        "--prompt-prefix",
+        prompt_prefix,
+    ])
+    inner_bin_key = "--codex-bin" if backend == "codex" else "--claude-bin"
+    inner.extend([inner_bin_key, inner_bin])
+    if task_id:
+        inner.extend(["--task-id", task_id])
+    if command_model:
+        inner.extend(["--model", command_model])
+        if backend == "codex" and not model:
+            inner.extend(["--requested-model", ""])
+    if reasoning_effort:
+        inner.extend(["--reasoning-effort", reasoning_effort])
+    if from_start:
+        inner.append("--from-start")
+    if no_json and backend == "codex":
+        inner.append("--no-json")
+    for item in extra_args or []:
+        inner.extend(["--extra-arg", item])
+    # Quote each argument individually but do NOT wrap the whole script in an
+    # extra layer of single quotes: wsl.exe forwards the -c argument verbatim,
+    # so a fully wrapped script becomes one word inside bash and cannot be
+    # exec'd ("No such file or directory", exit 127).
+    bash_script = " ".join(_shlex_quote_each(inner))
+    return ["wsl.exe", "-d", distro, "--", "bash", "-c", bash_script]
 
 
 def _backend_proxy_env(root: Path, run_id: str, target: str, task_id: str | None) -> dict[str, str] | None:
@@ -860,6 +1075,11 @@ def start_backend(
     if backend not in PROCESS_AGENT_BACKENDS:
         raise ValueError(f"backend {backend} does not have a chat process")
     cfg = load_config(root)
+    # Determine the workspace the backend will operate on. A task's workspace may
+    # be a WSL UNC path (\\wsl.localhost\\<distro>\\...); when it is and a native
+    # WSL backend exists, run the whole watcher inside WSL so codex/claude operate
+    # on native Linux paths instead of Windows UNC paths.
+    workspace = _task_workspace_path(root, run_id, task_id)
     if backend == "codex" and not model:
         model = CODEX_DEFAULT_MODEL if task_id else (cfg.get("codex", {}) or {}).get("model")
     if backend == "claude" and not model:
@@ -882,6 +1102,7 @@ def start_backend(
         if current["status"] in {"running", "busy"}:
             current["already_running"] = True
             return current
+        wsl_target = _resolve_wsl_target(root, workspace, backend)
         command = _agent_chat_command(
             run_id,
             target,
@@ -899,6 +1120,7 @@ def start_backend(
             extra_args=extra_args,
             prompt_prefix=prompt_prefix,
             task_id=task_id,
+            wsl_target=wsl_target,
         )
         log_path = backend_log_path(root, run_id, target, task_id)
         log_path.parent.mkdir(parents=True, exist_ok=True)
@@ -918,6 +1140,14 @@ def start_backend(
         }
         if task_id:
             aha_env["AHA_TASK_ID"] = task_id
+        if wsl_target:
+            aha_env["AHA_WSL_DISTRO"] = str(wsl_target.get("distro") or "").strip()
+            aha_env["AHA_WSL_AHA_HOME"] = str(wsl_target.get("aha_home") or "").strip()
+            # WSLENV declares which variables pass through wsl.exe into the distro.
+            existing_wslenv = os.environ.get("WSLENV", "")
+            aha_env["WSLENV"] = ":".join(
+                part for part in ("AHA_WSL_DISTRO", "AHA_WSL_AHA_HOME", existing_wslenv) if part
+            )
         try:
             process = subprocess.Popen(
                 command,
@@ -951,6 +1181,9 @@ def start_backend(
             "from_start": from_start,
             "proxy_enabled": proxy_env is not None and bool(proxy_env),
         }
+        if wsl_target:
+            state["wsl_distro"] = str(wsl_target.get("distro") or "").strip() or None
+            state["wsl_native_home"] = str(wsl_target.get("native_home") or "").strip() or None
         _write_state(root, run_id, target, state, task_id)
         append_event(
             root,
@@ -966,6 +1199,58 @@ def start_backend(
             },
         )
         return backend_status(root, run_id, target, task_id) | {"started": True}
+
+
+def _stop_wsl_backend_process(
+    run_id: str,
+    target: str,
+    task_id: str | None,
+    state: dict,
+    *,
+    timeout: float = 5.0,
+) -> None:
+    """Best-effort termination of a WSL backend's distro-side process tree.
+
+    A WSL backend's watcher runs inside the distro (``python3 ... <backend>-chat
+    <run_id> <target>``), outside the Windows process tree that ``wsl.exe``
+    belongs to. Killing ``wsl.exe`` does not stop it, leaving an orphan that
+    holds the backend lock and keeps calling the API. When the state records a
+    WSL distro, run ``pkill`` inside that distro matching the backend's exact
+    command signature. The first token uses a character-class regex
+    (``[c]laude-chat``) so the pkill command line itself does not match.
+    """
+    distro = str(state.get("wsl_distro") or "").strip()
+    if not distro:
+        return
+    backend = str(state.get("backend") or "").removesuffix("-chat")
+    if backend not in ("codex", "claude"):
+        return
+    # Pattern that only matches the backend watcher, not this pkill command:
+    #   <b>ackend-chat <run_id> <target> [--task-id <task_id>]
+    pattern = f"[{backend[0]}]{backend[1:]}-chat {run_id} {target}"
+    if task_id:
+        pattern += f" --task-id {task_id}"
+    script = (
+        "pids=$(pgrep -f -- '" + pattern + "' 2>/dev/null | grep -v $$ || true); "
+        "if [ -n \"$pids\" ]; then "
+        "kill -TERM $pids 2>/dev/null || true; sleep 0.5; "
+        "kill -KILL $pids 2>/dev/null || true; fi"
+    )
+    try:
+        from aha_cli.services.wsl_backend import _wsl_executable
+        import subprocess as _sp
+
+        _sp.run(
+            [_wsl_executable(), "-d", distro, "--", "bash", "-c", script],
+            stdout=_sp.DEVNULL,
+            stderr=_sp.DEVNULL,
+            timeout=timeout,
+            check=False,
+            creationflags=int(getattr(_sp, "CREATE_NO_WINDOW", 0)),
+        )
+    except Exception:
+        # Best-effort cleanup; a failure here must not break stop_backend.
+        pass
 
 
 def stop_backend(root: Path, run_id: str, target: str = "main", *, task_id: str | None = None, timeout: float = 5.0) -> dict:
@@ -999,7 +1284,13 @@ def stop_backend(root: Path, run_id: str, target: str = "main", *, task_id: str 
                     process_control.send_signal(int(pid), signal.SIGKILL)
             except ProcessLookupError:
                 pass
+        # A WSL backend runs inside the distro, outside the Windows process
+        # tree. Killing wsl.exe (the Windows host) does not terminate the WSL
+        # python/claude process, which would be left as an orphan still holding
+        # locks and consuming quota. Explicitly pkill the WSL-side process by
+        # its command-line signature.
         state = _read_state(root, run_id, target, task_id)
+        _stop_wsl_backend_process(run_id, target, task_id, state, timeout=timeout)
         state.update(
             {
                 "target": target,

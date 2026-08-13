@@ -4,6 +4,27 @@ from collections.abc import Callable
 import json
 import os
 from pathlib import Path
+
+
+def claude_session_resume_id(session: dict | None) -> str | None:
+    """Return a resumable claude session id, or None when it cannot resume.
+
+    The claude CLI stores conversations under ``~/.claude/projects/...``. A
+    session recorded by a different runtime (e.g. a task that ran on Windows
+    and now runs inside WSL, or vice versa) has its conversation file on the
+    other side and ``--resume <id>`` fails with a hard error. When the file is
+    absent here, drop the resume so the backend starts a fresh session instead
+    of erroring out.
+    """
+    if not session:
+        return None
+    session_id = str(session.get("backend_session_id") or "").strip()
+    if not session_id:
+        return None
+    candidates = list((Path.home() / ".claude" / "projects").glob(f"*/*{session_id}.jsonl"))
+    if candidates:
+        return session_id
+    return None
 import shlex
 import subprocess
 import sys
@@ -491,6 +512,11 @@ def run_claude_exec(
 ) -> tuple[int, str, dict | None]:
     output_file.parent.mkdir(parents=True, exist_ok=True)
     session_id = session.get("backend_session_id") if session else None
+    # A session recorded by a different runtime (Windows vs WSL) is not
+    # resumable here; passing a nonexistent id makes claude fail the whole turn
+    # with exit 0 (is_error). Skip resume so we start a fresh session.
+    if session_id and not start_new_session:
+        session_id = claude_session_resume_id(session)
     if reasoning_effort is None and isinstance(claude_config, dict):
         reasoning_effort = claude_config.get("reasoning_effort")
     cmd = build_claude_exec_command(

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from aha_cli import locking
 import json
 import os
 from pathlib import Path
@@ -12,6 +11,52 @@ from aha_cli.domain.models import utc_now
 
 
 _WINDOWS = os.name == "nt"
+
+# Serializes JSONL appends within one process. Cross-process serialization is
+# handled by the sidecar lock in _acquire_append_lock; this guards the file-fd
+# lifecycle so two threads in the same process cannot interleave.
+_jsonl_write_lock = threading.Lock()
+
+_APPEND_LOCK_ACQUIRE_RETRIES = 2000
+_APPEND_LOCK_RETRY_DELAY = 0.005
+_APPEND_LOCK_STALE_SECONDS = 30.0
+
+
+def _acquire_append_lock(lock_path: Path) -> None:
+    """Acquire an exclusive sidecar lock, blocking with retry.
+
+    Uses ``os.open(..., O_CREAT | O_EXCL)`` which is atomic on both POSIX and
+    Windows and resolves to the same directory entry across filesystem views
+    (e.g. ``/mnt/c/...`` vs ``C:\\...`` for the same shared file). A stale lock
+    (crashed writer) is reclaimed after ``_APPEND_LOCK_STALE_SECONDS``.
+    """
+    deadline = time.monotonic() + _APPEND_LOCK_STALE_SECONDS
+    while True:
+        try:
+            fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o666)
+            os.close(fd)
+            return
+        except FileExistsError:
+            if time.monotonic() >= deadline:
+                # Stale lock: the previous writer crashed without releasing.
+                try:
+                    lock_path.unlink()
+                except OSError:
+                    pass
+                continue
+            time.sleep(_APPEND_LOCK_RETRY_DELAY)
+        except OSError:
+            # e.g. transient 9p failure; retry without spinning too hot.
+            time.sleep(_APPEND_LOCK_RETRY_DELAY)
+
+
+def _release_append_lock(lock_path: Path) -> None:
+    try:
+        lock_path.unlink()
+    except FileNotFoundError:
+        pass
+    except OSError:
+        pass
 _WRITE_LOCKS_GUARD = threading.Lock()
 _WRITE_LOCKS: dict[str, threading.RLock] = {}
 _REPLACE_RETRY_DELAYS = (0.01, 0.02, 0.04, 0.08, 0.16)
@@ -60,23 +105,31 @@ def write_json(path: Path, data: dict) -> None:
 def append_jsonl(path: Path, data: dict) -> int:
     path.parent.mkdir(parents=True, exist_ok=True)
     line = json.dumps(data, ensure_ascii=False) + "\n"
-    fd = os.open(path, os.O_APPEND | os.O_CREAT | os.O_WRONLY, 0o666)
-    try:
-        with os.fdopen(fd, "ab", closefd=False) as f:
-            locking.acquire(f.fileno())
+    payload = line.encode("utf-8")
+    # Serialize appends across processes that may see the same file through
+    # different views (e.g. a WSL backend appending over /mnt/c while the
+    # Windows Web service appends over C:\ for the same single-copy run). On 9p,
+    # concurrent os.write(..., O_APPEND) from two processes drops whole lines.
+    # A sidecar lock file with atomic O_EXCL creation serializes writers; it
+    # works across the two filesystem views because both resolve to the same
+    # directory entry in the shared mount.
+    lock_path = path.with_name(path.name + ".lock")
+    with _jsonl_write_lock:
+        _acquire_append_lock(lock_path)
+        try:
+            fd = os.open(path, os.O_APPEND | os.O_CREAT | os.O_WRONLY, 0o666)
             try:
-                payload = line.encode("utf-8")
                 written = 0
                 while written < len(payload):
-                    count = os.write(f.fileno(), payload[written:])
+                    count = os.write(fd, payload[written:])
                     if count == 0:
                         raise OSError(f"Unable to append JSONL record to {path}")
                     written += count
-                return os.lseek(f.fileno(), 0, os.SEEK_CUR)
+                return os.lseek(fd, 0, os.SEEK_CUR)
             finally:
-                locking.release(f.fileno())
-    finally:
-        os.close(fd)
+                os.close(fd)
+        finally:
+            _release_append_lock(lock_path)
 
 
 def iter_jsonl_records_from(

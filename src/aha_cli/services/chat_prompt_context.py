@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import os
 from pathlib import Path
 import re
 
@@ -1222,6 +1223,26 @@ def compact_summary_context(root: Path, run_id: str, session: dict | None, *, li
     return render_prompt_template("backend_compact_summary_context.md", summary=text)
 
 
+def _prompt_workspace_path(root: Path, task: dict | None) -> str:
+    """Return the workspace path to show in the task context block.
+
+    A task workspace may be stored as a WSL UNC path
+    (``\\\\wsl.localhost\\<distro>\\...``). When the prompt is built inside a
+    WSL backend, the actual working directory is the distro-native ``/...``
+    path (see chat.py), so present the same native form to the agent instead of
+    a UNC path that does not exist on Linux. Non-WSL workspaces pass through.
+    """
+    raw = str((task or {}).get("workspace_path") or "").strip()
+    if not raw:
+        return raw
+    if not os.environ.get("AHA_WSL_DISTRO"):
+        return raw
+    from aha_cli.store.ws_target import wsl_workspace_native_path
+
+    native = wsl_workspace_native_path(raw)
+    return native or raw
+
+
 def chat_prompt(
     root: Path,
     run_id: str,
@@ -1458,7 +1479,7 @@ def chat_prompt(
                     title=detail["task"].get("title", ""),
                     status=detail["task"].get("status", ""),
                     role=item.get("role", ""),
-                    workspace=detail["task"].get("workspace_path", ""),
+                    workspace=_prompt_workspace_path(root, detail["task"]),
                 )
             elif sticky_delta:
                 task_context = ""
@@ -1470,7 +1491,7 @@ def chat_prompt(
                     title=detail["task"].get("title", ""),
                     status=detail["task"].get("status", ""),
                     role=item.get("role", ""),
-                    workspace=detail["task"].get("workspace_path", ""),
+                    workspace=_prompt_workspace_path(root, detail["task"]),
                 ).rstrip()
                 task_context = f"{task_context}\n\n{service_context}\n"
                 components["service_assistant_context"] = service_context
@@ -1482,7 +1503,7 @@ def chat_prompt(
                     title=detail["task"].get("title", ""),
                     status=detail["task"].get("status", ""),
                     role=item.get("role", ""),
-                    workspace=detail["task"].get("workspace_path", ""),
+                    workspace=_prompt_workspace_path(root, detail["task"]),
                 ).rstrip()
                 task_context = f"{task_context}\n\n{feishu_group_context}\n"
                 components["feishu_group_context"] = feishu_group_context
@@ -1494,7 +1515,7 @@ def chat_prompt(
                     description=detail["task"].get("description", ""),
                     status=detail["task"].get("status", ""),
                     role=item.get("role", ""),
-                    workspace=detail["task"].get("workspace_path", ""),
+                    workspace=_prompt_workspace_path(root, detail["task"]),
                     collaboration_mode=detail["task"].get("collaboration_mode", "auto"),
                     workflow_template=detail["task"].get("workflow_template", "auto"),
                     delegation_policy=detail["task"].get("delegation_policy", "auto"),

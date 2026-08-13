@@ -5,6 +5,7 @@ import io
 import json
 import os
 from pathlib import Path
+import shlex
 import sys
 import tempfile
 import unittest
@@ -15,8 +16,13 @@ from aha_cli.backends.claude import run_claude_exec
 from aha_cli.cli import main
 from aha_cli.services import backend_runtime as backend_runtime_module
 from aha_cli.services.backend_runtime import (
+    _agent_chat_command,
+    _claude_session_jsonl_path,
     _process_matches_home,
     _provider_id_for_model,
+    _resolve_wsl_target,
+    _state_wsl_context,
+    _wsl_session_paths,
     backend_status,
     detect_runtime_context_compaction,
     start_backend,
@@ -43,6 +49,186 @@ class BackendRuntimeTests(unittest.TestCase):
         )
         # Non-env selector (already resolved model name) cannot resolve a provider.
         self.assertIsNone(_provider_id_for_model(cfg, "codex", "deepseek-v4-flash"))
+
+    def test_agent_chat_command_wsl_target_wraps_in_wsl(self) -> None:
+        command = _agent_chat_command(
+            "run1",
+            "main",
+            backend="codex",
+            aha_home=Path("C:/Users/toope/.aha"),
+            codex_bin="codex",
+            task_id="task-005",
+            wsl_target={
+                "distro": "Ubuntu-24.04",
+                "aha_home": "/mnt/c/Users/toope/.aha",
+                "aha_bin": "/mnt/c/Users/toope/AppData/Local/AHA/aha",
+                "backend_bin": "/home/kaikai/.nvm/versions/node/v24.18.0/bin/codex",
+            },
+        )
+
+        self.assertEqual(command[0], "wsl.exe")
+        self.assertIn("-d", command)
+        self.assertIn("Ubuntu-24.04", command)
+        self.assertEqual(command[4], "bash")
+        self.assertEqual(command[5], "-c")
+        script = command[6]
+        self.assertIn("--codex-bin", script)
+        self.assertIn("/home/kaikai/.nvm/versions/node/v24.18.0/bin/codex", script)
+        self.assertIn("--home", script)
+        self.assertIn("/mnt/c/Users/toope/.aha", script)
+        # wsl.exe forwards the -c argument verbatim, so the script must not be
+        # wrapped as a whole; a fully single-quoted script becomes one word
+        # inside bash and cannot be exec'd (exit 127).
+        words = shlex.split(script)
+        self.assertEqual(words[0], "python3")
+        self.assertIn("/mnt/c/Users/toope/AppData/Local/AHA/aha", words)
+        self.assertIn("You are connected to AHA as the real backend agent.", words)
+
+    def test_agent_chat_command_no_wsl_target_uses_plain_command(self) -> None:
+        command = _agent_chat_command(
+            "run1",
+            "main",
+            backend="codex",
+            aha_home=Path("C:/Users/toope/.aha"),
+            codex_bin="codex",
+            task_id="task-005",
+        )
+
+        self.assertNotIn("wsl.exe", command)
+        self.assertIn("codex-chat", command)
+
+    def test_resolve_wsl_target_requires_wsl_workspace(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            # Non-WSL workspace -> None.
+            self.assertIsNone(_resolve_wsl_target(root, r"C:\Users\toope\proj", "codex"))
+
+            # WSL workspace but no native backend -> None.
+            with mock.patch(
+                "aha_cli.services.wsl_backend.wsl_backends_for_workspace",
+                return_value={},
+            ):
+                self.assertIsNone(
+                    _resolve_wsl_target(root, r"\\wsl.localhost\Ubuntu-24.04\home\kaikai\proj", "codex")
+                )
+
+    def test_resolve_wsl_target_builds_target_with_native_backend(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch(
+                "aha_cli.services.wsl_backend.wsl_backends_for_workspace",
+                return_value={"codex": "/home/kaikai/.nvm/versions/node/v24.18.0/bin/codex"},
+            ):
+                with mock.patch(
+                    "aha_cli.services.backend_runtime._running_zipapp_path",
+                    return_value=Path("/tmp/aha"),
+                ):
+                    target = _resolve_wsl_target(
+                        root,
+                        r"\\wsl.localhost\Ubuntu-24.04\home\kaikai\proj",
+                        "codex",
+                    )
+            self.assertIsNotNone(target)
+            self.assertEqual(target["distro"], "Ubuntu-24.04")
+            self.assertEqual(target["backend_bin"], "/home/kaikai/.nvm/versions/node/v24.18.0/bin/codex")
+            self.assertIn("aha_home", target)
+
+    def test_state_wsl_context_derives_home_from_launch_command(self) -> None:
+        # Backends started before WSL home probing stored no home; derive the
+        # distro and native home from the recorded wsl.exe launch command.
+        command = [
+            "wsl.exe",
+            "-d",
+            "Ubuntu-24.04",
+            "--",
+            "bash",
+            "-c",
+            "python3 /mnt/c/Users/toope/AppData/Local/AHA/aha --home /mnt/c/Users/toope/.aha "
+            "claude-chat run1 main --claude-bin /home/kaikai/.local/bin/claude --task-id task-004",
+        ]
+        state = {"command": command}
+        distro, native_home = _state_wsl_context(state)
+        self.assertEqual(distro, "Ubuntu-24.04")
+        self.assertEqual(native_home, "/home/kaikai")
+
+    def test_state_wsl_context_uses_stored_fields_when_present(self) -> None:
+        state = {"command": ["wsl.exe"], "wsl_distro": "Ubuntu-24.04", "wsl_native_home": "/home/kaikai"}
+        self.assertEqual(_state_wsl_context(state), ("Ubuntu-24.04", "/home/kaikai"))
+
+    def test_stop_wsl_backend_process_skips_non_wsl(self) -> None:
+        # Non-WSL state: no distro -> no wsl pkill attempted.
+        with mock.patch("aha_cli.services.backend_runtime.subprocess.run") as run:
+            from aha_cli.services.backend_runtime import _stop_wsl_backend_process
+            _stop_wsl_backend_process("run1", "main", None, {"backend": "claude-chat"}, timeout=3)
+            run.assert_not_called()
+
+    def test_stop_wsl_backend_process_builds_pkill_script(self) -> None:
+        from aha_cli.services.backend_runtime import _stop_wsl_backend_process
+        state = {"wsl_distro": "Ubuntu-24.04", "backend": "claude-chat"}
+        captured = {}
+
+        class FakeRun:
+            def __init__(self, args, **kwargs):
+                captured["args"] = list(args)
+                captured["kwargs"] = kwargs
+
+        with mock.patch("aha_cli.services.backend_runtime.subprocess.run", FakeRun):
+            _stop_wsl_backend_process("run1", "main", "task-7", state, timeout=3)
+
+        args = captured["args"]
+        self.assertEqual(args[1], "-d")
+        self.assertEqual(args[2], "Ubuntu-24.04")
+        script = args[-1]
+        # Regex trick so the pkill command line does not match itself.
+        self.assertIn("[c]laude-chat run1 main --task-id task-7", script)
+        self.assertIn("pgrep -f", script)
+        self.assertIn("kill -TERM", script)
+
+    def test_state_wsl_context_returns_none_for_non_wsl_command(self) -> None:
+        self.assertEqual(_state_wsl_context({"command": ["pythonw.exe", "claude-chat", "run1"]}), (None, None))
+
+    def test_wsl_session_paths_builds_unc_candidates(self) -> None:
+        from aha_cli.store.ws_target import wsl_unc_from_native
+
+        unc = wsl_unc_from_native("Ubuntu-24.04", "/home/kaikai")
+        self.assertEqual(unc, "\\\\wsl.localhost\\Ubuntu-24.04\\home\\kaikai")
+        # The helper returns a list (empty when the UNC base does not resolve on
+        # this host); the generated base must carry distro + native home so the
+        # Windows Web service can reach the WSL session files.
+        candidates = list(
+            _wsl_session_paths(
+                "Ubuntu-24.04",
+                "/home/kaikai",
+                Path(".claude") / "projects",
+                "*/*abc123.jsonl",
+            )
+        )
+        self.assertIsInstance(candidates, list)
+
+    def test_claude_session_jsonl_path_prefers_local_home_then_wsl(self) -> None:
+        # Fake session id: local Path.home() misses and the WSL UNC base does
+        # not resolve on this test host, so no crash and None is returned.
+        path = _claude_session_jsonl_path(
+            "328ecd4f-86f0-4179-b9d8-cbf5b62502df",
+            distro="Ubuntu-24.04",
+            native_home="/home/kaikai",
+        )
+        self.assertIsNone(path)
+
+    def test_resolve_wsl_target_returns_none_without_onebin(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch(
+                "aha_cli.services.wsl_backend.wsl_backends_for_workspace",
+                return_value={"codex": "/home/kaikai/.nvm/versions/node/v24.18.0/bin/codex"},
+            ):
+                with mock.patch("aha_cli.services.backend_runtime._running_zipapp_path", return_value=None):
+                    target = _resolve_wsl_target(
+                        root,
+                        r"\\wsl.localhost\Ubuntu-24.04\home\kaikai\proj",
+                        "codex",
+                    )
+            self.assertIsNone(target)
 
     def run_cli(self, *args: str) -> tuple[int, str]:
         out = io.StringIO()

@@ -8,8 +8,8 @@ import traceback
 import uuid
 
 from aha_cli import platform
-from aha_cli.backends.claude import claude_cli_model, claude_config_for_model, claude_permission_mode, claude_resolved_model, run_claude_exec
-from aha_cli.backends.codex import codex_cli_model, codex_config_for_model, codex_resolved_model, codex_sandbox, run_codex_exec
+from aha_cli.backends.claude import claude_cli_model, claude_config_for_model, claude_permission_mode, claude_resolved_model, claude_session_resume_id, run_claude_exec
+from aha_cli.backends.codex import codex_cli_model, codex_config_for_model, codex_resolved_model, codex_sandbox, codex_session_resume_id, run_codex_exec
 from aha_cli.backends.registry import CODEX_DEFAULT_MODEL, normalize_reasoning_effort, resolve_model
 from aha_cli.domain.models import is_feishu_group_task, is_service_assistant_task, utc_now
 from aha_cli.services.auto_context_compact import auto_compact_agent_context_after_turn
@@ -760,6 +760,66 @@ def claude_chat(root: Path, run_id: str, args) -> int:
     return agent_chat(root, run_id, args, backend_name="claude")
 
 
+def _compact_unresumable_session(
+    root: Path,
+    run_id: str,
+    task_id: str,
+    agent_id: str,
+    backend_name: str,
+    session: dict,
+) -> None:
+    """Compact-and-reset a backend session that cannot resume in this runtime.
+
+    A ``backend_session_id`` recorded by a different runtime (Windows vs WSL)
+    has its claude/codex conversation file on the other filesystem view, so
+    ``--resume`` would fail. When the id exists but no session file is reachable
+    here, run the compact/reset flow: it archives the old id, writes a summary
+    from AHA-side rounds/messages/events, clears ``backend_session_id``, and
+    forces the next prompt to carry the summary. Best-effort: never break the
+    chat turn on failure.
+    """
+    if not session:
+        return
+    old_session_id = str(session.get("backend_session_id") or "").strip()
+    if not old_session_id:
+        return
+    try:
+        if backend_name == "claude":
+            resumable = claude_session_resume_id(session) is not None
+        elif backend_name == "codex":
+            resumable = codex_session_resume_id(session) is not None
+        else:
+            return
+    except Exception:
+        return
+    if resumable:
+        return
+    try:
+        from aha_cli.services.session_compact import compact_reset_backend_session
+
+        compact_reset_backend_session(
+            root,
+            run_id,
+            task_id,
+            agent_id,
+            reason="runtime_environment_changed",
+            restart=False,
+        )
+    except Exception as exc:  # noqa: BLE001 - must not affect the agent turn
+        append_event(
+            root,
+            run_id,
+            "backend_session_compact_skipped",
+            {
+                "task_id": task_id,
+                "target": agent_id,
+                "reason": "unresumable_runtime_session",
+                "error": str(exc),
+                "backend_session_id": old_session_id,
+            },
+        )
+
+
 def agent_chat(root: Path, run_id: str, args, *, backend_name: str) -> int:
     require_plan(root, run_id)
     cfg = load_config(root)
@@ -941,6 +1001,21 @@ def agent_chat(root: Path, run_id: str, args, *, backend_name: str) -> int:
                     model=(agent or {}).get("model") or task.get("preferred_model"),
                     workspace_path=(agent or {}).get("workspace_path") or task.get("workspace_path"),
                 )
+                # A recorded backend_session_id may not be resumable in this
+                # runtime (e.g. the task previously ran on Windows and now runs
+                # inside WSL, so its claude/codex conversation file lives on the
+                # other side). Resuming a nonexistent session makes the CLI fail
+                # the whole turn with exit 0. Compact-and-reset instead: archive
+                # the old session id, build a summary from AHA-side rounds/
+                # messages/events, and force the next prompt to carry it.
+                _compact_unresumable_session(
+                    root,
+                    run_id,
+                    item_task_id,
+                    agent_id,
+                    backend_name,
+                    session,
+                )
                 reply_target = args.reply_target or item.get("reply_target") or original_sender or "browser"
                 output_file = run / "chat" / f"{args.target}-{uuid.uuid4().hex[:8]}.md"
                 requested_sandbox = (agent or {}).get("sandbox") or task.get("preferred_sandbox") or args.sandbox
@@ -998,7 +1073,18 @@ def agent_chat(root: Path, run_id: str, args, *, backend_name: str) -> int:
                 session["resolved_model"] = resolved_model
                 session["model"] = resolved_model or command_model or model
                 sandbox = codex_sandbox("research", requested_sandbox) if backend_name == "codex" else requested_sandbox
-                workspace = Path(task.get("workspace_path") or root)
+                workspace_raw = str(task.get("workspace_path") or root)
+                wsl_distro = os.environ.get("AHA_WSL_DISTRO") or ""
+                if wsl_distro:
+                    # Running inside a WSL backend: the workspace is a WSL UNC
+                    # path (\\wsl.localhost\\<distro>\\...); convert to the native
+                    # /... path codex/claude expect on Linux.
+                    from aha_cli.store.ws_target import wsl_workspace_native_path
+
+                    native = wsl_workspace_native_path(workspace_raw)
+                    if native:
+                        workspace_raw = native
+                workspace = Path(workspace_raw)
                 if not workspace.exists():
                     append_event(root, run_id, "workspace_missing", {"task_id": item_task_id, "workspace_path": str(workspace)})
                     workspace = root

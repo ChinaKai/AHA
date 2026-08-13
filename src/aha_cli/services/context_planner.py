@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 from pathlib import Path
 
@@ -81,6 +82,16 @@ def _task_workspace(task: dict | None) -> Path | None:
     workspace_text = str((task or {}).get("workspace_path") or "").strip()
     if not workspace_text:
         return None
+    if os.environ.get("AHA_WSL_DISTRO"):
+        # Running inside a WSL backend: the workspace is stored as a WSL UNC
+        # path (\\wsl.localhost\\<distro>\\...), which the Linux Path treats as a
+        # relative path and resolves to a nonexistent file. Convert to the
+        # distro-native /... path codex/claude and the KB actually use.
+        from aha_cli.store.ws_target import wsl_workspace_native_path
+
+        native = wsl_workspace_native_path(workspace_text)
+        if native:
+            workspace_text = native
     try:
         workspace = Path(workspace_text).expanduser().resolve()
     except OSError:

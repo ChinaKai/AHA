@@ -787,6 +787,11 @@ def run_codex_exec(
             session["resolved_model"] = model
             session["model"] = model
         session_id = session.get("backend_session_id") if session else None
+        # A session recorded by a different runtime (Windows vs WSL) is not
+        # resumable here; dropping resume starts a fresh codex thread instead
+        # of failing `codex exec resume`.
+        if session_id:
+            session_id = codex_session_resume_id(session)
         cmd = build_codex_exec_command(
             codex_bin=codex_bin,
             model=model,
@@ -913,6 +918,23 @@ def run_codex_exec(
     finally:
         if bridge_runtime is not None:
             bridge_runtime.__exit__(None, None, None)
+
+
+def codex_session_resume_id(session: dict | None) -> str | None:
+    """Return a resumable codex session id, or None when it cannot resume.
+
+    Codex stores sessions under ``~/.codex/sessions/...``. A session recorded
+    by a different runtime (Windows vs WSL) lives on the other filesystem view
+    and ``codex exec resume <id>`` would fail; drop the resume so the backend
+    starts fresh instead of erroring.
+    """
+    if not session:
+        return None
+    session_id = str(session.get("backend_session_id") or "").strip()
+    if not session_id:
+        return None
+    candidates = list((Path.home() / ".codex" / "sessions").glob(f"**/*{session_id}.jsonl"))
+    return session_id if candidates else None
 
 
 def build_codex_exec_command(

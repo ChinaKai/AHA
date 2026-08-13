@@ -3,11 +3,34 @@
 from __future__ import annotations
 
 import hashlib
+import os
 import re
 from pathlib import Path
 
 from aha_cli.domain.models import utc_now
 from aha_cli.store.io import read_json, write_json
+
+
+def _normalize_workspace_path(workspace: Path) -> Path:
+    """Return a workspace path usable for git/manifest lookup on this host.
+
+    A task workspace may be stored as a WSL UNC path
+    (``\\\\wsl.localhost\\<distro>\\...``). Inside a WSL backend process the
+    Linux ``Path`` treats that as a relative path and can neither read ``.git``
+    nor produce a stable project key; convert it to the distro-native ``/...``
+    path. On Windows (Web service) the UNC is already resolvable, so it is left
+    untouched unless ``AHA_WSL_DISTRO`` says we are inside the distro.
+    """
+    workspace = Path(workspace).expanduser()
+    if not os.environ.get("AHA_WSL_DISTRO"):
+        return workspace
+    text = str(workspace)
+    if not text.startswith(("\\\\wsl.localhost\\", "\\\\wsl$\\")):
+        return workspace
+    from aha_cli.store.ws_target import wsl_workspace_native_path
+
+    native = wsl_workspace_native_path(text)
+    return Path(native) if native else workspace
 
 PROJECT_IDENTITY_SCHEMA_VERSION = 2
 LOCAL_PROJECT_BINDINGS_SCHEMA_VERSION = 1
@@ -111,7 +134,7 @@ def local_project_bindings_path(aha_root: Path) -> Path:
 
 
 def _workspace_binding_key(workspace: Path) -> str:
-    return str(Path(workspace).expanduser().resolve())
+    return str(_normalize_workspace_path(workspace).resolve())
 
 
 def _read_local_project_bindings(aha_root: Path | None) -> list[dict]:
@@ -336,7 +359,7 @@ def resolve_project_identity(
     aha_root: Path | None = None,
 ) -> dict:
     """Resolve a workspace through synced manifests before using derived keys."""
-    workspace = Path(workspace).expanduser()
+    workspace = _normalize_workspace_path(workspace)
     git_identity = normalize_git_remote(git_remote_for(workspace))
     derived_aliases = derived_project_key_aliases(workspace, goal=goal)
     matches = [

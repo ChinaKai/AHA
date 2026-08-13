@@ -8,6 +8,7 @@ import unittest
 from unittest import mock
 
 from aha_cli.cli import append_message, main
+from aha_cli.services.backend_runtime import _write_state
 from aha_cli.services.chat import chat_offset_path
 from aha_cli.store.filesystem import (
     add_agent,
@@ -180,6 +181,60 @@ class TaskCommandActionTests(unittest.TestCase):
         self.assertEqual(detail["status"], "awaiting_user")
         self.assertEqual(detail["agents"][0]["status"], "interrupted")
         self.assertTrue(any(event["type"] == "agent_interrupted" for event in events))
+
+    def test_interrupt_selected_agent_stops_real_running_backend_and_records_offset(self) -> None:
+        # Regression: stop_backend read `state` in _stop_wsl_backend_process
+        # before assigning it (UnboundLocalError), so an interrupt on a running
+        # backend crashed before advancing the offset. This exercises the real
+        # stop_backend path (previous tests mock it away).
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            run_id = self.init_run(root)
+            set_task_status(root, run_id, "task-001", "running")
+            set_agent_status(root, run_id, "task-001", "main", "running")
+            append_message(root, run_id, "main", "queued", sender="browser", task_id="task-001", role="main")
+
+            _write_state(
+                root,
+                run_id,
+                "main",
+                {
+                    "target": "main",
+                    "task_id": "task-001",
+                    "backend": "codex-chat",
+                    "status": "running",
+                    "pid": 4242,
+                    "managed": True,
+                    "command": [],
+                },
+                task_id="task-001",
+            )
+
+            def fake_pid_running(pid: object) -> bool:
+                fake_pid_running.calls = getattr(fake_pid_running, "calls", 0) + 1
+                # Alive for the first two status checks, then dead so stop_backend
+                # exits its wait loop promptly.
+                return fake_pid_running.calls < 3
+
+            with (
+                mock.patch("aha_cli.services.backend_runtime.pid_is_running", side_effect=fake_pid_running),
+                mock.patch("aha_cli.services.backend_runtime._discover_backend_process", return_value=None),
+                mock.patch("aha_cli.services.backend_runtime._stop_wsl_backend_process", return_value=None),
+                mock.patch("aha_cli.services.backend_runtime.process_control.process_group_id", return_value=4242),
+                mock.patch("aha_cli.services.backend_runtime.process_control.signal_process_group"),
+            ):
+                message, payload = interrupt_selected_agent(root, run_id, "task-001", "main")
+
+            offset = json.loads(chat_offset_path(run_dir(root, run_id), "main", "task-001").read_text(encoding="utf-8"))["offset"]
+            inbox_size = inbox_path(root, run_id, "main").stat().st_size
+            detail = task_snapshot(root, run_id, "task-001")["task"]
+
+        self.assertIn("Interrupted main", message)
+        self.assertTrue(payload["interrupted"])
+        self.assertEqual(offset, inbox_size)
+        self.assertEqual(detail["status"], "awaiting_user")
+        self.assertEqual(detail["agents"][0]["status"], "interrupted")
+        self.assertIn("工作异常中断", detail["agents"][0].get("recovery_context") or "")
 
     def test_interrupt_selected_agent_stops_idle_running_backend_and_records_offset(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
