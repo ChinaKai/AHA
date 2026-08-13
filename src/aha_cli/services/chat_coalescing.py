@@ -25,6 +25,34 @@ def _group_message_key(item: dict) -> tuple[str, str, str] | None:
     return task_id, chat_id, user_key
 
 
+def _is_backend_switch_handoff(item: dict) -> bool:
+    """Match the message written by ``switch_agent_backend`` after an agent
+    configuration change. It carries no user instruction; when a real message
+    follows it should be merged so the agent resumes in one turn."""
+    if str(item.get("sender") or "").strip().lower() != "aha":
+        return False
+    if str(item.get("from_agent") or "").strip().lower() != "aha":
+        return False
+    if str(item.get("coordination") or "").strip().lower() != "backend_switch":
+        return False
+    if item.get("command_namespace") or item.get("result_policy"):
+        return False
+    return True
+
+
+def _is_consumable_agent_message(item: dict) -> bool:
+    """A message the backend worker should actually process: has body text, is
+    not a backend-switch handoff (those merge into the next message), and is not
+    a feishu group message (which has its own coalescing path)."""
+    if not str(item.get("message") or "").strip():
+        return False
+    if _is_backend_switch_handoff(item):
+        return False
+    if str(item.get("sender") or "").strip().lower() == "feishu":
+        return False
+    return True
+
+
 def _group_message_text(item: dict) -> str:
     return str(item.get("feishu_original_text") or item.get("message") or "").strip()
 
@@ -101,6 +129,12 @@ def next_task_message_batch(
     first_item, first_offset = relevant[0]
     key = _group_message_key(first_item)
     if key is None:
+        # Coalesce a backend-switch handoff with the next consumable message so
+        # the agent resumes in a single turn instead of spinning one empty round.
+        if _is_backend_switch_handoff(first_item):
+            merged = _merge_backend_switch_with_next(relevant)
+            if merged is not None:
+                return merged
         return dict(first_item), first_offset, {"merged_count": 1, "omitted_count": 0}
     grouped: list[tuple[dict, int]] = [(first_item, first_offset)]
     for item, item_offset in relevant[1:]:
@@ -111,6 +145,47 @@ def next_task_message_batch(
         return dict(first_item), first_offset, {"merged_count": 1, "omitted_count": 0}
     merged, stats = _merged_group_item([item for item, _item_offset in grouped])
     return merged, grouped[-1][1], stats
+
+
+def _merge_backend_switch_with_next(relevant: list[tuple[dict, int]]) -> tuple[dict, int, dict] | None:
+    """Merge a backend-switch handoff into the next non-handoff message.
+
+    Returns ``(merged_item, last_offset, stats)`` where ``last_offset`` is the
+    offset of the final consumed message so the worker does not re-read it. The
+    handoff text is prefixed onto the following message so the agent reads the
+    handoff summary before the new instruction in the same turn.
+    """
+    handoff_item, _handoff_offset = relevant[0]
+    handoff_text = str(handoff_item.get("message") or "").strip()
+    next_item: dict | None = None
+    next_offset = _handoff_offset
+    for item, item_offset in relevant[1:]:
+        if _is_consumable_agent_message(item):
+            next_item = dict(item)
+            next_offset = item_offset
+            break
+        # Skip over intermediate handoffs (e.g. repeated config changes) but keep
+        # scanning for a real message; do not consume non-message records yet.
+        if not _is_backend_switch_handoff(item):
+            break
+    if next_item is None:
+        return None
+    next_text = str(next_item.get("message") or "").strip()
+    prefix = handoff_text
+    if next_text:
+        prefix = f"{prefix}\n\n{next_text}"
+    next_item["message"] = prefix
+    next_item["merged_count"] = 2
+    next_item["feishu_merged_count"] = 2
+    stats = {
+        "merged_count": 2,
+        "omitted_count": 0,
+        "latest_truncated": False,
+        "first_ts": str(handoff_item.get("ts") or ""),
+        "last_ts": str(next_item.get("ts") or ""),
+        "handoff_merged": True,
+    }
+    return next_item, next_offset, stats
 
 
 __all__ = [

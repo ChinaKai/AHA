@@ -810,10 +810,15 @@ def agent_chat(root: Path, run_id: str, args, *, backend_name: str) -> int:
                                 batch_offset,
                                 batch_item,
                             )
+                            merged_event = (
+                                "backend_switch_merged"
+                                if bool(batch_stats.get("handoff_merged"))
+                                else "feishu_group_messages_coalesced"
+                            )
                             append_event(
                                 root,
                                 run_id,
-                                "feishu_group_messages_coalesced",
+                                merged_event,
                                 {
                                     "target": args.target,
                                     "task_id": worker_task_id,
