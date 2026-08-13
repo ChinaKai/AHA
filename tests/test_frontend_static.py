@@ -658,6 +658,17 @@ const configuredHtml = config.configuredModelsHtml([
 ], [{ id: "p1", name: "Gateway" }]);
 if (configuredHtml.indexOf('data-bootstrap-model-backend-group="codex"') > configuredHtml.indexOf('data-bootstrap-model-backend-group="claude"')) process.exit(1);
 if (configuredHtml.indexOf("a-model") > configuredHtml.indexOf("b-model")) process.exit(1);
+// A binding with an empty model_id still renders visibly: placeholder name plus
+// edit/remove buttons, and the hidden model field stays empty so saving does
+// not persist the placeholder as a model id. Whitespace-only ids are trimmed to
+// the placeholder too, so a stray space does not show as a blank row.
+const unnamedRow = config.configuredModelRowHtml({ provider_id: "p1", model_id: "", backend: "claude", wire_api: "anthropic_messages" }, "Gateway");
+if (!unnamedRow.includes("<strong>(unnamed)</strong>")) process.exit(1);
+if (!unnamedRow.includes("data-bootstrap-edit-binding") || !unnamedRow.includes("data-bootstrap-remove-binding")) process.exit(1);
+if (!unnamedRow.includes('data-bootstrap-binding-field="model" value=""')) process.exit(1);
+const whitespaceRow = config.configuredModelRowHtml({ provider_id: "p1", model_id: "   ", backend: "claude", wire_api: "anthropic_messages" }, "Gateway");
+if (!whitespaceRow.includes("<strong>(unnamed)</strong>")) process.exit(1);
+if (whitespaceRow.includes("value=\"   \"")) process.exit(1);
 // Binding rows carry hidden role-model fields so editing preserves them.
 const roleRowHtml = config.configuredModelsHtml([
   { provider_id: "p1", model_id: "deepseek-v4", backend: "claude", wire_api: "anthropic_messages", context_window: 262144, opus_model: "claude-opus-5" }
@@ -1462,7 +1473,7 @@ controller.unmount();
         self.assertIn('id="token-usage"', integration_actions)
         self.assertNotIn('id="token-usage-popover"', integration_actions)
         self.assertLess(html.index('id="skills-console-popover"'), html.index('id="token-usage-popover"'))
-        self.assertIn('<link rel="stylesheet" href="/static/styles.css?v=provider-models-v9">', html)
+        self.assertIn('<link rel="stylesheet" href="/static/styles.css?v=provider-models-v10">', html)
         self.assertIn('<script src="/static/i18n.js?v=permissions-v6"></script>', html)
         self.assertIn('"task.open": "任务"', i18n)
         self.assertIn('"agents.open": "智能体"', i18n)
@@ -5852,8 +5863,8 @@ if (resetCount !== 1 || emptyWorkspaceCount !== 1) {
         self.assertIn('<script src="/static/i18n.js?v=permissions-v6"></script>', html)
         self.assertIn('<script src="/static/app_helpers.js"></script>', html)
         self.assertIn('<script src="/static/task_metadata.js?v=hardware-terminal-v1"></script>', html)
-        self.assertIn('<script src="/static/bootstrap_config.js?v=provider-models-v9"></script>', html)
-        self.assertIn('<script src="/static/bootstrap_controller.js?v=provider-models-v9"></script>', html)
+        self.assertIn('<script src="/static/bootstrap_config.js?v=provider-models-v10"></script>', html)
+        self.assertIn('<script src="/static/bootstrap_controller.js?v=provider-models-v10"></script>', html)
         self.assertIn('<script src="/static/task_form.js?v=hardware-terminal-v1"></script>', html)
         self.assertIn('<script src="/static/task_config_controller.js?v=browser-profile-select-v47"></script>', html)
         self.assertIn('<script src="/static/agent_config_controller.js?v=reasoning-effort-v1"></script>', html)
@@ -5898,16 +5909,16 @@ if (resetCount !== 1 || emptyWorkspaceCount !== 1) {
         self.assertIn('<script src="/static/run_actions.js?v=web-upgrade-v12"></script>', html)
         self.assertIn('<script src="/static/task_create_controller.js?v=browser-profile-select-v47"></script>', html)
         self.assertIn('<script src="/static/app_actions.js"></script>', html)
-        self.assertIn('<script src="/static/settings_controller.js?v=provider-models-v9"></script>', html)
+        self.assertIn('<script src="/static/settings_controller.js?v=provider-models-v10"></script>', html)
         self.assertIn('<script src="/static/run_controller.js?v=permissions-v1"></script>', html)
         self.assertIn('<script src="/static/message_flow.js?v=hardware-terminal-v1"></script>', html)
         self.assertIn('<script src="/static/render_scheduler.js"></script>', html)
         self.assertIn('<script src="/static/confirm_dialog.js"></script>', html)
         self.assertIn('<script src="/static/controller_registry.js?v=permissions-v1"></script>', html)
         self.assertIn('<script src="/static/app_bridge.js?v=permissions-v1"></script>', html)
-        self.assertIn('<script src="/static/app_controller_factory.js?v=provider-models-v9"></script>', html)
+        self.assertIn('<script src="/static/app_controller_factory.js?v=provider-models-v10"></script>', html)
         self.assertIn('<script src="/static/app_runtime_setup.js?v=permissions-v1"></script>', html)
-        self.assertIn('<script src="/static/app_runtime_wiring.js?v=provider-models-v9"></script>', html)
+        self.assertIn('<script src="/static/app_runtime_wiring.js?v=provider-models-v10"></script>', html)
         self.assertIn('<script src="/static/app.js"></script>', html)
         self.assertLess(html.find("time_format.js"), html.find("app.js"))
         self.assertLess(html.find("time_format.js"), html.find("i18n.js"))

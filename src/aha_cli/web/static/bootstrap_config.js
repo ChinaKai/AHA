@@ -242,7 +242,12 @@
   }
 
   function configuredModelRowHtml(binding, providerName = "") {
-    const modelId = configString(binding.model_id || binding.model);
+    const modelId = configString(binding.model_id || binding.model).trim();
+    // A binding whose model_id is empty or whitespace (e.g. an Add Model left the
+    // ID blank or an edit cleared it) must still render visibly so the user can
+    // identify and edit it. Show a placeholder name; the hidden field keeps the
+    // real (trimmed) value so saving won't persist the placeholder as a model id.
+    const displayModelId = modelId || "(unnamed)";
     const contextWindow = Number(binding.context_window) > 0 ? Number(binding.context_window) : 0;
     const contextBadge = contextWindow > 0
       ? `<span class="bootstrap-model-binding-ctx" title="Context window">ctx ${escapeHtml(formatContextWindow(contextWindow))}</span>`
@@ -259,7 +264,7 @@
         <input type="hidden" data-bootstrap-binding-field="opus_model" value="${escapeHtml(configString(binding.opus_model))}">
         <input type="hidden" data-bootstrap-binding-field="sonnet_model" value="${escapeHtml(configString(binding.sonnet_model))}">
         <input type="hidden" data-bootstrap-binding-field="haiku_model" value="${escapeHtml(configString(binding.haiku_model))}">
-        <div><strong>${escapeHtml(modelId)}</strong>${contextBadge}<div class="field-help">${escapeHtml(providerName || binding.provider_id)} · ${escapeHtml(configString(binding.wire_api).replaceAll("_", " "))}</div></div>
+        <div><strong>${escapeHtml(displayModelId)}</strong>${contextBadge}<div class="field-help">${escapeHtml(providerName || binding.provider_id)} · ${escapeHtml(configString(binding.wire_api).replaceAll("_", " "))}</div></div>
         <div class="bootstrap-model-binding-actions">
           <button class="bootstrap-icon-button" type="button" data-bootstrap-edit-binding title="Edit model">&#9998;</button>
           <button class="bootstrap-icon-button" type="button" data-bootstrap-remove-binding title="Remove">x</button>
