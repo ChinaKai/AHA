@@ -779,6 +779,14 @@ if (!settings.includes('<option value="env">ENV</option>')) process.exit(1);
 const officialSettings = config.bootstrapConfigFormHtml({ mode: "settings", config: { codex: { model_source: "official" }, claude: { model_source: "env" } } });
 if (!officialSettings.includes('<option value="official" selected>Official</option>')) process.exit(1);
 if (!officialSettings.includes('<option value="env" selected>ENV</option>')) process.exit(1);
+// The Codex card shows a light logout hint when ENV models are in scope, and
+// hides it when the source is official only.
+if (officialSettings.includes('data-bootstrap-model-source-hint="codex"')) process.exit(1);
+const envHintSettings = config.bootstrapConfigFormHtml({ mode: "settings", config: { codex: { model_source: "env" }, claude: { model_source: "official" } } });
+if (!envHintSettings.includes('data-bootstrap-model-source-hint="codex"')) process.exit(1);
+if (!envHintSettings.includes('data-i18n="settings.codex_model_source_hint"')) process.exit(1);
+if (!envHintSettings.includes("codex logout")) process.exit(1);
+if (envHintSettings.includes('data-bootstrap-model-source-hint="claude"')) process.exit(1);
 // bootstrapModelFilterValue reads the config field, not a UI-only filter.
 function formWithSource(value) {
   return { querySelector(sel) { return sel.includes("model_source") ? { value } : { value: "" }; } };
@@ -1189,6 +1197,8 @@ if (payload.claude.proxy.enabled !== false || Object.keys(payload.claude.proxy).
         self.assertIn('"feishu.recent_private_chats": "最近检测私聊"', i18n)
         self.assertIn('"feishu.notifications": "Task status push"', (root / "i18n.js").read_text(encoding="utf-8"))
         self.assertIn('"feishu.notifications": "任务状态推送"', (root / "i18n.js").read_text(encoding="utf-8"))
+        self.assertIn('"settings.codex_model_source_hint": "If ENV models feel slow, run `codex logout` to clear stale ChatGPT login state."', (root / "i18n.js").read_text(encoding="utf-8"))
+        self.assertIn('"settings.codex_model_source_hint": "ENV 模型偏慢时可运行 `codex logout` 清理 ChatGPT 登录残留以提速。"', (root / "i18n.js").read_text(encoding="utf-8"))
         self.assertIn('"feishu.notifications_toggle": "Push task status changes to owner"', (root / "i18n.js").read_text(encoding="utf-8"))
         self.assertIn('"feishu.notifications_toggle": "向主人私聊推送 Task 状态变化"', (root / "i18n.js").read_text(encoding="utf-8"))
         self.assertIn('"feishu.cleanup_old_app": "Clean old App state"', (root / "i18n.js").read_text(encoding="utf-8"))
@@ -1452,7 +1462,7 @@ controller.unmount();
         self.assertIn('id="token-usage"', integration_actions)
         self.assertNotIn('id="token-usage-popover"', integration_actions)
         self.assertLess(html.index('id="skills-console-popover"'), html.index('id="token-usage-popover"'))
-        self.assertIn('<link rel="stylesheet" href="/static/styles.css?v=provider-models-v7">', html)
+        self.assertIn('<link rel="stylesheet" href="/static/styles.css?v=provider-models-v9">', html)
         self.assertIn('<script src="/static/i18n.js?v=permissions-v6"></script>', html)
         self.assertIn('"task.open": "任务"', i18n)
         self.assertIn('"agents.open": "智能体"', i18n)
@@ -5842,8 +5852,8 @@ if (resetCount !== 1 || emptyWorkspaceCount !== 1) {
         self.assertIn('<script src="/static/i18n.js?v=permissions-v6"></script>', html)
         self.assertIn('<script src="/static/app_helpers.js"></script>', html)
         self.assertIn('<script src="/static/task_metadata.js?v=hardware-terminal-v1"></script>', html)
-        self.assertIn('<script src="/static/bootstrap_config.js?v=provider-models-v7"></script>', html)
-        self.assertIn('<script src="/static/bootstrap_controller.js?v=provider-models-v7"></script>', html)
+        self.assertIn('<script src="/static/bootstrap_config.js?v=provider-models-v9"></script>', html)
+        self.assertIn('<script src="/static/bootstrap_controller.js?v=provider-models-v9"></script>', html)
         self.assertIn('<script src="/static/task_form.js?v=hardware-terminal-v1"></script>', html)
         self.assertIn('<script src="/static/task_config_controller.js?v=browser-profile-select-v47"></script>', html)
         self.assertIn('<script src="/static/agent_config_controller.js?v=reasoning-effort-v1"></script>', html)
@@ -5888,16 +5898,16 @@ if (resetCount !== 1 || emptyWorkspaceCount !== 1) {
         self.assertIn('<script src="/static/run_actions.js?v=web-upgrade-v12"></script>', html)
         self.assertIn('<script src="/static/task_create_controller.js?v=browser-profile-select-v47"></script>', html)
         self.assertIn('<script src="/static/app_actions.js"></script>', html)
-        self.assertIn('<script src="/static/settings_controller.js?v=provider-models-v7"></script>', html)
+        self.assertIn('<script src="/static/settings_controller.js?v=provider-models-v9"></script>', html)
         self.assertIn('<script src="/static/run_controller.js?v=permissions-v1"></script>', html)
         self.assertIn('<script src="/static/message_flow.js?v=hardware-terminal-v1"></script>', html)
         self.assertIn('<script src="/static/render_scheduler.js"></script>', html)
         self.assertIn('<script src="/static/confirm_dialog.js"></script>', html)
         self.assertIn('<script src="/static/controller_registry.js?v=permissions-v1"></script>', html)
         self.assertIn('<script src="/static/app_bridge.js?v=permissions-v1"></script>', html)
-        self.assertIn('<script src="/static/app_controller_factory.js?v=provider-models-v7"></script>', html)
+        self.assertIn('<script src="/static/app_controller_factory.js?v=provider-models-v9"></script>', html)
         self.assertIn('<script src="/static/app_runtime_setup.js?v=permissions-v1"></script>', html)
-        self.assertIn('<script src="/static/app_runtime_wiring.js?v=provider-models-v7"></script>', html)
+        self.assertIn('<script src="/static/app_runtime_wiring.js?v=provider-models-v9"></script>', html)
         self.assertIn('<script src="/static/app.js"></script>', html)
         self.assertLess(html.find("time_format.js"), html.find("app.js"))
         self.assertLess(html.find("time_format.js"), html.find("i18n.js"))

@@ -843,6 +843,9 @@
                     <option value="env"${configString(codex.model_source, "both") === "env" ? " selected" : ""}>ENV</option>
                   </select>
                   <div class="field-help">Model pickers for tasks, agents and KB distill show only these sources. Save to apply.</div>
+                  ${configString(codex.model_source, "both") !== "official"
+                    ? '<div class="field-help" data-bootstrap-model-source-hint="codex" data-i18n="settings.codex_model_source_hint">ENV 模型偏慢时可运行 <code>codex logout</code> 清理 ChatGPT 登录残留以提速。</div>'
+                    : ""}
                 </label>
                 <label class="field-label">
                   <span>Reasoning effort</span>

@@ -49,6 +49,7 @@
     function renderContent() {
       if (!elements.settingsContentEl) return;
       elements.settingsContentEl.innerHTML = bootstrapConfigFormHtml({ mode: "settings", submitLabel: "Save Settings" });
+      window.AHAI18n?.apply(elements.settingsContentEl);
     }
 
     async function open(options = {}) {
