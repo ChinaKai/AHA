@@ -236,10 +236,14 @@
       </div>`;
   }
 
-  function providerOptionsHtml(providers) {
+  function providerOptionsHtml(providers, selected = "") {
     const rows = providerList(providers);
     if (!rows.length) return '<option value="">Save a provider first</option>';
-    return rows.map(provider => `<option value="${escapeHtml(configString(provider.id))}">${escapeHtml(configString(provider.name, provider.id))}</option>`).join("");
+    const selectedId = configString(selected);
+    return rows.map(provider => {
+      const id = configString(provider.id);
+      return `<option value="${escapeHtml(id)}" ${id === selectedId ? "selected" : ""}>${escapeHtml(configString(provider.name, provider.id))}</option>`;
+    }).join("");
   }
 
   function configuredModelRowHtml(binding, providerName = "") {
@@ -309,7 +313,7 @@
             <button class="bootstrap-icon-button" type="button" data-bootstrap-model-editor-close title="Close">x</button>
           </div>
           <div class="bootstrap-env-fields">
-            <label class="field-label"><span>Provider</span><select data-bootstrap-model-field="provider_id">${providerOptionsHtml(providers)}</select></label>
+            <label class="field-label"><span>Provider</span><select data-bootstrap-model-field="provider_id">${providerOptionsHtml(providers, providerId)}</select></label>
             <label class="field-label"><span>Model ID</span><input data-bootstrap-model-field="model_id" placeholder="model-name" value="${escapeHtml(configString(binding.model_id))}"></label>
             <label class="field-label"><span>Backend</span>
               <select data-bootstrap-model-field="backend">
