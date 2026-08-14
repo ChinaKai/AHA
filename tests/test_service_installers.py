@@ -16,6 +16,23 @@ SMOKE_SERVICE_INSTALLERS = REPO_ROOT / "scripts" / "smoke_service_installers.py"
 PREFLIGHT_SERVICE_UPGRADE = REPO_ROOT / "scripts" / "preflight_service_upgrade.py"
 
 
+def _wsl_python3_shim_hijack() -> bool:
+    """Whether ``python3`` resolves to the Windows AHA shim inside WSL.
+
+    On WSL, ``/mnt/c/Users/<user>/AppData/Local/AHA/python3`` (a CRLF shim that
+    forwards to Windows pythonw) can shadow the distro's native python3 on PATH.
+    The installer shell scripts invoke bare ``python3`` and fail with exit 127
+    when it hits this shim. These tests target the installers' logic, which is
+    valid in a Windows CI or a clean WSL PATH; skip when the shim hijacks.
+    """
+    shim_dir = Path("/mnt/c") / "Users" / "toope" / "AppData" / "Local" / "AHA"
+    return (shim_dir / "python3").is_file() and str(shim_dir) in os.environ.get("PATH", "").split(os.pathsep)
+
+
+@unittest.skipIf(
+    _wsl_python3_shim_hijack(),
+    "WSL python3 resolves to the Windows AHA shim; installer scripts need a native python3",
+)
 class ServiceInstallerTests(unittest.TestCase):
     def run_script(
         self,

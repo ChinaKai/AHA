@@ -10,6 +10,19 @@ WSL_UNC_PREFIXES = ("\\\\wsl.localhost\\", "\\\\wsl$\\")
 WSL_UNC_RE = re.compile(r"^\\\\wsl(?:\.localhost|\\$)\\([^\\/]+)\\(.*)$", re.IGNORECASE)
 WINDOWS_DRIVE_RE = re.compile(r"^([A-Za-z]):[\\/]?(.*)$")
 
+# Platform-layer public interface (L4 分层固化): business modules must only
+# consume these stable entrypoints, never the underscore-prefixed internals.
+__all__ = [
+    "WSL_UNC_PREFIXES",
+    "is_wsl_workspace",
+    "wsl_distro_and_path",
+    "windows_path_to_wsl",
+    "wsl_native_home",
+    "wsl_workspace_native_path",
+    "wsl_unc_from_native",
+    "host_native_path",
+]
+
 
 def _strip_wsl_unc_prefix(text: str) -> str | None:
     """Strip a WSL UNC prefix and return the remainder after the distro.

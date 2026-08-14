@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
 
+from aha_cli.services.agent_watchdog import scan_all_runs
 from aha_cli.services.run_archive import RunArchiveError
 from aha_cli.services.run_retention_policy import (
     retention_policy_report_due,
@@ -344,6 +345,7 @@ async def run_ui_server(root: Path, run_id: str, host: str, port: int, _poll_int
     feishu_channel = None
     retention_policy_reporter = None
     managed_process_reconciler = None
+    agent_watchdog = None
     try:
         server = await asyncio.start_server(lambda r, w: handle_ui_client(root, run_id, r, w, auth_token, host, port), host, port)
         write_service_runtime(root, host=host, port=port, auth_required=bool(auth_token), status="running")
@@ -351,6 +353,7 @@ async def run_ui_server(root: Path, run_id: str, host: str, port: int, _poll_int
         feishu_channel = asyncio.create_task(run_feishu_channel(root, run_id))
         retention_policy_reporter = asyncio.create_task(retention_policy_report_loop(root, run_id))
         managed_process_reconciler = asyncio.create_task(managed_process_reconcile_loop(root))
+        agent_watchdog = asyncio.create_task(agent_watchdog_loop(root))
         addresses = ", ".join(str(sock.getsockname()) for sock in server.sockets or [])
         if run_id:
             print(f"AHA dashboard for run {run_id}: http://{host}:{port}")
@@ -366,6 +369,10 @@ async def run_ui_server(root: Path, run_id: str, host: str, port: int, _poll_int
             managed_process_reconciler.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await managed_process_reconciler
+        if agent_watchdog is not None:
+            agent_watchdog.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await agent_watchdog
         await asyncio.to_thread(stop_all_managed_processes, root)
         write_service_runtime(root, host=host, port=port, auth_required=bool(auth_token), status="stopped")
         if weixin_keepalive is not None:
@@ -374,7 +381,7 @@ async def run_ui_server(root: Path, run_id: str, host: str, port: int, _poll_int
             feishu_channel.cancel()
         if retention_policy_reporter is not None:
             retention_policy_reporter.cancel()
-        for task in (weixin_keepalive, feishu_channel, retention_policy_reporter, managed_process_reconciler):
+        for task in (weixin_keepalive, feishu_channel, retention_policy_reporter, managed_process_reconciler, agent_watchdog):
             if task is None:
                 continue
             with contextlib.suppress(asyncio.CancelledError):
@@ -389,6 +396,21 @@ async def managed_process_reconcile_loop(root: Path) -> None:
         await asyncio.sleep(MANAGED_PROCESS_RECONCILE_SECONDS)
         try:
             await asyncio.to_thread(reconcile_managed_processes, root)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            pass
+
+
+WATCHDOG_RECONCILE_SECONDS = 20.0
+
+
+async def agent_watchdog_loop(root: Path) -> None:
+    """L3 self-healing sweep: periodically restart stuck backend workers."""
+    while True:
+        await asyncio.sleep(WATCHDOG_RECONCILE_SECONDS)
+        try:
+            await asyncio.to_thread(scan_all_runs, root)
         except asyncio.CancelledError:
             raise
         except Exception:

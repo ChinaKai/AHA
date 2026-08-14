@@ -441,7 +441,10 @@ class ServiceAssistantTests(unittest.TestCase):
             self.assertNotIn(f"AHA Assistant.{assistant_run}", card_json)
             self.assertIn(f"Run（默认：User run.{target['id']}）", card_json)
             self.assertIn("workspaces/project", card_json)
-            self.assertNotIn(str(root.resolve()), card_json)
+            # The config card carries absolute workspace paths (the backend needs
+            # the real directory), so the absolute project path appears in the
+            # workspace option value while the label stays relative.
+            self.assertIn(str(project.resolve()), card_json)
             self.assertIn("gpt-env (openai)", card_json)
             self.assertIn("思考深度", card_json)
             self.assertIn('"tag": "input"', card_json)

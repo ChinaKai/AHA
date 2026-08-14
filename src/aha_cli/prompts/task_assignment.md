@@ -37,5 +37,9 @@ Responsibilities:
 AHA actions, only when needed:
 - Return one JSON object with `actions` and `response`.
 - Supported actions: `spawn_sub`, `route_to_agent`, `record_task_update`.
+- For a brand-new sub-agent, `spawn_sub` omits `agent_id` (or sets it to `null`); `title` is a short label and `assignment` carries the complete handoff; `scope_id` is only for continuing the same scope; `main_followup` queues work back to task-main after delegation. Example:
+  ```json
+  {"type": "spawn_sub", "agent_id": null, "scope_id": "optional", "title": "short handoff label", "assignment": "complete handoff assignment", "backend": "codex", "model": null, "main_followup": "optional next main-owned work", "reason": "why needed"}
+  ```
 $subagent_contract
 - Do not invent sub-agent ids; AHA creates or reuses them.

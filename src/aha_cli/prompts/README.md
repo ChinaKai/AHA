@@ -51,7 +51,7 @@ AHA 的所有 LLM 提示词集中在此目录，通过 `aha_cli.services.prompt_
 - backend_chat_delta, backend_chat_full, backend_claude_public_updates, backend_commit_policy_full
 - backend_compact_summary_context, backend_compact_summary_missing, backend_compact_summary_truncated_suffix
 - backend_context_delta, backend_context_pack, backend_coordination_policy_full, backend_input_image_guidance
-- backend_knowledge_enabled_empty, backend_prompt_prefix
+- backend_knowledge_enabled_empty, backend_managed_processes, backend_prompt_prefix
 - backend_recent_conversation_chain, backend_recent_conversation_chains, backend_recent_conversation_empty, backend_recent_conversation_line, backend_recent_supervision_conversation
 - backend_recovery_agent_context, backend_recovery_context, backend_recovery_sub_agent_notice, backend_request_policy
 - backend_result_conversation_omitted, backend_sticky_context, backend_subagent_contract

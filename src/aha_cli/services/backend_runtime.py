@@ -50,6 +50,26 @@ CODEX_CONTEXT_DROP_MIN_DELTA_PERCENT = 20.0
 CODEX_CONTEXT_DROP_MIN_DELTA_TOKENS = 30_000
 PROCESS_AGENT_BACKENDS = {"codex", "claude"}
 
+# Platform-layer public interface (L4 分层固化): the backend process lifecycle
+# is a stable platform capability. Business modules consume these entrypoints;
+# underscore-prefixed helpers are internal and may change without notice.
+__all__ = [
+    "PROCESS_AGENT_BACKENDS",
+    "safe_target",
+    "backend_key",
+    "backend_state_path",
+    "backend_log_path",
+    "backend_lock_path",
+    "locked_backend",
+    "pid_is_running",
+    "detect_runtime_context_compaction",
+    "backend_status",
+    "mark_backend_stopped",
+    "stop_task_backends",
+    "start_backend",
+    "stop_backend",
+]
+
 
 def safe_target(target: str) -> str:
     return (target or "main").replace("/", "_")

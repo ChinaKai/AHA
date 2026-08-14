@@ -68,9 +68,16 @@ def add_user_backend_paths(env: dict[str, str], *, home: Path | None = None) -> 
 
     zipapp_path = _running_zipapp()
     _ensure_windows_python3_shim(zipapp_path)
-    aha_dir = _aha_cli_dir(zipapp_path)
-    if aha_dir is not None:
-        candidates.insert(0, aha_dir)
+    # Prepend the running onebin's directory only when running as a packaged
+    # zipapp: the onebin ships its own ``aha`` + python3 shim that child backend
+    # processes must resolve. Under an editable/source install the ``aha``
+    # console-script is already on PATH via pip, so prepending sys.executable's
+    # directory here would shadow user bin dirs (.local/bin, nvm) with the
+    # system interpreter dir.
+    if zipapp_path is not None:
+        aha_dir = _aha_cli_dir(zipapp_path)
+        if aha_dir is not None:
+            candidates.insert(0, aha_dir)
 
     existing = [item for item in env.get("PATH", "").split(os.pathsep) if item]
     merged: list[str] = []

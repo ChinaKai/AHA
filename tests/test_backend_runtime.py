@@ -972,10 +972,16 @@ class BackendRuntimeTests(unittest.TestCase):
                 self.run_cli("init", "--portable", "--backend", "codex")
                 cfg_path = root / ".aha" / "config.json"
                 cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
-                cfg["claude"]["env"] = {
-                    "ANTHROPIC_API_KEY": "test-key",
-                    "base_url": "https://claude.test",
-                }
+                # Claude env groups are a named list; the selected group is
+                # activated by passing ``env:<name>`` as the model.
+                cfg["claude"]["env"] = [
+                    {
+                        "name": "work",
+                        "ANTHROPIC_API_KEY": "test-key",
+                        "ANTHROPIC_BASE_URL": "https://claude.test",
+                        "ANTHROPIC_MODEL": "kimi-k2.6",
+                    }
+                ]
                 cfg_path.write_text(json.dumps(cfg), encoding="utf-8")
                 code, plan_output = self.run_cli("plan", "Claude env", "--agents", "1")
                 self.assertEqual(code, 0)
@@ -989,7 +995,7 @@ class BackendRuntimeTests(unittest.TestCase):
                     mock.patch("aha_cli.services.backend_runtime.subprocess.Popen", return_value=FakeProcess()) as popen,
                     mock.patch("aha_cli.services.backend_runtime.pid_is_running", side_effect=lambda pid: bool(pid)),
                 ):
-                    start_backend(root / ".aha", run_id, "main", backend="claude", task_id="task-001")
+                    start_backend(root / ".aha", run_id, "main", backend="claude", model="env:work", task_id="task-001")
 
         env = popen.call_args.kwargs["env"]
         self.assertEqual(env["ANTHROPIC_API_KEY"], "test-key")
