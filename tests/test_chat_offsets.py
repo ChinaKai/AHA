@@ -51,6 +51,20 @@ class ChatOffsetTests(unittest.TestCase):
             run / "runtime" / "chat-offset-task_001-sub_001.json",
         )
 
+    def test_inbox_path_isolates_each_task_and_keeps_run_level_path(self) -> None:
+        root = Path("/tmp/aha")
+        run_id = "run-001"
+
+        base = root / ".aha" / "runs" / run_id / "inbox"
+        self.assertEqual(inbox_path(root, run_id, "main"), base / "main.jsonl")
+        self.assertEqual(inbox_path(root, run_id, "main", "task-001"), base / "task-001" / "main.jsonl")
+        self.assertEqual(inbox_path(root, run_id, "main", "task-002"), base / "task-002" / "main.jsonl")
+        # Distinct tasks must never share an inbox file.
+        self.assertNotEqual(
+            inbox_path(root, run_id, "main", "task-001"),
+            inbox_path(root, run_id, "main", "task-002"),
+        )
+
     def test_load_chat_offset_recovers_from_stale_offset(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

@@ -85,7 +85,7 @@ def event_path(root: Path, run_id: str) -> Path:
 def inbox_path(root: Path, run_id: str, target: str, task_id: str | None = None) -> Path:
     safe_target = target.replace("/", "_")
     if task_id:
-        return run_dir(root, run_id) / "inbox" / safe_target.replace("/", "_") / f"{safe_target}.jsonl"
+        return run_dir(root, run_id) / "inbox" / task_id / f"{safe_target}.jsonl"
     return run_dir(root, run_id) / "inbox" / f"{safe_target}.jsonl"
 
 
