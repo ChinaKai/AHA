@@ -44,10 +44,16 @@ def _default_read_paths(root: Path, config: dict) -> list[str]:
     except (Exception, SystemExit):
         registered = []
     registered_paths = [str(item.get("path") or "").strip() for item in registered if str(item.get("path") or "").strip()]
+    from aha_cli.store.ws_target import host_native_path
+
     for value in [*configured_roots, *registered_paths]:
         if value and value not in paths:
+            # Config/workspace paths are stored in the AHA platform's view
+            # (Windows); convert to the current host's native view (e.g. /mnt/c
+            # inside WSL) so they resolve on the running process.
             try:
-                paths.append(str(Path(value).expanduser().resolve()))
+                resolved = Path(host_native_path(value, aha_home=root)).resolve()
+                paths.append(str(resolved))
             except OSError:
                 continue
     dh_dir = aha_home_path(root) / "feishu_group_state"

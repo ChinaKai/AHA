@@ -103,7 +103,14 @@ def knowledge_root(root: Path, config: dict | None = None) -> Path:
     if isinstance(knowledge_cfg, dict):
         override = knowledge_cfg.get("path")
         if override:
-            return Path(str(override)).expanduser()
+            # `~` must resolve against the AHA home's parent (the user home
+            # that owns the AHA home), not Path.home(), which inside a WSL
+            # backend resolves to the distro native home and would split the
+            # KB into a second copy. Windows drive/UNC overrides are converted
+            # to the current host's native view as well.
+            from aha_cli.store.ws_target import host_native_path
+
+            return Path(host_native_path(str(override), aha_home=root))
     return default_knowledge_dir(root)
 
 

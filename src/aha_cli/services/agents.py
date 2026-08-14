@@ -44,13 +44,15 @@ def read_path_candidates(root: Path) -> list[dict]:
         candidates.append({"type": "kb", "path": resolved_kb, "label": f"AHA Knowledge Base · {resolved_kb}"})
     except (Exception, SystemExit):
         pass
+    from aha_cli.store.ws_target import host_native_path
+
     seen: set[str] = set()
     for raw in config.get("workspace_roots") or []:
         text = str(raw or "").strip()
         if not text:
             continue
         try:
-            resolved = str(Path(text).expanduser().resolve())
+            resolved = str(Path(host_native_path(text, aha_home=root)).resolve())
         except OSError:
             continue
         if resolved not in seen:
@@ -65,7 +67,7 @@ def read_path_candidates(root: Path) -> list[dict]:
         if not raw:
             continue
         try:
-            resolved = str(Path(raw).expanduser().resolve())
+            resolved = str(Path(host_native_path(raw, aha_home=root)).resolve())
         except OSError:
             continue
         if resolved not in seen:
