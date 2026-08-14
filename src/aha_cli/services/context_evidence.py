@@ -69,7 +69,14 @@ def _task_workspace(root: Path, run_id: str, task_id: str) -> Path | None:
     except KeyError:
         return None
     workspace = str(task.get("workspace_path") or "").strip()
-    return Path(workspace).expanduser() if workspace else None
+    if not workspace:
+        return None
+    # The task workspace is stored in the AHA platform's view (Windows drive
+    # / UNC). Inside a WSL backend process the Linux Path would misresolve it,
+    # so convert to the current host's native view first.
+    from aha_cli.store.ws_target import host_native_path
+
+    return Path(host_native_path(workspace, aha_home=root))
 
 
 def record_context_pack_from_prompt_metrics(

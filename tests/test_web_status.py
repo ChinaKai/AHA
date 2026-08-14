@@ -492,6 +492,43 @@ class WebStatusTests(unittest.TestCase):
         self.assertEqual(consumed["agents"][0]["recovery_context"], "")
         self.assertIn("agent_recovery_context_consumed", event_log)
 
+    def test_recovered_stale_agent_advances_chat_offset(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Recover offset", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                set_task_status(root, run_id, "task-001", "running")
+                set_agent_status(root, run_id, "task-001", "main", "running")
+
+                # Deliver a message to the inbox, then leave the offset behind it.
+                append_message(root, run_id, "main", "hello", "browser", task_id="task-001")
+                from aha_cli.store.paths import inbox_path, run_dir
+                from aha_cli.services.chat_offsets import chat_offset_path, load_chat_offset, save_chat_offset
+                inbox = inbox_path(root, run_id, "main")
+                offset_file = chat_offset_path(run_dir(root, run_id), "main", "task-001")
+                inbox_size = inbox.stat().st_size
+                save_chat_offset(offset_file, max(0, inbox_size - 10))
+                stale_offset = load_chat_offset(inbox, offset_file, False)
+                self.assertLess(stale_offset, inbox_size)
+
+                stale_task = status_snapshot(root, run_id)["tasks"][0]
+                stale_agent = stale_task["agents"][0]
+                with mock.patch("aha_cli.web.status.backend_status", return_value={"status": "stopped", "pid": None}):
+                    recovered = recover_stale_running_agent(
+                        root,
+                        run_id,
+                        stale_task,
+                        stale_agent,
+                        {"status": "stopped", "pid": None},
+                    )
+                self.assertTrue(recovered)
+                # The offset must be advanced to the inbox end so a subsequent
+                # backend start does not replay the already-delivered message.
+                self.assertEqual(load_chat_offset(inbox, offset_file, False), inbox_size)
+
     def test_recovered_running_sub_agent_queues_notice_to_main(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

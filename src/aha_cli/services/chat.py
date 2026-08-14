@@ -823,10 +823,10 @@ def _compact_unresumable_session(
 def agent_chat(root: Path, run_id: str, args, *, backend_name: str) -> int:
     require_plan(root, run_id)
     cfg = load_config(root)
+    worker_task_id = str(getattr(args, "task_id", "") or "") or None
     inbox = inbox_path(root, run_id, args.target)
     run = run_dir(root, run_id)
     events_file = event_path(root, run_id)
-    worker_task_id = str(getattr(args, "task_id", "") or "") or None
     offset_file = chat_offset_path(run, args.target, worker_task_id)
     consumer_handle = acquire_chat_consumer(run, args.target, worker_task_id)
     if consumer_handle is None:
@@ -1076,14 +1076,12 @@ def agent_chat(root: Path, run_id: str, args, *, backend_name: str) -> int:
                 workspace_raw = str(task.get("workspace_path") or root)
                 wsl_distro = os.environ.get("AHA_WSL_DISTRO") or ""
                 if wsl_distro:
-                    # Running inside a WSL backend: the workspace is a WSL UNC
-                    # path (\\wsl.localhost\\<distro>\\...); convert to the native
-                    # /... path codex/claude expect on Linux.
-                    from aha_cli.store.ws_target import wsl_workspace_native_path
+                    # Running inside a WSL backend: the workspace is stored in
+                    # the AHA platform view (UNC / Windows drive / ~); convert
+                    # to the distro-native path codex/claude expect on Linux.
+                    from aha_cli.store.ws_target import host_native_path
 
-                    native = wsl_workspace_native_path(workspace_raw)
-                    if native:
-                        workspace_raw = native
+                    workspace_raw = host_native_path(workspace_raw, aha_home=root)
                 workspace = Path(workspace_raw)
                 if not workspace.exists():
                     append_event(root, run_id, "workspace_missing", {"task_id": item_task_id, "workspace_path": str(workspace)})

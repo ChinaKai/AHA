@@ -181,6 +181,12 @@ class TaskCommandActionTests(unittest.TestCase):
         self.assertEqual(detail["status"], "awaiting_user")
         self.assertEqual(detail["agents"][0]["status"], "interrupted")
         self.assertTrue(any(event["type"] == "agent_interrupted" for event in events))
+        # A normal interrupt must record a recovery context so the agent's next
+        # turn knows the previous one was interrupted.
+        agent = detail["agents"][0]
+        self.assertIn("工作异常中断", agent.get("recovery_context") or "")
+        self.assertEqual(agent.get("recovery_context_reason"), "interrupted_by_user")
+        self.assertEqual(agent.get("recovery_context_consumed_at"), "")
 
     def test_interrupt_selected_agent_stops_real_running_backend_and_records_offset(self) -> None:
         # Regression: stop_backend read `state` in _stop_wsl_backend_process
