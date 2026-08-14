@@ -4,9 +4,9 @@ from pathlib import Path
 import time
 
 from aha_cli.domain.models import utc_now
+from aha_cli.services.agent_lifecycle import record_agent_interrupt
 from aha_cli.services.app_version import aha_version
 from aha_cli.services.backend_runtime import backend_status
-from aha_cli.services.chat_offsets import chat_offset_path, save_chat_offset
 from aha_cli.services.prompt_templates import render_prompt_template
 from aha_cli.store.filesystem import (
     append_event,
@@ -258,32 +258,15 @@ def recover_stale_running_agent(root: Path, run_id: str, task: dict, agent: dict
         return False
 
     recovery_reason = "backend_process_stopped"
-    updated_agent = set_agent_status(root, run_id, task_id, agent_id, "interrupted")
-    updated_agent = update_agent_runtime(
+    updated_agent = record_agent_interrupt(
         root,
         run_id,
         task_id,
         agent_id,
+        reason=recovery_reason,
         recovery_context=agent_recovery_context(agent_id, recovery_reason),
-        recovery_context_reason=recovery_reason,
-        recovery_context_at=utc_now(),
-        recovery_context_consumed_at="",
     )
     agent.update(updated_agent)
-    # Advancing the chat offset matches the interrupt semantics: the backend
-    # process already stopped, so messages already delivered to the inbox must
-    # not be re-read by the next backend start (which would replay old turns and
-    # skip the user's newer follow-up). Without this, an interrupt that lands
-    # while the backend is already stopped (stale_recovered path) leaves the
-    # cursor at an old position and the next start reads a stale message.
-    try:
-        from aha_cli.store.paths import inbox_path, run_dir
-
-        _offset_file = chat_offset_path(run_dir(root, run_id), agent_id, task_id)
-        _inbox = inbox_path(root, run_id, agent_id)
-        save_chat_offset(_offset_file, _inbox.stat().st_size if _inbox.exists() else 0)
-    except Exception:
-        pass
     cleared_main_host_wait = _clear_main_host_wait_if_needed(root, run_id, task_id, persisted_task, agent_id)
     if agent_id != "main":
         fresh_task = task_snapshot(root, run_id, task_id)["task"]

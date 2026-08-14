@@ -321,6 +321,18 @@ def save_chat_offset(offset_file: Path, offset: int) -> None:
     _write_chat_offset(offset_file, offset, monotonic=True)
 
 
+def advance_chat_offset_to_inbox_end(root: Path, run_id: str, target: str, task_id: str | None = None) -> None:
+    """Advance a chat cursor past every message already in the inbox.
+
+    This is the interrupt/recover semantic: messages delivered to the inbox
+    before a backend stopped must not be re-read by the next backend start,
+    which would replay the interrupted turn and skip the user's newer follow-up.
+    """
+    offset_file = chat_offset_path(run_dir(root, run_id), target, task_id)
+    inbox = inbox_path(root, run_id, target)
+    save_chat_offset(offset_file, inbox.stat().st_size if inbox.exists() else 0)
+
+
 def worker_backend_should_exit_after_turn(
     root: Path,
     run_id: str,
@@ -361,6 +373,7 @@ def worker_backend_should_exit_after_turn(
 
 __all__ = [
     "acquire_chat_consumer",
+    "advance_chat_offset_to_inbox_end",
     "chat_consumer_lock_path",
     "chat_offset_path",
     "chat_turn_checkpoint_path",

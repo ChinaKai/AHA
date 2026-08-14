@@ -7,11 +7,10 @@ from typing import Callable
 from aha_cli.domain.models import utc_now
 from aha_cli.services.auto_context_compact import start_backend_after_auto_compact as start_backend
 from aha_cli.services.backend_runtime import PROCESS_AGENT_BACKENDS, backend_status
-from aha_cli.services.chat import chat_offset_path, save_chat_offset
+from aha_cli.services.chat_offsets import advance_chat_offset_to_inbox_end, chat_offset_path
 from aha_cli.store.filesystem import (
     append_event,
     append_message,
-    inbox_path,
     list_task_rounds,
     mark_task_coordination,
     run_dir,
@@ -47,17 +46,14 @@ def is_task_supervision_host_target(task: dict, target_id: str | None) -> bool:
 
 
 def save_chat_offset_after_message(root: Path, run_id: str, task_id: str, target_id: str) -> None:
-    inbox = inbox_path(root, run_id, target_id)
-    offset_file = chat_offset_path(run_dir(root, run_id), target_id, task_id)
-    save_chat_offset(offset_file, inbox.stat().st_size if inbox.exists() else 0)
+    advance_chat_offset_to_inbox_end(root, run_id, target_id, task_id)
 
 
 def ensure_chat_offset_before_message(root: Path, run_id: str, task_id: str, target_id: str) -> None:
     offset_file = chat_offset_path(run_dir(root, run_id), target_id, task_id)
     if offset_file.exists():
         return
-    inbox = inbox_path(root, run_id, target_id)
-    save_chat_offset(offset_file, inbox.stat().st_size if inbox.exists() else 0)
+    advance_chat_offset_to_inbox_end(root, run_id, target_id, task_id)
 
 
 def message_backend_autostart_config(root: Path, run_id: str, task_id: str | None, target_id: str) -> dict | None:

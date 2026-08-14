@@ -2,9 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from aha_cli.domain.models import utc_now
+from aha_cli.services.agent_lifecycle import record_agent_interrupt
 from aha_cli.services.backend_runtime import backend_status, stop_backend, stop_task_backends
-from aha_cli.services.chat import chat_offset_path, save_chat_offset
 from aha_cli.services.orchestrator import request_round_summary_if_ready
 from aha_cli.services.session_phase import transition_agent_phase
 from aha_cli.services.session_compact import compact_reset_backend_session
@@ -13,14 +12,11 @@ from aha_cli.store.filesystem import (
     append_event,
     append_task_round,
     complete_task,
-    inbox_path,
     reopen_task,
-    run_dir,
     set_agent_status,
     set_task_status,
     task_snapshot,
 )
-from aha_cli.store.agents import update_agent_runtime
 from aha_cli.web.status import agent_recovery_context, recover_stale_running_agent, recover_stale_running_agents
 from aha_cli.web.task_runtime import (
     finalization_prompt,
@@ -192,22 +188,13 @@ def interrupt_selected_agent(root: Path, run_id: str, task_id: str | None, targe
             {"interrupted": False, "reason": "not_busy", "agent_id": agent_id, "task_id": task_id, "backend": state},
         )
     stopped = stop_backend(root, run_id, agent_id, task_id=task_id, timeout=2.0)
-    offset_file = chat_offset_path(run_dir(root, run_id), agent_id, task_id)
-    inbox = inbox_path(root, run_id, agent_id)
-    save_chat_offset(offset_file, inbox.stat().st_size if inbox.exists() else 0)
-    set_agent_status(root, run_id, task_id, agent_id, "interrupted")
-    # Record a recovery context so the agent's next turn knows the previous one
-    # was interrupted (matching the stale-recover path). Without it a normal
-    # interrupt left the agent without the "last turn was interrupted" notice.
-    update_agent_runtime(
+    record_agent_interrupt(
         root,
         run_id,
         task_id,
         agent_id,
+        reason="interrupted_by_user",
         recovery_context=agent_recovery_context(agent_id, "interrupted_by_user"),
-        recovery_context_reason="interrupted_by_user",
-        recovery_context_at=utc_now(),
-        recovery_context_consumed_at="",
     )
     _clear_main_host_wait_if_needed(root, run_id, task_id, task, agent_id)
     task_status_managed = _settle_main_subagent_wait_after_interrupt(root, run_id, task_id, task, agent_id)
