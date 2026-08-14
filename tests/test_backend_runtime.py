@@ -184,6 +184,30 @@ class BackendRuntimeTests(unittest.TestCase):
         self.assertIn("pgrep -f", script)
         self.assertIn("kill -TERM", script)
 
+    def test_wait_for_worker_stop_noops_when_no_proc(self) -> None:
+        # On a Windows host there is no /proc; the wait must be a no-op so stop
+        # never hangs on an undiscoverable distro worker.
+        from aha_cli.services.backend_runtime import _wait_for_worker_stop
+        with mock.patch("aha_cli.services.backend_runtime.Path", spec=Path) as PathMock:
+            PathMock.return_value.is_dir.return_value = False
+            with mock.patch("aha_cli.services.backend_runtime._discover_backend_process") as discover:
+                _wait_for_worker_stop(Path("/tmp"), "run1", "main", None, timeout=2)
+            discover.assert_not_called()
+
+    def test_wait_for_worker_stop_polls_until_worker_gone(self) -> None:
+        from aha_cli.services.backend_runtime import _wait_for_worker_stop
+        calls = {"n": 0}
+
+        def fake_discover(*args, **kwargs):
+            calls["n"] += 1
+            return (9001, "claude-chat") if calls["n"] < 3 else None
+
+        with mock.patch("aha_cli.services.backend_runtime.Path", spec=Path) as PathMock:
+            PathMock.return_value.is_dir.return_value = True
+            with mock.patch("aha_cli.services.backend_runtime._discover_backend_process", side_effect=fake_discover):
+                _wait_for_worker_stop(Path("/tmp"), "run1", "main", None, timeout=5)
+        self.assertGreaterEqual(calls["n"], 3)
+
     def test_state_wsl_context_returns_none_for_non_wsl_command(self) -> None:
         self.assertEqual(_state_wsl_context({"command": ["pythonw.exe", "claude-chat", "run1"]}), (None, None))
 

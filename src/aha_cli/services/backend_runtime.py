@@ -1253,6 +1253,24 @@ def _stop_wsl_backend_process(
         pass
 
 
+def _wait_for_worker_stop(root: Path, run_id: str, target: str, task_id: str | None, *, timeout: float = 5.0) -> None:
+    """Poll until no matching backend worker remains, bounded by ``timeout``.
+
+    The recorded ``pid`` is the wsl.exe host; the worker lives inside the
+    distro. After the pkill in ``_stop_wsl_backend_process``, wait for the
+    worker (discovered via /proc) to disappear so a restart does not collide
+    with an orphan still holding the consumer lock. When /proc is unavailable
+    (Windows host) this is a no-op.
+    """
+    if not Path("/proc").is_dir():
+        return
+    deadline = time.monotonic() + max(0.0, float(timeout))
+    while time.monotonic() < deadline:
+        if _discover_backend_process(root, run_id, target, task_id) is None:
+            return
+        time.sleep(0.1)
+
+
 def stop_backend(root: Path, run_id: str, target: str = "main", *, task_id: str | None = None, timeout: float = 5.0) -> dict:
     task_id = task_id or None
     target = target or "main"
@@ -1291,6 +1309,11 @@ def stop_backend(root: Path, run_id: str, target: str = "main", *, task_id: str 
         # its command-line signature.
         state = _read_state(root, run_id, target, task_id)
         _stop_wsl_backend_process(run_id, target, task_id, state, timeout=timeout)
+        # The pkill above is fire-and-forget; give the distro worker a moment to
+        # actually exit so a re-start does not collide with an orphan still holding
+        # the consumer lock. When /proc is unavailable (Windows host) this falls
+        # back to no-op and relies on the pkill alone.
+        _wait_for_worker_stop(root, run_id, target, task_id, timeout=timeout)
         state.update(
             {
                 "target": target,
