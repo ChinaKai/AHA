@@ -46,6 +46,8 @@ class ManagedProcessTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             run_id = self.create_run(root)
+            log_path: Path | None = None
+            stopped = None
             try:
                 started = start_managed_process(
                     root,
@@ -74,6 +76,14 @@ class ManagedProcessTests(unittest.TestCase):
                         "preview",
                         [sys.executable, "-c", "print('different')"],
                     )
+                # Wait for the managed child to actually run and flush its
+                # startup marker before stopping it. WSL process startup is slow;
+                # stopping too early would SIGTERM the child before it prints.
+                log_path = Path(started["log_path"])
+                deadline = time.monotonic() + 10
+                while time.monotonic() < deadline and "ready" not in log_path.read_text(encoding="utf-8", errors="replace"):
+                    time.sleep(0.02)
+                self.assertIn("ready", log_path.read_text(encoding="utf-8", errors="replace"))
             finally:
                 stopped = stop_managed_process(root, run_id, "task-001", "main", "preview")
 
@@ -84,11 +94,6 @@ class ManagedProcessTests(unittest.TestCase):
             self.assertEqual([item["name"] for item in listed], ["preview"])
             self.assertFalse(stopped["alive"])
             self.assertEqual(stopped["status"], "stopped")
-            deadline = time.monotonic() + 2
-            log_path = Path(started["log_path"])
-            while time.monotonic() < deadline and "ready" not in log_path.read_text(encoding="utf-8", errors="replace"):
-                time.sleep(0.02)
-            self.assertIn("ready", log_path.read_text(encoding="utf-8", errors="replace"))
 
     def test_managed_process_rejects_cwd_outside_task_workspace(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

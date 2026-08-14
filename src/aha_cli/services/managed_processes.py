@@ -265,15 +265,20 @@ def start_managed_process(
                 stdout=log_file,
                 stderr=subprocess.STDOUT,
                 close_fds=True,
-                preexec_fn=process_control.parent_death_preexec() if not platform.is_windows() else None,
+                # A managed process is intentionally long-lived and independent
+                # of its spawning runtime (it survives Web restarts and turn
+                # boundaries), so it must NOT be armed with PR_SET_PDEATHSIG:
+                # that signal is for short-lived bridge processes and fires the
+                # moment the spawning thread exits (e.g. a per-request asyncio
+                # loop in tests), killing the managed process before it prints
+                # anything. Session isolation (start_new_session) + explicit
+                # stop_managed_process is the lifecycle contract instead.
                 start_new_session=not platform.is_windows(),
                 creationflags=creationflags,
             )
         except OSError:
             log_file.close()
             raise
-        # Bind to the long-lived Web runtime, not the current backend turn.
-        process_control.assign_parent_death(process)
         state = {
             "schema_version": 1,
             "run_id": run_id,
