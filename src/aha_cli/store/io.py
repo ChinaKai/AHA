@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import contextmanager
 import json
 import os
 from pathlib import Path
@@ -60,6 +61,14 @@ def _release_append_lock(lock_path: Path) -> None:
 _WRITE_LOCKS_GUARD = threading.Lock()
 _WRITE_LOCKS: dict[str, threading.RLock] = {}
 _REPLACE_RETRY_DELAYS = (0.01, 0.02, 0.04, 0.08, 0.16)
+_SIDECAR_LOCK_TIMEOUT_SECONDS = 65.0
+# A live holder refreshes the lock mtime on a heartbeat, so the stale threshold
+# only needs to outlive a crashed holder's last heartbeat. Keep it well above
+# the acquire timeout so a waiter times out rather than stealing a live-but-slow
+# holder's lock (e.g. a long fsync over a WSL /mnt mount).
+_SIDECAR_LOCK_STALE_SECONDS = 120.0
+_SIDECAR_LOCK_HEARTBEAT_SECONDS = 30.0
+_SIDECAR_LOCK_RETRY_DELAY = 0.01
 
 
 def _write_lock(path: Path) -> threading.RLock:
@@ -79,27 +88,181 @@ def _replace_with_retry(tmp: Path, path: Path) -> None:
             time.sleep(_REPLACE_RETRY_DELAYS[attempt])
 
 
+def _sidecar_lock_snapshot(path: Path) -> tuple[int, int, int] | None:
+    try:
+        stat = path.stat()
+    except OSError:
+        return None
+    return stat.st_ino, stat.st_mtime_ns, stat.st_size
+
+
+def _read_sidecar_lock_owner(path: Path) -> str:
+    try:
+        return path.read_text(encoding="ascii").splitlines()[0].strip()
+    except (OSError, IndexError, UnicodeError):
+        return ""
+
+
+def _refresh_sidecar_lock(path: Path) -> None:
+    try:
+        os.utime(path, None)
+    except OSError:
+        pass
+
+
+def _remove_stale_sidecar_lock(path: Path, snapshot: tuple[int, int, int], owner: str) -> bool:
+    # Re-verify both the stat snapshot and the owner token right before unlinking.
+    # The token check matters on Windows where st_ino can be unreliable and
+    # mtime/size can collide across a same-second replacement.
+    if _sidecar_lock_snapshot(path) != snapshot:
+        return False
+    if owner and _read_sidecar_lock_owner(path) != owner:
+        return False
+    try:
+        path.unlink()
+        return True
+    except OSError:
+        return False
+
+
+@contextmanager
+def exclusive_sidecar_lock(
+    lock_path: Path,
+    *,
+    timeout: float = _SIDECAR_LOCK_TIMEOUT_SECONDS,
+    stale_seconds: float = _SIDECAR_LOCK_STALE_SECONDS,
+    retry_delay: float = _SIDECAR_LOCK_RETRY_DELAY,
+):
+    """Serialize writers through a lock file shared by Windows and WSL views."""
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    token = uuid.uuid4().hex
+    payload = f"{token}\n{os.getpid()}\n{time.time()}\n".encode("ascii")
+    deadline = time.monotonic() + max(0.0, timeout)
+    acquired = False
+    while not acquired:
+        try:
+            fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o666)
+        except FileExistsError:
+            snapshot = _sidecar_lock_snapshot(lock_path)
+            if snapshot is not None:
+                try:
+                    age = max(0.0, time.time() - (snapshot[1] / 1_000_000_000))
+                except (OverflowError, ValueError):
+                    age = 0.0
+                if age >= max(0.0, stale_seconds) and _remove_stale_sidecar_lock(
+                    lock_path, snapshot, _read_sidecar_lock_owner(lock_path)
+                ):
+                    continue
+            if time.monotonic() >= deadline:
+                raise TimeoutError(f"Timed out waiting for lock: {lock_path}")
+            time.sleep(max(0.001, retry_delay))
+            continue
+        except OSError:
+            if time.monotonic() >= deadline:
+                raise
+            time.sleep(max(0.001, retry_delay))
+            continue
+        try:
+            written = 0
+            while written < len(payload):
+                count = os.write(fd, payload[written:])
+                if count == 0:
+                    raise OSError(f"Unable to write lock owner to {lock_path}")
+                written += count
+            os.fsync(fd)
+        except Exception:
+            # We created the lock file but failed to record our ownership; drop it
+            # so we do not leak a lock whose owner token is never released.
+            try:
+                lock_path.unlink()
+            except OSError:
+                pass
+            raise
+        finally:
+            os.close(fd)
+        acquired = True
+    stop = threading.Event()
+    heartbeat = None
+
+    def _heartbeat() -> None:
+        while not stop.wait(_SIDECAR_LOCK_HEARTBEAT_SECONDS):
+            _refresh_sidecar_lock(lock_path)
+
+    try:
+        heartbeat = threading.Thread(target=_heartbeat, daemon=True, name="aha-sidecar-lock-heartbeat")
+        heartbeat.start()
+        yield
+    finally:
+        stop.set()
+        if heartbeat is not None:
+            heartbeat.join(timeout=1.0)
+        if _read_sidecar_lock_owner(lock_path) == token:
+            try:
+                lock_path.unlink()
+            except OSError:
+                pass
+
+
 def read_json(path: Path) -> dict:
     with path.open("r", encoding="utf-8") as f:
         return json.load(f)
 
 
-def write_json(path: Path, data: dict) -> None:
-    with _write_lock(path):
-        path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = path.with_name(f".{path.name}.{os.getpid()}.{threading.get_ident()}.{uuid.uuid4().hex}.tmp")
+def json_backup_path(path: Path) -> Path:
+    return path.with_name(f"{path.name}.bak")
+
+
+def _json_payload(data: dict) -> bytes:
+    return (json.dumps(data, indent=2, ensure_ascii=False) + "\n").encode("utf-8")
+
+
+def _write_bytes_atomically(path: Path, payload: bytes) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.{threading.get_ident()}.{uuid.uuid4().hex}.tmp")
+    try:
+        with tmp.open("wb") as f:
+            f.write(payload)
+            f.flush()
+            os.fsync(f.fileno())
+        _replace_with_retry(tmp, path)
+    finally:
         try:
-            with tmp.open("w", encoding="utf-8") as f:
-                json.dump(data, f, indent=2, ensure_ascii=False)
-                f.write("\n")
-                f.flush()
-                os.fsync(f.fileno())
-            _replace_with_retry(tmp, path)
-        finally:
-            try:
-                tmp.unlink(missing_ok=True)
-            except OSError:
-                pass
+            tmp.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+
+def _valid_json_bytes(path: Path) -> bytes | None:
+    try:
+        payload = path.read_bytes()
+        value = json.loads(payload.decode("utf-8"))
+    except (OSError, UnicodeError, ValueError):
+        return None
+    return payload if isinstance(value, dict) else None
+
+
+def write_json(
+    path: Path,
+    data: dict,
+    *,
+    backup: bool = False,
+    verify: bool = False,
+) -> None:
+    with _write_lock(path):
+        previous = _valid_json_bytes(path) if backup and path.exists() else None
+        if previous is not None:
+            _write_bytes_atomically(json_backup_path(path), previous)
+        try:
+            _write_bytes_atomically(path, _json_payload(data))
+            if verify and read_json(path) != data:
+                raise OSError(f"JSON verification failed after writing {path}")
+        except Exception:
+            if previous is not None:
+                try:
+                    _write_bytes_atomically(path, previous)
+                except OSError:
+                    pass
+            raise
 
 
 def append_jsonl(path: Path, data: dict) -> int:

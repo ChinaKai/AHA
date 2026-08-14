@@ -41,6 +41,12 @@ Rules for store edits:
 
 - Use `store/io.py` helpers for structured persistence instead of ad hoc file
   reads and writes.
+- Keep run plan read-modify-write operations inside `store/runs.py`'s
+  cross-host plan lock. Plan writes preserve `plan.json.bak` and verify the
+  replacement before the critical section is released.
+- Run discovery starts from run directories. A missing or invalid `plan.json`
+  is restored from `plan.json.bak` when possible, otherwise reconstructed from
+  task snapshots and durable run events.
 - Pass `now_func` and `append_event_func` through wrappers when moving logic
   that tests patch through `filesystem.py`.
 - Avoid circular imports. Store modules may import domain construction helpers,

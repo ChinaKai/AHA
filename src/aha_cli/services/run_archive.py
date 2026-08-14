@@ -18,6 +18,7 @@ ARCHIVE_SCHEMA = 1
 REDACTED = "<redacted>"
 
 EXCLUDED_TOP_LEVEL_DIRS = {"runtime"}
+EXCLUDED_TOP_LEVEL_FILES = {"plan.json.bak"}
 EXCLUDED_SUFFIXES = {".lock", ".pid", ".tmp"}
 PROXY_SECRET_FIELDS = {
     "http_proxy",
@@ -51,7 +52,7 @@ def export_run_archive(root: Path, run_id: str, output: Path, include_logs: bool
         "source_run_id": run_id,
         "exported_at": utc_now(),
         "include_logs": include_logs,
-        "excluded": sorted(EXCLUDED_TOP_LEVEL_DIRS),
+        "excluded": sorted({*EXCLUDED_TOP_LEVEL_DIRS, *EXCLUDED_TOP_LEVEL_FILES, "recovery/plan.*.json"}),
         "redacted_fields": sorted(PROXY_SECRET_FIELDS),
     }
     with tarfile.open(output, _write_tar_mode(output)) as archive:
@@ -147,6 +148,15 @@ def _safe_extract(archive: tarfile.TarFile, destination: Path) -> None:
 
 def _should_skip(relative: Path, *, include_logs: bool) -> bool:
     if relative.parts and relative.parts[0] in EXCLUDED_TOP_LEVEL_DIRS:
+        return True
+    if len(relative.parts) == 1 and relative.name in EXCLUDED_TOP_LEVEL_FILES:
+        return True
+    if (
+        relative.parts
+        and relative.parts[0] == "recovery"
+        and relative.suffix == ".json"
+        and relative.name.startswith(("plan.invalid-", "plan.reconstructed-"))
+    ):
         return True
     if not include_logs and relative.parts and relative.parts[0] == "logs":
         return True

@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path
 import tempfile
+import time
 from unittest import mock
 
 from aha_cli.store.filesystem import append_jsonl, set_agent_status, set_task_status
@@ -48,6 +49,32 @@ def write_plan_statuses(root_path: str, run_id: str, task_id: str, agent_id: str
     for _ in range(iterations):
         set_task_status(root, run_id, task_id, "running")
         set_agent_status(root, run_id, task_id, agent_id, "running")
+
+
+def increment_plan_counter(root_path: str, run_id: str, iterations: int, delay: float = 0.0) -> None:
+    from aha_cli.store.runs import locked_plan, require_plan, save_plan
+
+    root = Path(root_path)
+    for _ in range(iterations):
+        with locked_plan(root, run_id):
+            plan = require_plan(root, run_id)
+            plan["counter"] = int(plan.get("counter") or 0) + 1
+            if delay:
+                time.sleep(delay)
+            save_plan(root, plan)
+
+
+def increment_text_counter_with_sidecar(lock_path: str, counter_path: str, iterations: int, delay: float = 0.0) -> None:
+    from aha_cli.store.io import exclusive_sidecar_lock
+
+    lock = Path(lock_path)
+    counter = Path(counter_path)
+    for _ in range(iterations):
+        with exclusive_sidecar_lock(lock):
+            value = int(counter.read_text(encoding="ascii") or "0")
+            if delay:
+                time.sleep(delay)
+            counter.write_text(str(value + 1), encoding="ascii")
 
 
 def append_jsonl_records(path: str, worker_id: int, iterations: int) -> None:

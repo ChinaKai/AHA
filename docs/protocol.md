@@ -685,7 +685,7 @@ run/
   ...
 ```
 
-Export excludes `runtime/`, lock/pid/tmp files, and optionally `logs/`. It redacts proxy fields and clears `backend_session_id`. Import safe-extracts the archive, creates a new run id unless `--preserve-id` or `--run-id` is used, rewrites run references, marks sessions as `imported`, and appends `run_imported`.
+Export excludes `runtime/`, lock/pid/tmp files, `plan.json.bak`, reconstructed or invalid plan recovery sidecars, and optionally `logs/`. It redacts proxy fields and clears `backend_session_id`. Import safe-extracts the archive, creates a new run id unless `--preserve-id` or `--run-id` is used, rewrites run references, marks sessions as `imported`, and appends `run_imported`.
 
 ## Retention Archives
 

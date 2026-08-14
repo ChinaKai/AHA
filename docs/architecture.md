@@ -121,9 +121,11 @@ A run is persisted as append-only event and message logs plus JSON snapshots:
 ```text
 runs/<run-id>/
   plan.json
+  plan.json.bak
   events.jsonl
   inbox/<agent-id>.jsonl
   sessions/main.json
+  recovery/
   runtime/
   tasks/<task-id>/
     task.json
@@ -132,7 +134,18 @@ runs/<run-id>/
     rounds/<round-id>/round.json
 ```
 
-`runtime/` contains process locks, offsets, and backend state. It is intentionally local-only and is excluded from run archives.
+Plan read-modify-write operations use both the host advisory lock and an
+`O_EXCL` sidecar lock so Windows and WSL writers serialize through the same
+directory entry. Each replacement verifies the persisted JSON and retains the
+previous valid snapshot as `plan.json.bak`.
+
+Run discovery scans run directories rather than only `*/plan.json`. Missing or
+invalid plans are restored from the backup when possible; otherwise AHA
+reconstructs the plan from `tasks/*/task.json` plus durable run events. Empty
+runs can be reconstructed from their `plan_created` event alone. Invalid and
+reconstructed evidence is kept under `recovery/`.
+
+`runtime/` contains process locks, offsets, and backend state. It is intentionally local-only and is excluded from run archives. Plan backup and recovery sidecars are also excluded from portable run archives.
 
 Task finals are lifecycle artifacts, not just the latest result file. A finalized round writes:
 
