@@ -310,6 +310,17 @@ def load_chat_offset(inbox: Path, offset_file: Path, from_start: bool) -> int:
                 return max(0, offset)
         except (OSError, TypeError, ValueError):
             pass
+        # The recorded cursor points beyond the current inbox. This happens when
+        # the inbox file itself changed identity — e.g. the L1 inbox isolation
+        # re-scoped the path from inbox/{target}/{target}.jsonl to
+        # inbox/{task_id}/{target}.jsonl, or the inbox was recreated. The old
+        # byte offset no longer maps to this file. Resuming at the file end (what
+        # iter_jsonl_from(inbox, 0) would return) silently drops every pending
+        # message, so the worker never sees the just-delivered message. Restart
+        # from the beginning instead: already-finished turns are skipped by their
+        # checkpoints, so nothing completed is replayed.
+        _write_chat_offset(offset_file, 0, monotonic=False)
+        return 0
     _, offset = iter_jsonl_from(inbox, 0)
     _write_chat_offset(offset_file, offset, monotonic=False)
     return offset

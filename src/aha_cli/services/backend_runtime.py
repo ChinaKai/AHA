@@ -717,6 +717,66 @@ def backend_status(root: Path, run_id: str, target: str = "main", task_id: str |
     }
 
 
+def _process_cmdline_parts(pid: int) -> list[str]:
+    if not Path("/proc").is_dir():
+        return []
+    try:
+        raw = (Path("/proc") / str(pid) / "cmdline").read_bytes()
+    except OSError:
+        return []
+    return [part.decode("utf-8", errors="replace") for part in raw.split(b"\0") if part]
+
+
+def _pid_is_backend_worker(pid: int, run_id: str, target: str, task_id: str | None, root: Path) -> bool:
+    """Whether ``pid`` is a live backend worker for this run/target/task.
+
+    A WSL backend records the Windows-side ``wsl.exe`` host pid in the state file
+    while the worker inside the distro sees its own Linux-side pid via
+    ``os.getpid()``. The two live in different pid namespaces and can never be
+    equal, so a raw pid comparison wrongly rejects a legitimate worker self-stop.
+    Match the caller's own command line instead: the worker process carries the
+    ``{backend}-chat <run_id> <target> [--task-id <task_id>] --home <root>``
+    signature, which uniquely identifies it regardless of pid namespace.
+    """
+    parts = _process_cmdline_parts(pid)
+    chat_commands = [command for command in ("codex-chat", "claude-chat") if command in parts]
+    if not chat_commands:
+        return False
+    index = parts.index(chat_commands[0])
+    return (
+        len(parts) > index + 2
+        and parts[index + 1] == run_id
+        and parts[index + 2] == target
+        and _process_matches_task(parts, task_id)
+        and _process_matches_home(parts, root)
+    )
+
+
+def _same_backend_process(
+    state: dict,
+    pid: int,
+    run_id: str,
+    target: str,
+    task_id: str | None,
+    root: Path,
+) -> bool:
+    """Whether ``pid`` is the same backend worker that ``state`` records.
+
+    Accept the stop when the pid matches the recorded state, when the recorded
+    process has exited (nothing newer holds the state), or when the caller is a
+    live backend worker for this run/target/task (the WSL worker's own pid lives
+    in a different namespace than the recorded ``wsl.exe`` host pid).
+    """
+    state_pid = int(state.get("pid") or 0) or None
+    if not state_pid:
+        return True
+    if state_pid == int(pid):
+        return True
+    if not pid_is_running(state_pid):
+        return True
+    return _pid_is_backend_worker(int(pid), run_id, target, task_id, root)
+
+
 def mark_backend_stopped(root: Path, run_id: str, target: str = "main", *, task_id: str | None = None, pid: int | None = None) -> dict:
     task_id = task_id or None
     target = target or "main"
@@ -724,7 +784,7 @@ def mark_backend_stopped(root: Path, run_id: str, target: str = "main", *, task_
         state = _read_state(root, run_id, target, task_id)
         state_pid = int(state.get("pid") or 0) or None
         previous_pid = int(pid or state_pid or 0) or None
-        if pid and state_pid and state_pid != int(pid) and state.get("status") != "stopped":
+        if pid and state_pid and not _same_backend_process(state, int(pid), run_id, target, task_id, root) and state.get("status") != "stopped":
             append_event(
                 root,
                 run_id,

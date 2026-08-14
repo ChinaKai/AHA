@@ -1293,3 +1293,91 @@ class BackendRuntimeTests(unittest.TestCase):
         self.assertEqual(stopped, [{"target": "sub-001", "stopped": True}])
         stop_backend.assert_called_once()
         self.assertEqual(stop_backend.call_args.args[:3], (root, run_id, "sub-001"))
+
+    def test_mark_backend_stopped_accepts_wsl_worker_self_stop(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "WSL self stop", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+
+            backend_runtime = backend_runtime_module
+            state = {
+                "target": "main",
+                "task_id": "task-001",
+                "backend": "claude-chat",
+                "status": "running",
+                "pid": 4242,
+                "wsl_distro": "Ubuntu-24.04",
+                "wsl_native_home": "/home/kaikai",
+            }
+            backend_runtime._write_state(root / ".aha", run_id, "main", state, "task-001")
+
+            # The worker runs inside the distro: its own pid lives in a different
+            # namespace than the recorded Windows-side wsl.exe pid (4242), so a
+            # raw pid comparison would wrongly reject the stop. The caller's
+            # cmdline matches the backend worker signature instead.
+            with (
+                # The recorded wsl.exe host is still alive while the worker is
+                # calling self-stop, so pid_is_running must return True for the
+                # state pid to reach the cmdline-signature branch (the bug).
+                mock.patch(
+                    "aha_cli.services.backend_runtime.pid_is_running",
+                    side_effect=lambda pid: pid == 4242,
+                ),
+                mock.patch(
+                    "aha_cli.services.backend_runtime._pid_is_backend_worker",
+                    return_value=True,
+                ) as pid_check,
+            ):
+                result = backend_runtime.mark_backend_stopped(
+                    root / ".aha",
+                    run_id,
+                    "main",
+                    task_id="task-001",
+                    pid=31337,
+                )
+
+        self.assertEqual(result["status"], "stopped")
+        self.assertNotIn("stale_stop_ignored", result)
+        pid_check.assert_called_once()
+        self.assertEqual(pid_check.call_args.args[:3], (31337, run_id, "main"))
+
+    def test_mark_backend_stopped_rejects_unrelated_process_with_live_state_pid(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Stale stop", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+
+            backend_runtime = backend_runtime_module
+            state = {
+                "target": "main",
+                "task_id": "task-001",
+                "backend": "claude-chat",
+                "status": "running",
+                "pid": 4242,
+            }
+            backend_runtime._write_state(root / ".aha", run_id, "main", state, "task-001")
+
+            # A stale process (different pid, state pid still alive, and the
+            # caller does not carry the backend worker signature) must NOT mark
+            # the current backend stopped.
+            with mock.patch(
+                "aha_cli.services.backend_runtime.pid_is_running",
+                side_effect=lambda pid: pid == 4242,
+            ):
+                result = backend_runtime.mark_backend_stopped(
+                    root / ".aha",
+                    run_id,
+                    "main",
+                    task_id="task-001",
+                    pid=31337,
+                )
+
+        self.assertEqual(result["status"], "running")
+        self.assertTrue(result["stale_stop_ignored"])

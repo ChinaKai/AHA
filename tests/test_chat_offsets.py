@@ -71,14 +71,32 @@ class ChatOffsetTests(unittest.TestCase):
             inbox = root / "inbox.jsonl"
             offset_file = root / "offset.json"
             append_jsonl(inbox, {"message": "one"})
-            actual_offset = inbox.stat().st_size
-            save_chat_offset(offset_file, actual_offset + 100)
+            save_chat_offset(offset_file, 10_000)
 
+            # A stored offset beyond the current inbox means the inbox file was
+            # recreated or re-scoped (e.g. the L1 inbox isolation changed the path
+            # from inbox/{target}/{target}.jsonl to inbox/{task_id}/{target}.jsonl).
+            # Resuming at the file end would skip every pending message; reset to 0
+            # so the worker re-reads the current inbox from the start. Already
+            # finished turns are skipped by their checkpoints, so nothing
+            # completed is replayed.
             offset = load_chat_offset(inbox, offset_file, from_start=False)
             from_start = load_chat_offset(inbox, offset_file, from_start=True)
 
-        self.assertEqual(offset, actual_offset)
+        self.assertEqual(offset, 0)
         self.assertEqual(from_start, 0)
+
+    def test_load_chat_offset_reads_pending_after_stale_offset(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            inbox = root / "inbox.jsonl"
+            offset_file = root / "offset.json"
+            append_jsonl(inbox, {"message": "pending"})
+            save_chat_offset(offset_file, 10_000)
+
+            pending, _ = iter_jsonl_from(inbox, load_chat_offset(inbox, offset_file, from_start=False))
+
+        self.assertEqual([item["message"] for item in pending], ["pending"])
 
     def test_save_chat_offset_writes_offset_metadata(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
