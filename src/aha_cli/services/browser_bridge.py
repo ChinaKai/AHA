@@ -16,6 +16,7 @@ from aha_cli.domain.models import utc_now
 from aha_cli.services import browser_external
 from aha_cli.services import loopback_ipc
 from aha_cli.services import browser_runtime as browser_client
+from aha_cli.store.ws_target import host_native_path
 from aha_cli.services.browser_actions import (
     NATIVE_USER_ACTIVITY_SCRIPT,
     browser_mouse_action,
@@ -113,6 +114,32 @@ async def browser_bridge_request(
         source=source,
         agent_id=agent_id,
         timeout=timeout,
+    )
+
+
+def browser_bridge_request_sync(
+    root: Path,
+    run_id: str,
+    task_id: str,
+    action: str,
+    *,
+    args: dict | None = None,
+    source: str = "agent",
+    agent_id: str = "main",
+    timeout: float = 30.0,
+) -> dict:
+    """Synchronous wrapper for Web handlers running in a worker thread."""
+    return asyncio.run(
+        browser_bridge_request(
+            root,
+            run_id,
+            task_id,
+            action,
+            args=args,
+            source=source,
+            agent_id=agent_id,
+            timeout=timeout,
+        )
     )
 
 
@@ -921,10 +948,19 @@ class BrowserBridgeDaemon:
             if str(config.get("uploads") or "deny") != "allow":
                 raise BrowserBridgeError("upload_denied", "File uploads are disabled for this task browser.")
             ref = validated_browser_ref(args.get("ref"), self.revision)
-            upload_path = Path(str(args.get("path") or ""))
-            if not upload_path.is_absolute() or not upload_path.is_file():
-                raise BrowserBridgeError("upload_file_not_found", "The selected upload file does not exist.")
-            upload_path = upload_path.resolve()
+            # Normalize the path to this runtime's native view. A WSL task agent
+            # may hand a Windows-style path (C:\\...) or UNC (\\\\wsl.localhost\\...)
+            # copied from a Windows context; inside the WSL bridge these are not
+            # absolute and resolve to garbage. host_native_path maps any view to
+            # the current platform's native path (WSL: /mnt/c/... or /home/...).
+            raw_path = str(args.get("path") or "")
+            native_path = host_native_path(raw_path, aha_home=str(self.root))
+            upload_path = Path(native_path).expanduser().resolve()
+            if not upload_path.is_file():
+                raise BrowserBridgeError(
+                    "upload_file_not_found",
+                    "The selected upload file does not exist.",
+                )
             await page.locator(f'[data-aha-browser-ref="{ref}"]').first.set_input_files(
                 str(upload_path),
                 timeout=30000,
@@ -1051,6 +1087,7 @@ __all__ = [
     "BrowserBridgeError",
     "browser_artifacts_dir",
     "browser_bridge_request",
+    "browser_bridge_request_sync",
     "browser_bridge_socket_path",
     "browser_bridge_state_path",
     "browser_bridge_status",

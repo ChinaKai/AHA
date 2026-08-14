@@ -285,6 +285,127 @@ class WebTaskRouteTests(unittest.TestCase):
 
         self.assertIn("asyncio.to_thread(route_task_agent_request", source)
 
+    def test_browser_action_route_forwards_to_bridge(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "stub")
+                code, plan_output = self.run_cli("plan", "Browser route", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+
+                with mock.patch(
+                    "aha_cli.web.task_routes.browser_bridge_request_sync",
+                    return_value={"ok": True, "url": "https://example.com", "revision": 1},
+                ) as bridge:
+                    response = self.route(
+                        root,
+                        run_id,
+                        "POST",
+                        "/api/task/task-001/browser-action",
+                        {"action": "navigate", "args": {"url": "https://example.com"}, "source": "agent", "agent_id": "main"},
+                    )
+
+        self.assertEqual(response["status"], "200 OK")
+        self.assertTrue(response["payload"]["ok"])
+        self.assertEqual(response["payload"]["url"], "https://example.com")
+        bridge.assert_called_once_with(
+            root,
+            run_id,
+            "task-001",
+            "navigate",
+            args={"url": "https://example.com"},
+            source="agent",
+            agent_id="main",
+            timeout=30.0,
+        )
+
+    def test_hardware_arm_route_writes_bridge_control(self) -> None:
+        from aha_cli.services.hardware_bridge import append_bridge_control
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "stub")
+                code, plan_output = self.run_cli("plan", "Hw arm route", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+
+            device = "COM3"
+            with (
+                mock.patch("aha_cli.web.task_routes.task_devices", return_value=[(device, 115200)]),
+                mock.patch("aha_cli.web.task_routes.task_hardware_debug_can_write", return_value=True),
+                mock.patch("aha_cli.web.task_routes.append_bridge_control", side_effect=append_bridge_control) as control,
+            ):
+                response = self.route(
+                    root,
+                    run_id,
+                    "POST",
+                    "/api/task/task-001/hardware-arm",
+                    {"channel": "serial", "pattern": "stop autoboot", "send": "\\r", "max_fires": 1},
+                )
+
+        self.assertEqual(response["status"], "200 OK")
+        self.assertTrue(response["payload"]["ok"])
+        self.assertEqual(response["payload"]["device"], device)
+        control.assert_called_once()
+        self.assertEqual(control.call_args.args[2]["cmd"], "arm")
+        self.assertEqual(control.call_args.args[2]["pattern"], "stop autoboot")
+
+    def test_hardware_stop_route_writes_bridge_control(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "stub")
+                code, plan_output = self.run_cli("plan", "Hw stop route", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+
+            device = "COM3"
+            with (
+                mock.patch("aha_cli.web.task_routes.task_devices", return_value=[(device, 115200)]),
+                mock.patch("aha_cli.web.task_routes.append_bridge_control") as control,
+            ):
+                response = self.route(
+                    root,
+                    run_id,
+                    "POST",
+                    "/api/task/task-001/hardware-stop",
+                    {"channel": "serial"},
+                )
+
+        self.assertEqual(response["status"], "200 OK")
+        self.assertTrue(response["payload"]["ok"])
+        self.assertEqual(response["payload"]["command"], "stop")
+        control.assert_called_once_with(root, device, {"cmd": "stop"})
+
+    def test_hardware_disarm_route_writes_bridge_control(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "stub")
+                code, plan_output = self.run_cli("plan", "Hw disarm route", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+
+            device = "COM3"
+            with (
+                mock.patch("aha_cli.web.task_routes.task_devices", return_value=[(device, 115200)]),
+                mock.patch("aha_cli.web.task_routes.append_bridge_control") as control,
+            ):
+                response = self.route(
+                    root,
+                    run_id,
+                    "POST",
+                    "/api/task/task-001/hardware-disarm",
+                    {"channel": "serial", "id": "rule-1"},
+                )
+
+        self.assertEqual(response["status"], "200 OK")
+        self.assertTrue(response["payload"]["ok"])
+        self.assertEqual(response["payload"]["id"], "rule-1")
+        control.assert_called_once_with(root, device, {"cmd": "disarm", "id": "rule-1"})
+
 
 if __name__ == "__main__":
     unittest.main()

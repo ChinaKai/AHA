@@ -27,6 +27,8 @@ from aha_cli.services.browser_bridge import (
     save_browser_screenshot,
 )
 from aha_cli.services.hardware_io import append_hardware_io_record
+from aha_cli.store.ws_target import host_native_path
+from aha_cli.services.aha_http_client import AhaHttpClientError, should_forward_to_windows_web, web_forward
 from aha_cli.services.hardware_bridge import (
     append_bridge_control,
     bridge_status,
@@ -1100,7 +1102,11 @@ def cmd_browser(args: argparse.Namespace) -> int:
     elif action == "fill":
         request_args.update({"ref": args.ref, "text": args.text})
     elif action == "upload":
-        request_args.update({"ref": args.ref, "path": str(Path(args.path).expanduser().resolve())})
+        # Normalize the upload path to this runtime's native view so a Windows
+        # style path (C:\\...) or UNC works when the CLI runs inside WSL. The
+        # browser bridge re-normalizes on its side too, keeping both views sane.
+        native_upload = host_native_path(str(args.path or ""), aha_home=str(root))
+        request_args.update({"ref": args.ref, "path": native_upload})
     elif action == "press":
         request_args["key"] = args.key
     elif action == "screenshot":
@@ -1112,19 +1118,39 @@ def cmd_browser(args: argparse.Namespace) -> int:
     elif action == "close_tab" and args.page_id:
         request_args["page_id"] = args.page_id
     try:
-        result = asyncio.run(
-            browser_bridge_request(
+        if should_forward_to_windows_web(root):
+            # AHA runs on Windows; operate the Windows browser via the Web
+            # service so the user's Browser panel and this agent share it.
+            result = web_forward(
                 root,
-                run_id,
-                args.task_id,
-                action,
-                args=request_args,
-                source="agent",
-                agent_id=args.agent_id,
+                "POST",
+                f"/api/task/{args.task_id}/browser-action",
+                payload={
+                    "action": action,
+                    "args": request_args,
+                    "source": "agent",
+                    "agent_id": args.agent_id,
+                },
+                timeout=60.0,
             )
-        )
+            result.pop("ok", None)
+        else:
+            result = asyncio.run(
+                browser_bridge_request(
+                    root,
+                    run_id,
+                    args.task_id,
+                    action,
+                    args=request_args,
+                    source="agent",
+                    agent_id=args.agent_id,
+                )
+            )
         if action == "screenshot":
-            output = Path(args.output) if args.output else None
+            if args.output:
+                output = Path(host_native_path(str(args.output), aha_home=str(root)))
+            else:
+                output = None
             path = save_browser_screenshot(root, run_id, args.task_id, result, output)
             result = {
                 key: value
@@ -1134,10 +1160,11 @@ def cmd_browser(args: argparse.Namespace) -> int:
             result["path"] = str(path)
         print(json.dumps({"ok": True, **result}, ensure_ascii=False, indent=2))
         return 0
-    except BrowserBridgeError as exc:
+    except (BrowserBridgeError, AhaHttpClientError) as exc:
+        error_code = getattr(exc, "code", None) if isinstance(exc, BrowserBridgeError) else None
         print(
             json.dumps(
-                {"ok": False, "error": {"code": exc.code, "message": str(exc)}},
+                {"ok": False, "error": {"code": error_code, "message": str(exc)}},
                 ensure_ascii=False,
                 indent=2,
             ),
@@ -1207,6 +1234,39 @@ def _task_hardware_write_allowed(root, run_id: str, task_id: str) -> bool:
     except Exception:
         return False
     return task_hardware_debug_can_write(task)
+
+
+def _forward_hardware_web(
+    root,
+    run_id: str,
+    task_id: str,
+    action: str,
+    payload: dict,
+    *,
+    success: str,
+) -> int:
+    """Forward a hardware command to the Windows AHA Web service.
+
+    Returns 0 on success, 2 on permission/validation error, or re-raises when
+    the Web service is unreachable (so the caller can surface the reason).
+    """
+    del run_id  # the Web route resolves the run from the task context
+    try:
+        result = web_forward(
+            root,
+            "POST",
+            f"/api/task/{task_id}/{action}",
+            payload=payload,
+            timeout=15.0,
+        )
+    except AhaHttpClientError as exc:
+        print(f"Windows AHA hardware forward failed: {exc}", file=sys.stderr)
+        return 2
+    if not result.get("ok"):
+        print(str(result.get("error") or "hardware command failed"), file=sys.stderr)
+        return 2
+    print(success)
+    return 0
 
 
 def _tail_device_stream(root, device: str) -> None:
@@ -1293,6 +1353,15 @@ def cmd_hardware_send(args: argparse.Namespace) -> int:
     if not _task_hardware_write_allowed(root, run_id, args.task_id):
         print("Hardware debug permission is read-only.", file=sys.stderr)
         return 2
+    if should_forward_to_windows_web(root):
+        return _forward_hardware_web(
+            root,
+            run_id,
+            args.task_id,
+            "hardware-send",
+            {"data": args.data, "channel": args.channel},
+            success=f"Queued send via Windows AHA: {args.data!r}",
+        )
     if _network_channel(args.channel):
         target = _network_bridge_target(root, run_id, args.task_id)
         if not target:
@@ -1320,6 +1389,26 @@ def cmd_hardware_arm(args: argparse.Namespace) -> int:
     if not _task_hardware_write_allowed(root, run_id, args.task_id):
         print("Hardware debug permission is read-only.", file=sys.stderr)
         return 2
+    if should_forward_to_windows_web(root):
+        return _forward_hardware_web(
+            root,
+            run_id,
+            args.task_id,
+            "hardware-arm",
+            {
+                "channel": args.channel,
+                "id": args.id,
+                "pattern": args.pattern,
+                "regex": bool(args.regex),
+                "send": args.send,
+                "max_fires": args.max_fires,
+                "ttl_seconds": args.ttl,
+                "delay_seconds": args.delay,
+                "interval_seconds": args.interval,
+                "duration_seconds": args.duration,
+            },
+            success=f"Queued arm via Windows AHA: {args.pattern!r}",
+        )
     command = {
         "cmd": "arm",
         "id": args.id,
@@ -1356,6 +1445,15 @@ def cmd_hardware_disarm(args: argparse.Namespace) -> int:
     root = command_aha_home(args)
     run_id = resolve_run_id(root, args.run_id)
     require_plan(root, run_id)
+    if should_forward_to_windows_web(root):
+        return _forward_hardware_web(
+            root,
+            run_id,
+            args.task_id,
+            "hardware-disarm",
+            {"id": args.id, "channel": args.channel},
+            success=f"Queued disarm via Windows AHA: rule {args.id}",
+        )
     if _network_channel(args.channel):
         target = _network_bridge_target(root, run_id, args.task_id)
         if not target:
@@ -1406,6 +1504,15 @@ def cmd_hardware_stop(args: argparse.Namespace) -> int:
     root = command_aha_home(args)
     run_id = resolve_run_id(root, args.run_id)
     require_plan(root, run_id)
+    if should_forward_to_windows_web(root):
+        return _forward_hardware_web(
+            root,
+            run_id,
+            args.task_id,
+            "hardware-stop",
+            {"channel": args.channel},
+            success="Queued stop via Windows AHA (bridge will release the port).",
+        )
     if _network_channel(args.channel):
         target = _network_bridge_target(root, run_id, args.task_id)
         if not target:

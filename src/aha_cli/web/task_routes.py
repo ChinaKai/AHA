@@ -5,7 +5,7 @@ from urllib.parse import unquote
 
 from aha_cli.backends.registry import CODEX_DEFAULT_MODEL, agent_backend_names, normalize_reasoning_effort
 from aha_cli.domain.models import task_hardware_debug_can_write
-from aha_cli.services.browser_bridge import browser_bridge_status
+from aha_cli.services.browser_bridge import browser_bridge_request_sync, browser_bridge_status
 from aha_cli.services.browser_bookmarks import browser_bookmarks_snapshot, update_browser_bookmarks
 from aha_cli.services.browser_io import browser_io_page
 from aha_cli.services.browser_runtime import (
@@ -658,6 +658,28 @@ def handle_task_action_route(root: Path, run_id: str, path: str, body: bytes) ->
                     "409 Conflict",
                 )
             return route_result({"ok": True, **lifecycle})
+        elif action == "browser-action":
+            payload = parse_json_body(body)
+            browser_action = str(payload.get("action") or "").strip()
+            if not browser_action:
+                return route_result({"ok": False, "error": "browser action required"}, "400 Bad Request")
+            try:
+                result = browser_bridge_request_sync(
+                    root,
+                    run_id,
+                    task_id,
+                    browser_action,
+                    args=payload.get("args") if isinstance(payload.get("args"), dict) else {},
+                    source=str(payload.get("source") or "agent"),
+                    agent_id=str(payload.get("agent_id") or "main"),
+                    timeout=float(payload.get("timeout") or 30.0),
+                )
+            except BrowserBridgeError as exc:
+                return route_result(
+                    {"ok": False, "error": str(exc), "code": exc.code},
+                    "409 Conflict",
+                )
+            return route_result({"ok": True, **result})
         elif action == "browser-bookmarks":
             payload = parse_json_body(body)
             task = task_snapshot(root, run_id, task_id)["task"]
@@ -724,6 +746,77 @@ def handle_task_action_route(root: Path, run_id: str, path: str, body: bytes) ->
                 return route_result({"ok": False, "error": "Task has no serial device configured."}, "400 Bad Request")
             append_bridge_control(root, device, {"cmd": cmd})
             return route_result({"ok": True, "transport": transport, "endpoint": device, "device": device, "command": cmd})
+        elif action == "hardware-arm":
+            payload = parse_json_body(body)
+            task = task_snapshot(root, run_id, task_id)["task"]
+            if _task_is_terminal(task):
+                return route_result({"ok": False, "error": "Task is terminal; hardware console is read-only."}, "409 Conflict")
+            if not task_hardware_debug_can_write(task):
+                return route_result({"ok": False, "error": "Hardware debug permission is read-only."}, "403 Forbidden")
+            transport = _requested_transport(payload.get("transport", payload.get("channel")), task)
+            if not transport:
+                return route_result({"ok": False, "error": "Task has no hardware terminal configured."}, "400 Bad Request")
+            command = {
+                "cmd": "arm",
+                "id": str(payload.get("id") or "").strip() or None,
+                "pattern": str(payload.get("pattern") or "").strip(),
+                "regex": bool(payload.get("regex")),
+                "send": str(payload.get("send") or ""),
+                "max_fires": payload.get("max_fires"),
+                "ttl_seconds": payload.get("ttl_seconds"),
+                "delay_seconds": payload.get("delay_seconds"),
+                "interval_seconds": payload.get("interval_seconds"),
+                "duration_seconds": payload.get("duration_seconds"),
+            }
+            if transport == "network":
+                target = task_network_target(task)
+                if not target:
+                    return route_result({"ok": False, "error": "Task has no network device IP configured."}, "400 Bad Request")
+                host, port, _username, _password = target
+                record = append_network_control(root, host, port, command)
+                return route_result({"ok": True, "transport": transport, "endpoint": f"{host}:{port}", "record": record})
+            device, _baudrate = _resolve_task_device(task)
+            if not device:
+                return route_result({"ok": False, "error": "Task has no serial device configured."}, "400 Bad Request")
+            record = append_bridge_control(root, device, command)
+            return route_result({"ok": True, "transport": transport, "endpoint": device, "device": device, "record": record})
+        elif action == "hardware-disarm":
+            payload = parse_json_body(body)
+            task = task_snapshot(root, run_id, task_id)["task"]
+            transport = _requested_transport(payload.get("transport", payload.get("channel")), task)
+            if not transport:
+                return route_result({"ok": False, "error": "Task has no hardware terminal configured."}, "400 Bad Request")
+            rule_id = str(payload.get("id") or "").strip()
+            if transport == "network":
+                target = task_network_target(task)
+                if not target:
+                    return route_result({"ok": False, "error": "Task has no network device IP configured."}, "400 Bad Request")
+                host, port, _username, _password = target
+                append_network_control(root, host, port, {"cmd": "disarm", "id": rule_id})
+                return route_result({"ok": True, "transport": transport, "endpoint": f"{host}:{port}", "command": "disarm", "id": rule_id})
+            device, _baudrate = _resolve_task_device(task)
+            if not device:
+                return route_result({"ok": False, "error": "Task has no serial device configured."}, "400 Bad Request")
+            append_bridge_control(root, device, {"cmd": "disarm", "id": rule_id})
+            return route_result({"ok": True, "transport": transport, "endpoint": device, "device": device, "command": "disarm", "id": rule_id})
+        elif action == "hardware-stop":
+            payload = parse_json_body(body)
+            task = task_snapshot(root, run_id, task_id)["task"]
+            transport = _requested_transport(payload.get("transport", payload.get("channel")), task)
+            if not transport:
+                return route_result({"ok": False, "error": "Task has no hardware terminal configured."}, "400 Bad Request")
+            if transport == "network":
+                target = task_network_target(task)
+                if not target:
+                    return route_result({"ok": False, "error": "Task has no network device IP configured."}, "400 Bad Request")
+                host, port, _username, _password = target
+                append_network_control(root, host, port, {"cmd": "stop"})
+                return route_result({"ok": True, "transport": transport, "endpoint": f"{host}:{port}", "command": "stop"})
+            device, _baudrate = _resolve_task_device(task)
+            if not device:
+                return route_result({"ok": False, "error": "Task has no serial device configured."}, "400 Bad Request")
+            append_bridge_control(root, device, {"cmd": "stop"})
+            return route_result({"ok": True, "transport": transport, "endpoint": device, "device": device, "command": "stop"})
         elif action == "hardware-takeover":
             payload = parse_json_body(body)
             task = task_snapshot(root, run_id, task_id)["task"]

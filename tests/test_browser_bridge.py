@@ -279,6 +279,50 @@ class BrowserPolicyTests(unittest.TestCase):
         self.assertEqual(result["upload"], {"filename": "artifact.zip", "size": 8})
         self.assertEqual(result["revision"], 1)
 
+    def test_upload_normalizes_windows_style_path_in_wsl(self) -> None:
+        # On WSL a Windows-style path (C:\\...) is not absolute and would resolve
+        # to garbage; the upload handler must normalize it via host_native_path
+        # to a /mnt/... path that the WSL-side bridge can actually open.
+        import sys
+
+        if not sys.platform.startswith("linux"):
+            self.skipTest("WSL-style path normalization only applies on Linux")
+        daemon = BrowserBridgeDaemon(Path("/tmp/aha-browser-test"), "run-001", "task-001")
+        page = mock.Mock()
+        page.url = "https://example.com/compose"
+        page.title = mock.AsyncMock(return_value="Compose")
+        locator = mock.Mock()
+        locator.first = locator
+        locator.set_input_files = mock.AsyncMock()
+        page.locator.return_value = locator
+        daemon.pages = {"page-001": page}
+        daemon.page_ids = {id(page): "page-001"}
+        daemon.active_page_id = "page-001"
+        daemon._write_state = mock.Mock()  # type: ignore[method-assign]
+        daemon._broadcast_state = mock.AsyncMock()  # type: ignore[method-assign]
+
+        with tempfile.TemporaryDirectory() as tmp:
+            upload = Path(tmp) / "artifact.zip"
+            upload.write_bytes(b"artifact")
+            # Represent the same file with a Windows drive path. Under a real
+            # /mnt mount this normalizes back to the accessible /mnt path.
+            drive_path = "C:\\Users\\toope\\AppData\\Local\\Temp\\artifact.zip"
+            with mock.patch(
+                "aha_cli.services.browser_bridge.host_native_path",
+                return_value=str(upload.resolve()),
+            ) as normalize:
+                result = asyncio.run(
+                    daemon._execute_locked(
+                        "upload",
+                        {"ref": "0:b12", "path": drive_path},
+                        {"uploads": "allow"},
+                    )
+                )
+            normalize.assert_called_once_with(drive_path, aha_home="/tmp/aha-browser-test")
+
+        locator.set_input_files.assert_awaited_once_with(str(upload.resolve()), timeout=30000)
+        self.assertEqual(result["upload"], {"filename": "artifact.zip", "size": 8})
+
     def test_frame_loop_streams_1080p_without_waiting_for_action_lock(self) -> None:
         daemon = BrowserBridgeDaemon(Path("/tmp/aha-browser-test"), "run-001", "task-001")
         page = mock.Mock()
