@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 import re
+import sys
 
 
 WSL_UNC_PREFIXES = ("\\\\wsl.localhost\\", "\\\\wsl$\\")
@@ -142,6 +143,9 @@ def host_native_path(path: str | Path | None, *, aha_home: str | Path | None = N
             if base.name == ".aha":
                 base = base.parent
             raw = str(base / raw.lstrip("~/"))
-        # Windows drive / UNC -> native view.
+        # On the Windows host the config path is already in the Windows view;
+        # only rewrite drive/UNC paths to /mnt/... form inside a WSL backend.
+        if sys.platform == "win32":
+            return raw
         return wsl_workspace_native_path(raw) or raw
     return os.path.expanduser(raw)
