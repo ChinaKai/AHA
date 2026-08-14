@@ -227,7 +227,7 @@ class RunRecoveryTests(unittest.TestCase):
                     backend_starter=fake_starter,
                 )
             task = task_snapshot(root, run_id, task_id)["task"]
-            inbox = inbox_path(root, run_id, agent_id).read_text(encoding="utf-8")
+            inbox = inbox_path(root, run_id, agent_id, task_id).read_text(encoding="utf-8")
             event_log = event_path(root, run_id).read_text(encoding="utf-8")
 
             self.assertEqual(result["recovered_count"], 1)

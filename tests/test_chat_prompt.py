@@ -99,7 +99,7 @@ class ChatPromptTests(unittest.TestCase):
                 code, plan_output = self.run_cli("plan", "Offsets", "--agents", "1")
                 self.assertEqual(code, 0)
                 run_id = plan_output.splitlines()[0].split(": ", 1)[1]
-                inbox = inbox_path(root, run_id, "main")
+                inbox = inbox_path(root, run_id, "main", "task-001")
                 offset_file = chat_offset_path(run_dir(root, run_id), "main")
                 initial_offset = load_chat_offset(inbox, offset_file, from_start=False)
                 append_message(root, run_id, "main", "queued while stopped", sender="browser", task_id="task-001", role="main")
@@ -139,7 +139,7 @@ class ChatPromptTests(unittest.TestCase):
                 self.assertEqual(run_agent.call_count, 1)
                 self.assertIn("task-001", run_agent.call_args.args[0])
                 self.assertNotIn("User message from browser", output)
-                browser_messages, _ = iter_jsonl_from(inbox_path(root, run_id, "browser"), 0)
+                browser_messages, _ = iter_jsonl_from(inbox_path(root, run_id, "browser", "task-001"), 0)
                 self.assertEqual(browser_messages[-1]["message"], "task one reply")
                 self.assertEqual(browser_messages[-1]["task_id"], "task-001")
                 scoped_offset = chat_offset_path(run_dir(root, run_id), "main", "task-001")
@@ -154,7 +154,7 @@ class ChatPromptTests(unittest.TestCase):
                 code, plan_output = self.run_cli("plan", "Recover agent result", "--agents", "1")
                 self.assertEqual(code, 0)
                 run_id = plan_output.splitlines()[0].split(": ", 1)[1]
-                inbox = inbox_path(root, run_id, "main")
+                inbox = inbox_path(root, run_id, "main", "task-001")
                 offset_file = chat_offset_path(run_dir(root, run_id), "main", "task-001")
                 save_chat_offset(offset_file, inbox.stat().st_size if inbox.exists() else 0)
                 append_message(root, run_id, "main", "new request", sender="browser", task_id="task-001", role="main")
@@ -170,7 +170,7 @@ class ChatPromptTests(unittest.TestCase):
                         self.run_cli("codex-chat", run_id, "main", "--task-id", "task-001", "--once")
                     code, _ = self.run_cli("codex-chat", run_id, "main", "--task-id", "task-001", "--once")
 
-                browser_messages, _ = iter_jsonl_from(inbox_path(root, run_id, "browser"), 0)
+                browser_messages, _ = iter_jsonl_from(inbox_path(root, run_id, "browser", "task-001"), 0)
 
         self.assertEqual(code, 0)
         self.assertEqual(run_agent.call_count, 1)
@@ -185,7 +185,7 @@ class ChatPromptTests(unittest.TestCase):
                 code, plan_output = self.run_cli("plan", "Deduplicate recovered reply", "--agents", "1")
                 self.assertEqual(code, 0)
                 run_id = plan_output.splitlines()[0].split(": ", 1)[1]
-                inbox = inbox_path(root, run_id, "main")
+                inbox = inbox_path(root, run_id, "main", "task-001")
                 offset_file = chat_offset_path(run_dir(root, run_id), "main", "task-001")
                 save_chat_offset(offset_file, inbox.stat().st_size if inbox.exists() else 0)
                 append_message(root, run_id, "main", "single delivery", sender="browser", task_id="task-001", role="main")
@@ -202,7 +202,7 @@ class ChatPromptTests(unittest.TestCase):
                         self.run_cli("codex-chat", run_id, "main", "--task-id", "task-001", "--once")
                     code, _ = self.run_cli("codex-chat", run_id, "main", "--task-id", "task-001", "--once")
 
-                browser_messages, _ = iter_jsonl_from(inbox_path(root, run_id, "browser"), 0)
+                browser_messages, _ = iter_jsonl_from(inbox_path(root, run_id, "browser", "task-001"), 0)
                 stored_offset = read_json(offset_file)["offset"]
                 inbox_size = inbox.stat().st_size
 
@@ -220,7 +220,7 @@ class ChatPromptTests(unittest.TestCase):
                 code, plan_output = self.run_cli("plan", "Ordered recovery", "--agents", "1")
                 self.assertEqual(code, 0)
                 run_id = plan_output.splitlines()[0].split(": ", 1)[1]
-                inbox = inbox_path(root, run_id, "main")
+                inbox = inbox_path(root, run_id, "main", "task-001")
                 offset_file = chat_offset_path(run_dir(root, run_id), "main", "task-001")
                 save_chat_offset(offset_file, inbox.stat().st_size if inbox.exists() else 0)
                 append_message(root, run_id, "main", "first request", sender="browser", task_id="task-001", role="main")
@@ -240,7 +240,7 @@ class ChatPromptTests(unittest.TestCase):
                         self.run_cli("codex-chat", run_id, "main", "--task-id", "task-001")
                     code, _ = self.run_cli("codex-chat", run_id, "main", "--task-id", "task-001", "--once")
 
-                browser_messages, _ = iter_jsonl_from(inbox_path(root, run_id, "browser"), 0)
+                browser_messages, _ = iter_jsonl_from(inbox_path(root, run_id, "browser", "task-001"), 0)
                 stored_offset = read_json(offset_file)["offset"]
                 inbox_size = inbox.stat().st_size
 
@@ -257,7 +257,7 @@ class ChatPromptTests(unittest.TestCase):
                 code, plan_output = self.run_cli("plan", "Merge group backlog", "--agents", "1")
                 self.assertEqual(code, 0)
                 run_id = plan_output.splitlines()[0].split(": ", 1)[1]
-                inbox = inbox_path(root, run_id, "main")
+                inbox = inbox_path(root, run_id, "main", "task-001")
                 offset_file = chat_offset_path(run_dir(root, run_id), "main", "task-001")
                 save_chat_offset(offset_file, inbox.stat().st_size if inbox.exists() else 0)
                 for index, text in enumerate(("first", "second", "third"), start=1):
@@ -283,7 +283,7 @@ class ChatPromptTests(unittest.TestCase):
                 with mock.patch("aha_cli.services.chat.run_codex_exec", return_value=(0, "merged reply", None)) as run_agent:
                     code, _ = self.run_cli("codex-chat", run_id, "main", "--task-id", "task-001", "--once")
 
-                feishu_messages, _ = iter_jsonl_from(inbox_path(root, run_id, "feishu"), 0)
+                feishu_messages, _ = iter_jsonl_from(inbox_path(root, run_id, "feishu", "task-001"), 0)
                 events, _ = iter_jsonl_from(event_path(root, run_id), 0)
 
         self.assertEqual(code, 0)
@@ -304,7 +304,7 @@ class ChatPromptTests(unittest.TestCase):
                 code, plan_output = self.run_cli("plan", "Recover group merge", "--agents", "1")
                 self.assertEqual(code, 0)
                 run_id = plan_output.splitlines()[0].split(": ", 1)[1]
-                inbox = inbox_path(root, run_id, "main")
+                inbox = inbox_path(root, run_id, "main", "task-001")
                 offset_file = chat_offset_path(run_dir(root, run_id), "main", "task-001")
                 save_chat_offset(offset_file, inbox.stat().st_size if inbox.exists() else 0)
 
@@ -432,7 +432,7 @@ class ChatPromptTests(unittest.TestCase):
                     code, second_output = self.run_cli("codex-chat", run_id, "main", "--task-id", "task-001", "--once")
                     self.assertEqual(code, 0)
 
-                browser_messages, _ = iter_jsonl_from(inbox_path(root, run_id, "browser"), 0)
+                browser_messages, _ = iter_jsonl_from(inbox_path(root, run_id, "browser", "task-001"), 0)
 
         self.assertEqual(run_agent.call_count, 2)
         self.assertIn("main -> browser: reply one", first_output)
@@ -517,7 +517,7 @@ class ChatPromptTests(unittest.TestCase):
                 ):
                     code, _output = self.run_cli("codex-chat", run_id, "main", "--task-id", "task-001", "--from-start", "--once")
 
-                browser_messages, _ = iter_jsonl_from(inbox_path(root, run_id, "browser"), 0)
+                browser_messages, _ = iter_jsonl_from(inbox_path(root, run_id, "browser", "task-001"), 0)
                 events, _ = iter_jsonl_from(event_path(root, run_id), 0)
 
         self.assertEqual(code, 127)
@@ -545,7 +545,7 @@ class ChatPromptTests(unittest.TestCase):
                 ):
                     code, _output = self.run_cli("codex-chat", run_id, "main", "--task-id", "task-001", "--from-start", "--once")
 
-                browser_messages, _ = iter_jsonl_from(inbox_path(root, run_id, "browser"), 0)
+                browser_messages, _ = iter_jsonl_from(inbox_path(root, run_id, "browser", "task-001"), 0)
                 events, _ = iter_jsonl_from(event_path(root, run_id), 0)
                 task = status_snapshot(root, run_id)["tasks"][0]
 
@@ -1658,7 +1658,7 @@ class ChatPromptTests(unittest.TestCase):
                 append_message(root, run_id, "main", "measure prompt", sender="browser", task_id="task-001", role="main")
 
                 with mock.patch("aha_cli.services.chat.run_codex_exec", return_value=(0, "reply", None)):
-                    code, _ = self.run_cli("codex-chat", run_id, "main", "--from-start", "--once")
+                    code, _ = self.run_cli("codex-chat", run_id, "main", "--task-id", "task-001", "--from-start", "--once")
                 rows = [json.loads(line) for line in event_path(root, run_id).read_text(encoding="utf-8").splitlines()]
                 metrics_events = [row for row in rows if row["type"] == "agent_prompt_metrics"]
                 self.assertEqual(len(metrics_events), 1)

@@ -81,7 +81,7 @@ class TaskRuntimeTests(unittest.TestCase):
                 with mock.patch("aha_cli.web.task_runtime.start_backend", return_value={"status": "running"}) as start:
                     backend = start_prepared_backend(root, run_id, autostart)
                 offset = read_json(offset_file)["offset"]
-                inbox_size = inbox_path(root, run_id, "main").stat().st_size
+                inbox_size = inbox_path(root, run_id, "main", "task-001").stat().st_size
 
         self.assertEqual(autostart["backend"], "codex")
         self.assertEqual(autostart["target"], "main")
@@ -107,7 +107,7 @@ class TaskRuntimeTests(unittest.TestCase):
                     mock.patch("aha_cli.web.task_runtime.start_backend", return_value={"status": "running", "started": True}) as start,
                 ):
                     payload = request_task_finalization_with_backend(root, run_id, "task-001", "/aha final")
-                messages, _ = iter_jsonl_from(inbox_path(root, run_id, "main"), 0)
+                messages, _ = iter_jsonl_from(inbox_path(root, run_id, "main", "task-001"), 0)
                 detail = task_snapshot(root, run_id, "task-001")
 
         self.assertIn("Finalization requested", payload["message"])
@@ -154,7 +154,7 @@ class TaskRuntimeTests(unittest.TestCase):
                 )
 
                 payload = request_task_finalization_with_backend(root, run_id, "task-001", "/aha final", autostart_backend=False)
-                messages, _ = iter_jsonl_from(inbox_path(root, run_id, "main"), 0)
+                messages, _ = iter_jsonl_from(inbox_path(root, run_id, "main", "task-001"), 0)
 
         prompt = messages[-1]["message"]
         self.assertIn("Finalization requested", payload["message"])

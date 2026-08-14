@@ -61,7 +61,7 @@ class WebTaskMessagingTests(unittest.TestCase):
                     )
 
                 offset = json.loads(chat_offset_path(run_dir(root, run_id), "main", "task-001").read_text(encoding="utf-8"))["offset"]
-                messages, _ = iter_jsonl_from(inbox_path(root, run_id, "main"), offset)
+                messages, _ = iter_jsonl_from(inbox_path(root, run_id, "main", "task-001"), offset)
 
         self.assertEqual(result["backend"]["status"], "running")
         start_backend.assert_called_once()
@@ -99,8 +99,8 @@ class WebTaskMessagingTests(unittest.TestCase):
                     )
 
                 offset = json.loads(chat_offset_path(run_dir(root, run_id), "main", "task-001").read_text(encoding="utf-8"))["offset"]
-                unread, _ = iter_jsonl_from(inbox_path(root, run_id, "main"), offset)
-                all_messages, _ = iter_jsonl_from(inbox_path(root, run_id, "main"), 0)
+                unread, _ = iter_jsonl_from(inbox_path(root, run_id, "main", "task-001"), offset)
+                all_messages, _ = iter_jsonl_from(inbox_path(root, run_id, "main", "task-001"), 0)
 
         self.assertTrue(result["backend_start_suppressed"])
         self.assertNotIn("backend", result)
@@ -140,7 +140,7 @@ class WebTaskMessagingTests(unittest.TestCase):
                     )
 
                 offset = json.loads(chat_offset_path(run_dir(root, run_id), "main", "task-001").read_text(encoding="utf-8"))["offset"]
-                messages, _ = iter_jsonl_from(inbox_path(root, run_id, "main"), offset)
+                messages, _ = iter_jsonl_from(inbox_path(root, run_id, "main", "task-001"), offset)
 
         self.assertEqual(result["backend"]["status"], "running")
         start_backend.assert_called_once()
@@ -179,7 +179,7 @@ class WebTaskMessagingTests(unittest.TestCase):
                         debug_logger=lambda *_args, **_kwargs: None,
                     )
                 offset = json.loads(chat_offset_path(run_dir(root, run_id), "main", "task-001").read_text(encoding="utf-8"))["offset"]
-                messages, _ = iter_jsonl_from(inbox_path(root, run_id, "main"), offset)
+                messages, _ = iter_jsonl_from(inbox_path(root, run_id, "main", "task-001"), offset)
 
         self.assertTrue(result["ok"])
         self.assertTrue(result["backend_start"]["queued"])
@@ -226,7 +226,7 @@ class WebTaskMessagingTests(unittest.TestCase):
                         debug_logger=lambda *_args, **_kwargs: None,
                     )
 
-                inbox = inbox_path(root, run_id, "host")
+                inbox = inbox_path(root, run_id, "host", "task-001")
                 offset = json.loads(chat_offset_path(run_dir(root, run_id), "host", "task-001").read_text(encoding="utf-8"))["offset"]
                 inbox_size = inbox.stat().st_size
 
@@ -271,7 +271,7 @@ class WebTaskMessagingTests(unittest.TestCase):
                     prepared_backend_starter=lambda *_args: None,
                     debug_logger=lambda *_args, **_kwargs: None,
                 )
-                messages, _ = iter_jsonl_from(inbox_path(root, run_id, "main"), 0)
+                messages, _ = iter_jsonl_from(inbox_path(root, run_id, "main", "task-001"), 0)
 
         self.assertTrue(result["ok"])
         self.assertEqual(result["handled_by"], "aha")
@@ -295,7 +295,7 @@ class WebTaskMessagingTests(unittest.TestCase):
                         command_handler=lambda *_args: (False, None, {}),
                         debug_logger=lambda *_args, **_kwargs: None,
                     )
-                    first_messages, _ = iter_jsonl_from(inbox_path(root, run_id, "main"), 0)
+                    first_messages, _ = iter_jsonl_from(inbox_path(root, run_id, "main", "task-001"), 0)
                     handle_send_payload(
                         root,
                         run_id,
@@ -303,7 +303,7 @@ class WebTaskMessagingTests(unittest.TestCase):
                         command_handler=lambda *_args: (False, None, {}),
                         debug_logger=lambda *_args, **_kwargs: None,
                     )
-                messages, _ = iter_jsonl_from(inbox_path(root, run_id, "main"), 0)
+                messages, _ = iter_jsonl_from(inbox_path(root, run_id, "main", "task-001"), 0)
 
         asset_dir = str((run_dir(root, run_id) / "task_memo_assets").resolve())
         self.assertIn("AHA memo attachment resolution:", messages[0]["message"])
@@ -335,7 +335,7 @@ class WebTaskMessagingTests(unittest.TestCase):
                         command_handler=lambda *_args: (False, None, {}),
                         debug_logger=lambda *_args, **_kwargs: None,
                     )
-                messages, _ = iter_jsonl_from(inbox_path(root, run_id, "main"), 0)
+                messages, _ = iter_jsonl_from(inbox_path(root, run_id, "main", "task-001"), 0)
 
         self.assertTrue(result["ok"])
         self.assertEqual(messages[0]["images"], [{"path": "task_memo_assets/ab/shot.png", "mime": "image/png"}])
@@ -366,7 +366,7 @@ class WebTaskMessagingTests(unittest.TestCase):
                         command_handler=lambda *_args: (False, None, {}),
                         debug_logger=lambda *_args, **_kwargs: None,
                     )
-                messages, _ = iter_jsonl_from(inbox_path(root, run_id, "main"), 0)
+                messages, _ = iter_jsonl_from(inbox_path(root, run_id, "main", "task-001"), 0)
 
         self.assertTrue(result["ok"])
         self.assertNotIn("backend", result)
@@ -413,7 +413,7 @@ class WebTaskMessagingTests(unittest.TestCase):
                         command_handler=lambda *_args: (False, None, {}),
                         debug_logger=lambda *_args, **_kwargs: None,
                     )
-                messages, _ = iter_jsonl_from(inbox_path(root, run_id, "main"), 0)
+                messages, _ = iter_jsonl_from(inbox_path(root, run_id, "main", "task-001"), 0)
                 rows = [json.loads(line) for line in event_path(root, run_id).read_text(encoding="utf-8").splitlines()]
 
         self.assertTrue(result["ok"])
@@ -462,7 +462,7 @@ class WebTaskMessagingTests(unittest.TestCase):
                         command_handler=lambda *_args: (False, None, {}),
                         debug_logger=lambda *_args, **_kwargs: None,
                     )
-                messages, _ = iter_jsonl_from(inbox_path(root, run_id, "main"), 0)
+                messages, _ = iter_jsonl_from(inbox_path(root, run_id, "main", "task-001"), 0)
 
         self.assertTrue(result["ok"])
         self.assertFalse(result.get("deferred", False))
@@ -509,7 +509,7 @@ class WebTaskMessagingTests(unittest.TestCase):
                         command_handler=lambda *_args: (False, None, {}),
                         debug_logger=lambda *_args, **_kwargs: None,
                     )
-                messages, _ = iter_jsonl_from(inbox_path(root, run_id, "main"), 0)
+                messages, _ = iter_jsonl_from(inbox_path(root, run_id, "main", "task-001"), 0)
 
         self.assertTrue(result["ok"])
         self.assertFalse(result.get("deferred", False))
@@ -555,7 +555,7 @@ class WebTaskMessagingTests(unittest.TestCase):
                         command_handler=lambda *_args: (False, None, {}),
                         debug_logger=lambda *_args, **_kwargs: None,
                     )
-                messages, _ = iter_jsonl_from(inbox_path(root, run_id, "main"), 0)
+                messages, _ = iter_jsonl_from(inbox_path(root, run_id, "main", "task-001"), 0)
 
         self.assertTrue(result["ok"])
         self.assertFalse(result.get("deferred", False))
@@ -598,7 +598,7 @@ class WebTaskMessagingTests(unittest.TestCase):
                         command_handler=lambda *_args: (False, None, {}),
                         debug_logger=lambda *_args, **_kwargs: None,
                     )
-                messages, _ = iter_jsonl_from(inbox_path(root, run_id, "main"), 0)
+                messages, _ = iter_jsonl_from(inbox_path(root, run_id, "main", "task-001"), 0)
 
         self.assertTrue(result["deferred"])
         self.assertEqual(messages, [])

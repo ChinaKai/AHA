@@ -1309,7 +1309,7 @@ class WebTaskApiTests(unittest.TestCase):
                     )
                 )
                 done_body = json_response_body(done_response)
-                messages, _ = iter_jsonl_from(inbox_path(root, run_id, "main"), 0)
+                messages, _ = iter_jsonl_from(inbox_path(root, run_id, "main", "task-001"), 0)
 
                 memos_response = asyncio.run(fetch_ui_response(root, run_id, "/api/task-memos?status=all&limit=20"))
                 memos = json_response_body(memos_response)["memos"]
@@ -1611,7 +1611,7 @@ class WebTaskApiTests(unittest.TestCase):
                 task = status_snapshot(root, run_id)["tasks"][0]
                 updated_sub = next(agent for agent in task["agents"] if agent["id"] == sub["id"])
                 updated_session = ensure_session(root, run_id, "task-001", sub["id"], "claude")
-                messages, _ = iter_jsonl_from(inbox_path(root, run_id, sub["id"]), 0)
+                messages, _ = iter_jsonl_from(inbox_path(root, run_id, sub["id"], "task-001"), 0)
                 events, _ = iter_jsonl_from(run_dir(root, run_id) / "events.jsonl", 0)
 
         self.assertTrue(response.startswith(b"HTTP/1.1 200 OK"))
@@ -1807,7 +1807,7 @@ class WebTaskApiTests(unittest.TestCase):
                             "message": "后续收到测试消息后再决定是否让 main 继续。",
                         },
                     )
-                host_inbox = inbox_path(root, run_id, "host")
+                host_inbox = inbox_path(root, run_id, "host", "task-001")
                 host_messages, _ = iter_jsonl_from(host_inbox, 0)
                 offset = read_json(chat_offset_path(run_dir(root, run_id), "host", "task-001"))
                 host_inbox_size = host_inbox.stat().st_size
@@ -1908,7 +1908,7 @@ class WebTaskApiTests(unittest.TestCase):
                         )
                     )
                     body = json_response_body(response)
-                messages, _ = iter_jsonl_from(inbox_path(root, run_id, "main"), 0)
+                messages, _ = iter_jsonl_from(inbox_path(root, run_id, "main", "task-001"), 0)
 
         self.assertTrue(response.startswith(b"HTTP/1.1 200 OK"))
         self.assertTrue(body["ok"])
@@ -1937,7 +1937,7 @@ class WebTaskApiTests(unittest.TestCase):
                     sender="browser",
                     task_id="task-001",
                 )
-                resume_boundary = inbox_path(root, run_id, "main").stat().st_size
+                resume_boundary = inbox_path(root, run_id, "main", "task-001").stat().st_size
 
                 response = asyncio.run(fetch_ui_response(root, run_id, "/api/task/task-001/resume", method="POST"))
                 body = json_response_body(response)
@@ -1960,7 +1960,7 @@ class WebTaskApiTests(unittest.TestCase):
                 with mock.patch("aha_cli.web.task_command_actions.stop_task_backends", return_value=[]) as stop_backends:
                     response = asyncio.run(fetch_ui_response(root, run_id, "/api/task/task-001/complete", method="POST"))
                     body = json_response_body(response)
-                main_messages, _ = iter_jsonl_from(inbox_path(root, run_id, "main"), 0)
+                main_messages, _ = iter_jsonl_from(inbox_path(root, run_id, "main", "task-001"), 0)
 
         self.assertTrue(response.startswith(b"HTTP/1.1 200 OK"))
         self.assertTrue(body["ok"])

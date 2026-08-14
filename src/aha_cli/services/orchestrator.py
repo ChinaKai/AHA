@@ -202,7 +202,7 @@ def chat_offset_path(root: Path, run_id: str, target: str, task_id: str | None =
 
 
 def save_chat_offset(root: Path, run_id: str, target: str, task_id: str | None = None) -> None:
-    inbox = inbox_path(root, run_id, target)
+    inbox = inbox_path(root, run_id, target, task_id)
     offset = inbox.stat().st_size if inbox.exists() else 0
     write_json(chat_offset_path(root, run_id, target, task_id), {"offset": offset, "updated_at": utc_now()})
 

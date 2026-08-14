@@ -128,7 +128,7 @@ def reset_task_chat_for_reopen(root: Path, run_id: str, task: dict) -> dict:
     targets.add("main")
     boundaries: list[dict] = []
     for target in sorted(targets):
-        inbox = inbox_path(root, run_id, target)
+        inbox = inbox_path(root, run_id, target, task_id)
         try:
             boundary = inbox.stat().st_size if inbox.exists() else 0
         except OSError:
@@ -329,7 +329,7 @@ def advance_chat_offset_to_inbox_end(root: Path, run_id: str, target: str, task_
     which would replay the interrupted turn and skip the user's newer follow-up.
     """
     offset_file = chat_offset_path(run_dir(root, run_id), target, task_id)
-    inbox = inbox_path(root, run_id, target)
+    inbox = inbox_path(root, run_id, target, task_id)
     save_chat_offset(offset_file, inbox.stat().st_size if inbox.exists() else 0)
 
 

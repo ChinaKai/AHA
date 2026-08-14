@@ -46,7 +46,8 @@ class AgentLifecycleTests(unittest.TestCase):
             run_id = self.init_run(root)
             set_task_status(root, run_id, "task-001", "running")
             set_agent_status(root, run_id, "task-001", "main", "running")
-            inbox = inbox_path(root, run_id, "main")
+            inbox = inbox_path(root, run_id, "main", "task-001")
+            inbox.parent.mkdir(parents=True, exist_ok=True)
             inbox.write_text("already-delivered\n", encoding="utf-8")
             inbox_size = inbox.stat().st_size
 
@@ -77,7 +78,8 @@ class AgentLifecycleTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             run_id = self.init_run(root)
-            inbox = inbox_path(root, run_id, "main")
+            inbox = inbox_path(root, run_id, "main", "task-001")
+            inbox.parent.mkdir(parents=True, exist_ok=True)
             inbox.write_text("already-delivered\n", encoding="utf-8")
             inbox_size = inbox.stat().st_size
 

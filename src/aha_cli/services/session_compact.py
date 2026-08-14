@@ -269,7 +269,7 @@ def compact_reset_backend_session(
 
     offset_file = chat_offset_path(run_dir(root, run_id), agent_id, task_id)
     if not offset_file.exists():
-        inbox = inbox_path(root, run_id, agent_id)
+        inbox = inbox_path(root, run_id, agent_id, task_id)
         save_chat_offset(offset_file, inbox.stat().st_size if inbox.exists() else 0)
     append_event(
         root,

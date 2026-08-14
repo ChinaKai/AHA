@@ -311,7 +311,7 @@ class SupervisionFlowTests(unittest.TestCase):
                 append_message(root, run_id, "main", "托管测试", sender="browser", task_id="task-001", role="main")
 
                 with mock.patch("aha_cli.services.chat.run_codex_exec", return_value=(0, "托管回复", None)):
-                    code, output = self.run_cli("codex-chat", run_id, "main", "--from-start", "--once")
+                    code, output = self.run_cli("codex-chat", run_id, "main", "--task-id", "task-001", "--from-start", "--once")
                 rows = [json.loads(line) for line in event_path(root, run_id).read_text(encoding="utf-8").splitlines()]
                 task_status = status_snapshot(root, run_id)["tasks"][0]["status"]
 
@@ -361,7 +361,7 @@ class SupervisionFlowTests(unittest.TestCase):
                     mock.patch("aha_cli.services.chat.apply_supervision_stub") as supervision_stub,
                     mock.patch("aha_cli.services.chat.apply_supervision_real_host") as supervision_host,
                 ):
-                    code, output = self.run_cli("codex-chat", run_id, "main", "--from-start", "--once")
+                    code, output = self.run_cli("codex-chat", run_id, "main", "--task-id", "task-001", "--from-start", "--once")
                 rows = [json.loads(line) for line in event_path(root, run_id).read_text(encoding="utf-8").splitlines()]
 
         self.assertEqual(code, 0)
@@ -620,7 +620,7 @@ class SupervisionFlowTests(unittest.TestCase):
                     mock.patch("aha_cli.services.chat.run_codex_exec", return_value=(0, "托管回复", None)),
                     mock.patch("aha_cli.services.chat_supervision.start_backend", return_value={"status": "running"}) as start_host,
                 ):
-                    code, output = self.run_cli("codex-chat", run_id, "main", "--from-start", "--once")
+                    code, output = self.run_cli("codex-chat", run_id, "main", "--task-id", "task-001", "--from-start", "--once")
                 task_after_main = status_snapshot(root, run_id)["tasks"][0]
                 with (
                     mock.patch("aha_cli.services.chat.run_claude_exec", return_value=(0, host_reply, None)) as host_run,
@@ -643,7 +643,7 @@ class SupervisionFlowTests(unittest.TestCase):
                 task = status_snapshot(root, run_id)["tasks"][0]
                 main_page = conversation_events_page(root, run_id, "task-001", "main", limit=20)
                 host_page = conversation_events_page(root, run_id, "task-001", "host", limit=20)
-                host_inbox_messages, _ = iter_jsonl_from(inbox_path(root, run_id, "host"), 0)
+                host_inbox_messages, _ = iter_jsonl_from(inbox_path(root, run_id, "host", "task-001"), 0)
 
         self.assertEqual(code, 0)
         self.assertEqual(host_code, 0)
@@ -765,7 +765,7 @@ class SupervisionFlowTests(unittest.TestCase):
                     mock.patch("aha_cli.services.orchestrator.start_backend", return_value={"status": "running"}) as start_sub,
                     mock.patch("aha_cli.services.chat_supervision.start_backend", return_value={"status": "running"}) as start_host,
                 ):
-                    code, _output = self.run_cli("codex-chat", run_id, "main", "--from-start", "--once")
+                    code, _output = self.run_cli("codex-chat", run_id, "main", "--task-id", "task-001", "--from-start", "--once")
                 rows = [json.loads(line) for line in event_path(root, run_id).read_text(encoding="utf-8").splitlines()]
                 task = status_snapshot(root, run_id)["tasks"][0]
 
@@ -818,7 +818,7 @@ class SupervisionFlowTests(unittest.TestCase):
                     mock.patch("aha_cli.services.orchestrator.start_backend", return_value={"status": "running"}) as start_sub,
                     mock.patch("aha_cli.services.chat_supervision.start_backend", return_value={"status": "running"}) as start_host,
                 ):
-                    code, _output = self.run_cli("codex-chat", run_id, "main", "--from-start", "--once")
+                    code, _output = self.run_cli("codex-chat", run_id, "main", "--task-id", "task-001", "--from-start", "--once")
                 rows = [json.loads(line) for line in event_path(root, run_id).read_text(encoding="utf-8").splitlines()]
                 task = status_snapshot(root, run_id)["tasks"][0]
 
@@ -1002,7 +1002,7 @@ class SupervisionFlowTests(unittest.TestCase):
                     mock.patch("aha_cli.services.chat.run_codex_exec", return_value=(0, "round summary", None)),
                     mock.patch("aha_cli.services.chat_supervision.start_backend", return_value={"status": "running"}) as start_host,
                 ):
-                    code, _output = self.run_cli("codex-chat", run_id, "main", "--from-start", "--once")
+                    code, _output = self.run_cli("codex-chat", run_id, "main", "--task-id", "task-001", "--from-start", "--once")
                 rows = [json.loads(line) for line in event_path(root, run_id).read_text(encoding="utf-8").splitlines()]
                 task = status_snapshot(root, run_id)["tasks"][0]
 
@@ -1082,7 +1082,7 @@ class SupervisionFlowTests(unittest.TestCase):
                     mock.patch("aha_cli.services.chat.run_codex_exec", return_value=(0, "托管回复", None)),
                     mock.patch("aha_cli.services.chat_supervision.start_backend", return_value={"status": "running"}) as start_host,
                 ):
-                    code, _output = self.run_cli("codex-chat", run_id, "main", "--from-start", "--once")
+                    code, _output = self.run_cli("codex-chat", run_id, "main", "--task-id", "task-001", "--from-start", "--once")
                 with (
                     mock.patch("aha_cli.services.chat.run_codex_exec", return_value=(0, host_reply, None)),
                     mock.patch("aha_cli.services.chat_supervision.start_backend", return_value={"status": "running"}) as start_main,
@@ -1243,7 +1243,7 @@ class SupervisionFlowTests(unittest.TestCase):
                     mock.patch("aha_cli.services.chat.run_codex_exec", return_value=(0, "", None)),
                     mock.patch("aha_cli.services.chat.stop_task_backends") as stop_backends,
                 ):
-                    code, _output = self.run_cli("codex-chat", run_id, "main", "--from-start", "--once")
+                    code, _output = self.run_cli("codex-chat", run_id, "main", "--task-id", "task-001", "--from-start", "--once")
 
                 rows = [json.loads(line) for line in event_path(root, run_id).read_text(encoding="utf-8").splitlines()]
                 task = status_snapshot(root, run_id)["tasks"][0]
@@ -1279,7 +1279,7 @@ class SupervisionFlowTests(unittest.TestCase):
                     mock.patch("aha_cli.services.chat.run_codex_exec", return_value=(0, "托管回复", None)),
                     mock.patch("aha_cli.services.chat_supervision.start_backend", return_value={"status": "running"}) as start_host,
                 ):
-                    code, _output = self.run_cli("codex-chat", run_id, "main", "--from-start", "--once")
+                    code, _output = self.run_cli("codex-chat", run_id, "main", "--task-id", "task-001", "--from-start", "--once")
                 task_after_main = status_snapshot(root, run_id)["tasks"][0]
                 with (
                     mock.patch("aha_cli.services.chat.run_claude_exec", return_value=(0, host_reply, None)),
@@ -1387,7 +1387,7 @@ class SupervisionFlowTests(unittest.TestCase):
                     mock.patch("aha_cli.services.chat.run_codex_exec", return_value=(0, "改动已完成，尚未提交。", None)),
                     mock.patch("aha_cli.services.chat_supervision.start_backend", return_value={"status": "running"}) as start_host,
                 ):
-                    code, _output = self.run_cli("codex-chat", run_id, "main", "--from-start", "--once")
+                    code, _output = self.run_cli("codex-chat", run_id, "main", "--task-id", "task-001", "--from-start", "--once")
                 with mock.patch("aha_cli.services.chat.run_codex_exec", return_value=(0, host_reply, None)):
                     host_code, _host_output = self.run_cli(
                         "codex-chat",
@@ -1461,7 +1461,7 @@ class SupervisionFlowTests(unittest.TestCase):
                         exit_code=0,
                     )
                 rows = [json.loads(line) for line in event_path(root, run_id).read_text(encoding="utf-8").splitlines()]
-                main_inbox_messages, _ = iter_jsonl_from(inbox_path(root, run_id, "main"), 0)
+                main_inbox_messages, _ = iter_jsonl_from(inbox_path(root, run_id, "main", "task-001"), 0)
                 task = status_snapshot(root, run_id)["tasks"][0]
 
         self.assertTrue(result["routed_to_main"])
@@ -1519,7 +1519,7 @@ class SupervisionFlowTests(unittest.TestCase):
                     mock.patch("aha_cli.services.chat.run_codex_exec", return_value=(0, "main 本轮回复", None)),
                     mock.patch("aha_cli.services.chat_supervision.start_backend", return_value={"status": "running"}),
                 ):
-                    code, _output = self.run_cli("codex-chat", run_id, "main", "--from-start", "--once")
+                    code, _output = self.run_cli("codex-chat", run_id, "main", "--task-id", "task-001", "--from-start", "--once")
                 with (
                     mock.patch("aha_cli.services.chat.run_claude_exec", return_value=(0, host_reply, None)),
                     mock.patch("aha_cli.services.chat_supervision.start_backend", return_value={"status": "running"}) as start_main,
@@ -1623,7 +1623,7 @@ class SupervisionFlowTests(unittest.TestCase):
                     mock.patch("aha_cli.services.chat.run_codex_exec", return_value=(0, "托管回复", None)),
                     mock.patch("aha_cli.services.chat_supervision.start_backend", return_value={"status": "running"}) as start_host,
                 ):
-                    code, _output = self.run_cli("codex-chat", run_id, "main", "--from-start", "--once")
+                    code, _output = self.run_cli("codex-chat", run_id, "main", "--task-id", "task-001", "--from-start", "--once")
                 with (
                     mock.patch("aha_cli.services.chat.run_claude_exec", return_value=(0, host_reply, None)),
                     mock.patch("aha_cli.services.chat_supervision.start_backend", return_value={"status": "running"}) as start_main,
@@ -1699,7 +1699,7 @@ class SupervisionFlowTests(unittest.TestCase):
                 )
 
                 with mock.patch("aha_cli.services.chat.run_codex_exec", return_value=(0, "状态：完成", None)) as run_agent:
-                    code, output = self.run_cli("codex-chat", run_id, "main", "--from-start", "--once")
+                    code, output = self.run_cli("codex-chat", run_id, "main", "--task-id", "task-001", "--from-start", "--once")
                 self.assertEqual(code, 0)
                 self.assertIn("main -> browser: 状态：完成", output)
                 self.assertEqual(run_agent.call_args.kwargs["session"]["agent_id"], "main")

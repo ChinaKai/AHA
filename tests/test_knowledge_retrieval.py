@@ -522,7 +522,7 @@ def test_dispatch_does_not_inject_retrieved_knowledge_into_assignment(tmp_path: 
                 title="Known pitfall", body="watch the build cache", meta={"tags": ["build"]})
 
     dispatch_task_to_main(home, run_id, task)
-    inbox_text = inbox_path(home, run_id, "main").read_text(encoding="utf-8")
+    inbox_text = inbox_path(home, run_id, "main", "task-001").read_text(encoding="utf-8")
     assert "项目已知经验" not in inbox_text
     assert "Known pitfall" not in inbox_text
     assert "Task:" in inbox_text

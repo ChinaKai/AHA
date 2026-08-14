@@ -1466,7 +1466,7 @@ class BackendRunnerSessionTests(unittest.TestCase):
                 summary_exists = (run_dir(aha_root, run_id) / payload["summary_path"]).exists()
                 offset_file = chat_offset_path(run_dir(aha_root, run_id), "main", "task-001")
                 offset = read_json(offset_file)
-                inbox_size = inbox_path(aha_root, run_id, "main").stat().st_size
+                inbox_size = inbox_path(aha_root, run_id, "main", "task-001").stat().st_size
                 prompt = chat_prompt(
                     aha_root,
                     run_id,
@@ -1508,7 +1508,7 @@ class BackendRunnerSessionTests(unittest.TestCase):
                 session_file.write_text(json.dumps(session), encoding="utf-8")
 
                 append_message(root, run_id, "main", "already processed", sender="browser", task_id="task-001", role="main")
-                inbox = inbox_path(root, run_id, "main")
+                inbox = inbox_path(root, run_id, "main", "task-001")
                 preserved_offset = inbox.stat().st_size
                 offset_file = chat_offset_path(run_dir(root, run_id), "main", "task-001")
                 save_chat_offset(offset_file, preserved_offset)

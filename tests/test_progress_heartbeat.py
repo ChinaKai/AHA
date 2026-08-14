@@ -27,7 +27,7 @@ class ProgressHeartbeatTests(unittest.TestCase):
 
             clock[0] = 61.0
             heartbeat.handle_event("agent_command_finished", {"output_tail": "ok"})
-            browser_messages, _ = iter_jsonl_from(inbox_path(root, run_id, "browser"), 0)
+            browser_messages, _ = iter_jsonl_from(inbox_path(root, run_id, "browser", "task-001"), 0)
 
         self.assertEqual(len(browser_messages), 1)
         self.assertEqual(browser_messages[0]["coordination"], "agent_progress_heartbeat")
@@ -47,7 +47,7 @@ class ProgressHeartbeatTests(unittest.TestCase):
             )
 
             heartbeat.handle_event("agent_command_started", {"tool_name": "Bash", "command": "aha commit --type feat --scope ui"})
-            browser_messages, _ = iter_jsonl_from(inbox_path(root, run_id, "browser"), 0)
+            browser_messages, _ = iter_jsonl_from(inbox_path(root, run_id, "browser", "task-001"), 0)
 
         self.assertEqual(len(browser_messages), 1)
         self.assertEqual(browser_messages[0]["coordination"], "agent_progress_heartbeat")
@@ -72,7 +72,7 @@ class ProgressHeartbeatTests(unittest.TestCase):
                 {"name": "Bash", "input": {"command": "python3 -m unittest tests.test_cli_core"}},
             )
             heartbeat.handle_event("toolUseResult", {"durationMs": 1200})
-            browser_messages, _ = iter_jsonl_from(inbox_path(root, run_id, "browser"), 0)
+            browser_messages, _ = iter_jsonl_from(inbox_path(root, run_id, "browser", "task-001"), 0)
 
         self.assertEqual(len(browser_messages), 1)
         self.assertEqual(browser_messages[0]["coordination"], "agent_progress_heartbeat")

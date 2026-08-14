@@ -126,7 +126,7 @@ class OrchestratorTests(unittest.TestCase):
                 reply = '{"complexity":"medium","actions":[{"type":"spawn_sub","title":"Inspect one slice","backend":"stub","reason":"parallel research"}],"response":"delegating"}'
 
                 with mock.patch("aha_cli.services.chat.run_codex_exec", return_value=(0, reply, None)):
-                    code, output = self.run_cli("codex-chat", run_id, "main", "--from-start", "--once")
+                    code, output = self.run_cli("codex-chat", run_id, "main", "--task-id", "task-001", "--from-start", "--once")
                 self.assertEqual(code, 0)
                 self.assertIn("delegating", output)
 
@@ -134,7 +134,7 @@ class OrchestratorTests(unittest.TestCase):
                 self.assertEqual(code, 0)
                 self.assertIn("sub-001 role=sub backend=stub", agents)
                 self.assertEqual(status_snapshot(root, run_id)["tasks"][0]["status"], "running")
-                browser_messages, _ = iter_jsonl_from(inbox_path(root, run_id, "browser"), 0)
+                browser_messages, _ = iter_jsonl_from(inbox_path(root, run_id, "browser", "task-001"), 0)
                 self.assertIn("等待子 agent 完成", browser_messages[-1]["message"])
 
     def test_execute_actions_spawn_sub_queues_main_followup(self) -> None:
@@ -161,7 +161,7 @@ class OrchestratorTests(unittest.TestCase):
                 )
 
                 executed = execute_actions(root, run_id, "task-001", reply)
-                main_messages, _ = iter_jsonl_from(inbox_path(root, run_id, "main"), 0)
+                main_messages, _ = iter_jsonl_from(inbox_path(root, run_id, "main", "task-001"), 0)
                 events, _ = iter_jsonl_from(event_path(root, run_id), 0)
 
         self.assertEqual(executed[0]["type"], "spawn_sub")
@@ -197,11 +197,11 @@ class OrchestratorTests(unittest.TestCase):
                 )
 
                 with mock.patch("aha_cli.services.chat.run_codex_exec", return_value=(0, reply, None)):
-                    code, output = self.run_cli("codex-chat", run_id, "main", "--from-start", "--once")
+                    code, output = self.run_cli("codex-chat", run_id, "main", "--task-id", "task-001", "--from-start", "--once")
                 detail = task_snapshot(root, run_id, "task-001")["task"]
                 main = next(agent for agent in detail["agents"] if agent["id"] == "main")
-                browser_messages, _ = iter_jsonl_from(inbox_path(root, run_id, "browser"), 0)
-                main_messages, _ = iter_jsonl_from(inbox_path(root, run_id, "main"), 0)
+                browser_messages, _ = iter_jsonl_from(inbox_path(root, run_id, "browser", "task-001"), 0)
+                main_messages, _ = iter_jsonl_from(inbox_path(root, run_id, "main", "task-001"), 0)
 
         self.assertEqual(code, 0)
         self.assertIn("delegating while continuing", output)
@@ -237,7 +237,7 @@ class OrchestratorTests(unittest.TestCase):
                 )
 
                 executed = execute_actions(root, run_id, "task-001", reply)
-                main_messages, _ = iter_jsonl_from(inbox_path(root, run_id, "main"), 0)
+                main_messages, _ = iter_jsonl_from(inbox_path(root, run_id, "main", "task-001"), 0)
 
         self.assertEqual(executed[0]["type"], "route_to_agent")
         self.assertTrue(executed[0]["main_followup"])
@@ -303,13 +303,13 @@ class OrchestratorTests(unittest.TestCase):
 
                 detail = task_snapshot(root, run_id, "task-001")["task"]
                 agent = next(item for item in detail["agents"] if item["id"] == sub["id"])
-                messages, _ = iter_jsonl_from(inbox_path(root, run_id, sub["id"]), 0)
+                messages, _ = iter_jsonl_from(inbox_path(root, run_id, sub["id"], "task-001"), 0)
                 offset = load_chat_offset(
-                    inbox_path(root, run_id, sub["id"]),
+                    inbox_path(root, run_id, sub["id"], "task-001"),
                     chat_offset_path(run_dir(root, run_id), sub["id"], "task-001"),
                     from_start=False,
                 )
-                new_messages, _ = iter_jsonl_from(inbox_path(root, run_id, sub["id"]), offset)
+                new_messages, _ = iter_jsonl_from(inbox_path(root, run_id, sub["id"], "task-001"), offset)
                 rows, _ = iter_jsonl_from(event_path(root, run_id), 0)
                 sessions = list_sessions(root, run_id, "task-001")
 
@@ -380,9 +380,9 @@ class OrchestratorTests(unittest.TestCase):
 
                 detail = task_snapshot(root, run_id, "task-001")["task"]
                 rows, _ = iter_jsonl_from(event_path(root, run_id), 0)
-                sub_messages, _ = iter_jsonl_from(inbox_path(root, run_id, sub["id"]), 0)
-                sub_two_messages, _ = iter_jsonl_from(inbox_path(root, run_id, sub_two["id"]), 0)
-                sub_three_messages, _ = iter_jsonl_from(inbox_path(root, run_id, sub_three["id"]), 0)
+                sub_messages, _ = iter_jsonl_from(inbox_path(root, run_id, sub["id"], "task-001"), 0)
+                sub_two_messages, _ = iter_jsonl_from(inbox_path(root, run_id, sub_two["id"], "task-001"), 0)
+                sub_three_messages, _ = iter_jsonl_from(inbox_path(root, run_id, sub_three["id"], "task-001"), 0)
 
         self.assertEqual([item["agent"]["id"] for item in executed], [sub_two["id"], sub["id"], sub_three["id"]])
         self.assertEqual([item["agent"]["assignment"] for item in executed], ["Inspect issue 02", "Inspect issue 04", "Inspect issue 03"])
@@ -428,7 +428,7 @@ class OrchestratorTests(unittest.TestCase):
                     second = record_sub_agent_report(root, run_id, "task-001", "sub-002", "workspace done")
                     first = record_sub_agent_report(root, run_id, "task-001", "sub-001", "sdk done")
 
-                main_messages, _ = iter_jsonl_from(inbox_path(root, run_id, "main"), 0)
+                main_messages, _ = iter_jsonl_from(inbox_path(root, run_id, "main", "task-001"), 0)
                 rows, _ = iter_jsonl_from(event_path(root, run_id), 0)
 
         self.assertEqual([item["agent"]["id"] for item in executed], ["sub-001", "sub-002"])
@@ -487,7 +487,7 @@ class OrchestratorTests(unittest.TestCase):
                 detail = task_snapshot(root, run_id, "task-001")["task"]
                 sub = next(agent for agent in detail["agents"] if agent["role"] == "sub")
                 main_page = conversation_events_page(root, run_id, "task-001", "main", limit=20, categories={"chat"})
-                main_messages, _ = iter_jsonl_from(inbox_path(root, run_id, "main"), 0)
+                main_messages, _ = iter_jsonl_from(inbox_path(root, run_id, "main", "task-001"), 0)
 
         self.assertEqual(executed[0]["type"], "spawn_sub")
         self.assertEqual(sub["status"], "failed")
@@ -517,7 +517,7 @@ class OrchestratorTests(unittest.TestCase):
                 detail = task_snapshot(root, run_id, "task-001")["task"]
                 statuses = {agent["id"]: agent["status"] for agent in detail["agents"] if agent["role"] == "sub"}
                 main_page = conversation_events_page(root, run_id, "task-001", "main", limit=20, categories={"chat"})
-                main_messages, _ = iter_jsonl_from(inbox_path(root, run_id, "main"), 0)
+                main_messages, _ = iter_jsonl_from(inbox_path(root, run_id, "main", "task-001"), 0)
 
         self.assertEqual(statuses, {"sub-001": "failed", "sub-002": "pending"})
         self.assertTrue(any(event.get("data", {}).get("message") == "sub-001 后端启动失败。" for event in main_page["events"]))
@@ -549,7 +549,7 @@ class OrchestratorTests(unittest.TestCase):
                     )
                 detail = task_snapshot(root, run_id, "task-001")["task"]
                 main_page = conversation_events_page(root, run_id, "task-001", "main", limit=20, categories={"chat"})
-                main_messages, _ = iter_jsonl_from(inbox_path(root, run_id, "main"), 0)
+                main_messages, _ = iter_jsonl_from(inbox_path(root, run_id, "main", "task-001"), 0)
 
         self.assertEqual(code, 1)
         self.assertEqual(next(agent for agent in detail["agents"] if agent["id"] == sub["id"])["status"], "failed")
@@ -589,7 +589,7 @@ class OrchestratorTests(unittest.TestCase):
 
                 detail = task_snapshot(root, run_id, "task-001")["task"]
                 rows, _ = iter_jsonl_from(event_path(root, run_id), 0)
-                sub_three_messages, _ = iter_jsonl_from(inbox_path(root, run_id, sub_three["id"]), 0)
+                sub_three_messages, _ = iter_jsonl_from(inbox_path(root, run_id, sub_three["id"], "task-001"), 0)
 
         agent = next(item for item in detail["agents"] if item["id"] == sub_three["id"])
         self.assertEqual(len(executed), 1)
@@ -637,8 +637,8 @@ class OrchestratorTests(unittest.TestCase):
                     executed = execute_actions(root, run_id, "task-001", reply)
                 detail = task_snapshot(root, run_id, "task-001")["task"]
                 rows, _ = iter_jsonl_from(event_path(root, run_id), 0)
-                browser_messages, _ = iter_jsonl_from(inbox_path(root, run_id, "browser"), 0)
-                main_messages, _ = iter_jsonl_from(inbox_path(root, run_id, "main"), 0)
+                browser_messages, _ = iter_jsonl_from(inbox_path(root, run_id, "browser", "task-001"), 0)
+                main_messages, _ = iter_jsonl_from(inbox_path(root, run_id, "main", "task-001"), 0)
                 main_page = conversation_events_page(root, run_id, "task-001", "main", limit=20, categories={"chat"})
 
         self.assertEqual(executed, [])
@@ -752,7 +752,7 @@ class OrchestratorTests(unittest.TestCase):
                     executed = execute_actions(root, run_id, "task-001", reply)
 
                 rows, _ = iter_jsonl_from(event_path(root, run_id), 0)
-                browser_messages, _ = iter_jsonl_from(inbox_path(root, run_id, "browser"), 0)
+                browser_messages, _ = iter_jsonl_from(inbox_path(root, run_id, "browser", "task-001"), 0)
                 detail = task_snapshot(root, run_id, "task-001")["task"]
 
         self.assertEqual(executed, [])
@@ -775,7 +775,7 @@ class OrchestratorTests(unittest.TestCase):
                 reply = "3个sub agent已并行启动。我现在继续分析。"
 
                 with mock.patch("aha_cli.services.chat.run_codex_exec", return_value=(0, reply, None)):
-                    code, _ = self.run_cli("codex-chat", run_id, "main", "--from-start", "--once")
+                    code, _ = self.run_cli("codex-chat", run_id, "main", "--task-id", "task-001", "--from-start", "--once")
                 events, _ = iter_jsonl_from(event_path(root, run_id), 0)
                 detail = task_snapshot(root, run_id, "task-001")
 
@@ -862,7 +862,7 @@ class OrchestratorTests(unittest.TestCase):
                 self.assertEqual(executed, [])
                 self.assertIn("Invalid AHA action schema", action_response_text(reply))
                 start_backend_mock.assert_not_called()
-                sub_messages, _ = iter_jsonl_from(inbox_path(root, run_id, "sub-001"), 0)
+                sub_messages, _ = iter_jsonl_from(inbox_path(root, run_id, "sub-001", "task-001"), 0)
                 self.assertEqual(sub_messages, [])
                 events, _ = iter_jsonl_from(event_path(root, run_id), 0)
                 self.assertTrue(any(event["type"] == "invalid_action_schema" for event in events))
@@ -881,8 +881,8 @@ class OrchestratorTests(unittest.TestCase):
                 with mock.patch("aha_cli.services.chat.run_codex_exec", return_value=(0, reply, None)):
                     code, output = self.run_cli("codex-chat", run_id, "main", "--task-id", "task-001", "--from-start", "--once")
 
-                main_messages, _ = iter_jsonl_from(inbox_path(root, run_id, "main"), 0)
-                browser_messages, _ = iter_jsonl_from(inbox_path(root, run_id, "browser"), 0)
+                main_messages, _ = iter_jsonl_from(inbox_path(root, run_id, "main", "task-001"), 0)
+                browser_messages, _ = iter_jsonl_from(inbox_path(root, run_id, "browser", "task-001"), 0)
                 events, _ = iter_jsonl_from(event_path(root, run_id), 0)
                 detail = task_snapshot(root, run_id, "task-001")["task"]
 
@@ -914,7 +914,7 @@ class OrchestratorTests(unittest.TestCase):
                 ):
                     code, output = self.run_cli("codex-chat", run_id, "main", "--task-id", "task-001", "--from-start")
 
-                main_messages, _ = iter_jsonl_from(inbox_path(root, run_id, "main"), 0)
+                main_messages, _ = iter_jsonl_from(inbox_path(root, run_id, "main", "task-001"), 0)
                 events, _ = iter_jsonl_from(event_path(root, run_id), 0)
 
         self.assertEqual(code, 0)
@@ -943,8 +943,8 @@ class OrchestratorTests(unittest.TestCase):
                 with mock.patch("aha_cli.services.chat.run_codex_exec", return_value=(0, reply, None)):
                     code, output = self.run_cli("codex-chat", run_id, "main", "--task-id", "task-001", "--from-start", "--once")
 
-                main_messages, _ = iter_jsonl_from(inbox_path(root, run_id, "main"), 0)
-                browser_messages, _ = iter_jsonl_from(inbox_path(root, run_id, "browser"), 0)
+                main_messages, _ = iter_jsonl_from(inbox_path(root, run_id, "main", "task-001"), 0)
+                browser_messages, _ = iter_jsonl_from(inbox_path(root, run_id, "browser", "task-001"), 0)
                 events, _ = iter_jsonl_from(event_path(root, run_id), 0)
 
         self.assertEqual(code, 0)
@@ -982,8 +982,8 @@ class OrchestratorTests(unittest.TestCase):
                         "env:kimi",
                     )
 
-                main_messages, _ = iter_jsonl_from(inbox_path(root, run_id, "main"), 0)
-                browser_messages, _ = iter_jsonl_from(inbox_path(root, run_id, "browser"), 0)
+                main_messages, _ = iter_jsonl_from(inbox_path(root, run_id, "main", "task-001"), 0)
+                browser_messages, _ = iter_jsonl_from(inbox_path(root, run_id, "browser", "task-001"), 0)
                 events, _ = iter_jsonl_from(event_path(root, run_id), 0)
                 detail = task_snapshot(root, run_id, "task-001")["task"]
 
@@ -1043,8 +1043,8 @@ class OrchestratorTests(unittest.TestCase):
                         "env:kimi",
                     )
 
-                main_messages, _ = iter_jsonl_from(inbox_path(root, run_id, "main"), 0)
-                browser_messages, _ = iter_jsonl_from(inbox_path(root, run_id, "browser"), 0)
+                main_messages, _ = iter_jsonl_from(inbox_path(root, run_id, "main", "task-001"), 0)
+                browser_messages, _ = iter_jsonl_from(inbox_path(root, run_id, "browser", "task-001"), 0)
                 events, _ = iter_jsonl_from(event_path(root, run_id), 0)
 
         self.assertEqual(code, 0)
@@ -1074,7 +1074,7 @@ class OrchestratorTests(unittest.TestCase):
                 with mock.patch("aha_cli.services.chat.run_codex_exec", side_effect=run_agent):
                     code, _output = self.run_cli("codex-chat", run_id, "main", "--task-id", "task-001", "--from-start", "--once")
 
-                browser_messages, _ = iter_jsonl_from(inbox_path(root, run_id, "browser"), 0)
+                browser_messages, _ = iter_jsonl_from(inbox_path(root, run_id, "browser", "task-001"), 0)
                 events, _ = iter_jsonl_from(event_path(root, run_id), 0)
                 detail = task_snapshot(root, run_id, "task-001")["task"]
 
@@ -1120,7 +1120,7 @@ class OrchestratorTests(unittest.TestCase):
                         "env:kimi",
                     )
 
-                browser_messages, _ = iter_jsonl_from(inbox_path(root, run_id, "browser"), 0)
+                browser_messages, _ = iter_jsonl_from(inbox_path(root, run_id, "browser", "task-001"), 0)
                 events, _ = iter_jsonl_from(event_path(root, run_id), 0)
 
         self.assertEqual(code, 0)
@@ -1170,7 +1170,7 @@ class OrchestratorTests(unittest.TestCase):
                         "env:MiniMax-M2.7-highspeed",
                     )
 
-                browser_messages, _ = iter_jsonl_from(inbox_path(root, run_id, "browser"), 0)
+                browser_messages, _ = iter_jsonl_from(inbox_path(root, run_id, "browser", "task-001"), 0)
                 events, _ = iter_jsonl_from(event_path(root, run_id), 0)
 
         self.assertEqual(code, 0)
@@ -1198,7 +1198,7 @@ class OrchestratorTests(unittest.TestCase):
                 with mock.patch("aha_cli.services.chat.run_codex_exec", side_effect=run_agent):
                     code, _output = self.run_cli("codex-chat", run_id, "main", "--task-id", "task-001", "--from-start", "--once")
 
-                browser_messages, _ = iter_jsonl_from(inbox_path(root, run_id, "browser"), 0)
+                browser_messages, _ = iter_jsonl_from(inbox_path(root, run_id, "browser", "task-001"), 0)
                 events, _ = iter_jsonl_from(event_path(root, run_id), 0)
 
         self.assertEqual(code, 0)
@@ -1322,11 +1322,11 @@ class OrchestratorTests(unittest.TestCase):
                 )
 
                 with mock.patch("aha_cli.services.chat.run_codex_exec", return_value=(0, reply, None)):
-                    code, output = self.run_cli("codex-chat", run_id, "main", "--from-start", "--once")
+                    code, output = self.run_cli("codex-chat", run_id, "main", "--task-id", "task-001", "--from-start", "--once")
 
                 self.assertEqual(code, 0)
                 self.assertIn("完成", output)
-                browser_messages, _ = iter_jsonl_from(inbox_path(root, run_id, "browser"), 0)
+                browser_messages, _ = iter_jsonl_from(inbox_path(root, run_id, "browser", "task-001"), 0)
                 self.assertNotIn("等待子 agent 完成", "\n".join(item["message"] for item in browser_messages))
                 self.assertEqual(status_snapshot(root, run_id)["tasks"][0]["status"], "awaiting_user")
 
@@ -1362,13 +1362,13 @@ class OrchestratorTests(unittest.TestCase):
                     mock.patch("aha_cli.services.chat.run_codex_exec", return_value=(0, reply, None)),
                     mock.patch("aha_cli.services.orchestrator.start_backend", return_value={"status": "running"}) as start_backend,
                 ):
-                    code, _ = self.run_cli("codex-chat", run_id, "main", "--from-start", "--once")
+                    code, _ = self.run_cli("codex-chat", run_id, "main", "--task-id", "task-001", "--from-start", "--once")
 
                 self.assertEqual(code, 0)
                 start_backend.assert_called_once()
                 self.assertEqual(start_backend.call_args.args[:3], (root / ".aha", run_id, "sub-001"))
                 self.assertTrue(start_backend.call_args.kwargs["from_start"])
-                messages, _ = iter_jsonl_from(inbox_path(root, run_id, "sub-001"), 0)
+                messages, _ = iter_jsonl_from(inbox_path(root, run_id, "sub-001", "task-001"), 0)
                 expected_assignment = (
                     "Inspect src/aha_cli/backends and report behavior gaps "
                     "plus the exact validation command."
@@ -1500,12 +1500,12 @@ class OrchestratorTests(unittest.TestCase):
                     mock.patch("aha_cli.services.chat.run_codex_exec", return_value=(0, reply, None)),
                     mock.patch("aha_cli.services.orchestrator.start_backend", return_value={"status": "running"}) as start_backend,
                 ):
-                    code, output = self.run_cli("codex-chat", run_id, "main", "--from-start", "--once")
+                    code, output = self.run_cli("codex-chat", run_id, "main", "--task-id", "task-001", "--from-start", "--once")
 
                 self.assertEqual(code, 0)
                 self.assertIn("main -> browser: 已转给 sub-001 处理。", output)
                 self.assertNotIn("route_to_agent", output)
-                sub_messages, _ = iter_jsonl_from(inbox_path(root, run_id, "sub-001"), 0)
+                sub_messages, _ = iter_jsonl_from(inbox_path(root, run_id, "sub-001", "task-001"), 0)
                 self.assertEqual(sub_messages[-1]["message"], "请继续调整你负责的范围")
                 self.assertEqual(sub_messages[-1]["coordination"], "routed_by_main")
                 detail = task_snapshot(root, run_id, "task-001")
@@ -1581,7 +1581,7 @@ class OrchestratorTests(unittest.TestCase):
                 second = record_sub_agent_report(root, run_id, "task-001", "sub-002", "sub-002 done")
                 self.assertTrue(second["round_summary_requested"])
                 self.assertFalse(second["final_requested"])
-                main_messages, _ = iter_jsonl_from(inbox_path(root, run_id, "main"), 0)
+                main_messages, _ = iter_jsonl_from(inbox_path(root, run_id, "main", "task-001"), 0)
                 self.assertEqual(main_messages[-1]["sender"], "aha")
                 self.assertEqual(main_messages[-1]["coordination"], "subagents_complete")
                 self.assertNotIn("result_policy", main_messages[-1])
@@ -1610,7 +1610,7 @@ class OrchestratorTests(unittest.TestCase):
                 set_agent_status(root, run_id, "task-001", "main", "waiting", waiting_reason="subagents")
                 set_task_status(root, run_id, "task-001", "running")
                 append_message(root, run_id, "main", "old message", sender="browser", task_id="task-001", role="main")
-                main_inbox = inbox_path(root, run_id, "main")
+                main_inbox = inbox_path(root, run_id, "main", "task-001")
                 baseline_offset = main_inbox.stat().st_size
 
                 with (
@@ -1706,7 +1706,7 @@ class OrchestratorTests(unittest.TestCase):
 
                 self.assertNotIn({"type": "round_summary_requested", "task_id": "task-001"}, actions)
                 start_backend.assert_not_called()
-                main_messages, _ = iter_jsonl_from(inbox_path(root, run_id, "main"), 0)
+                main_messages, _ = iter_jsonl_from(inbox_path(root, run_id, "main", "task-001"), 0)
                 self.assertFalse(any(item.get("coordination") == "subagents_complete" for item in main_messages))
                 events, _ = iter_jsonl_from(event_path(root, run_id), 0)
                 self.assertFalse(any(event["type"] == "task_round_summary_requested" for event in events))
@@ -1752,7 +1752,7 @@ class OrchestratorTests(unittest.TestCase):
                     actions = monitor_task_coordination(root, run_id)
                 detail = task_snapshot(root, run_id, "task-001")
                 main_page = conversation_events_page(root, run_id, "task-001", "main", limit=20, categories={"chat"})
-                main_messages, _ = iter_jsonl_from(inbox_path(root, run_id, "main"), 0)
+                main_messages, _ = iter_jsonl_from(inbox_path(root, run_id, "main", "task-001"), 0)
 
         self.assertIn({"type": "agent_failed", "task_id": "task-001", "agent_id": "sub-001"}, actions)
         self.assertEqual(next(agent for agent in detail["task"]["agents"] if agent["id"] == "sub-001")["status"], "failed")
@@ -1773,11 +1773,11 @@ class OrchestratorTests(unittest.TestCase):
                 append_message(root, run_id, "main", "done", sender="sub-001", task_id="task-001", role="sub", from_agent="sub-001", to_agent="main")
 
                 with mock.patch("aha_cli.services.chat.run_codex_exec") as run_agent:
-                    code, _ = self.run_cli("codex-chat", run_id, "main", "--from-start", "--once")
+                    code, _ = self.run_cli("codex-chat", run_id, "main", "--task-id", "task-001", "--from-start", "--once")
 
                 self.assertEqual(code, 0)
                 run_agent.assert_not_called()
-                sub_messages, _ = iter_jsonl_from(inbox_path(root, run_id, "sub-001"), 0)
+                sub_messages, _ = iter_jsonl_from(inbox_path(root, run_id, "sub-001", "task-001"), 0)
                 self.assertEqual(sub_messages, [])
 
     def test_sub_agent_skips_messages_after_final_summary_requested(self) -> None:

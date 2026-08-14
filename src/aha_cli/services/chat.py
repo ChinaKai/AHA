@@ -824,7 +824,7 @@ def agent_chat(root: Path, run_id: str, args, *, backend_name: str) -> int:
     require_plan(root, run_id)
     cfg = load_config(root)
     worker_task_id = str(getattr(args, "task_id", "") or "") or None
-    inbox = inbox_path(root, run_id, args.target)
+    inbox = inbox_path(root, run_id, args.target, worker_task_id)
     run = run_dir(root, run_id)
     events_file = event_path(root, run_id)
     offset_file = chat_offset_path(run, args.target, worker_task_id)

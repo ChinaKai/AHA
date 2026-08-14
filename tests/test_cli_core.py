@@ -1585,7 +1585,7 @@ class CliCoreTests(unittest.TestCase):
                 self.assertTrue(handled)
                 self.assertIsNone(agent_message)
                 self.assertIn("message", payload)
-                main_messages, _ = iter_jsonl_from(inbox_path(root, run_id, "main"), 0)
+                main_messages, _ = iter_jsonl_from(inbox_path(root, run_id, "main", "task-001"), 0)
                 self.assertEqual(main_messages, [])
                 self.assertIn("Unsupported AHA command", payload["message"]["message"])
 

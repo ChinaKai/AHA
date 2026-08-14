@@ -66,7 +66,7 @@ class FinalizationFlowTests(unittest.TestCase):
                 append_message(root, run_id, "main", "你好", sender="browser", task_id="task-001", role="main")
 
                 with mock.patch("aha_cli.services.chat.run_codex_exec", return_value=(0, "真实回复", None)):
-                    code, output = self.run_cli("codex-chat", run_id, "main", "--from-start", "--once")
+                    code, output = self.run_cli("codex-chat", run_id, "main", "--task-id", "task-001", "--from-start", "--once")
                 self.assertEqual(code, 0)
                 self.assertIn("main -> browser: 真实回复", output)
                 self.assertEqual(status_snapshot(root, run_id)["tasks"][0]["status"], "awaiting_user")
@@ -109,7 +109,7 @@ class FinalizationFlowTests(unittest.TestCase):
                 )
 
                 with mock.patch("aha_cli.services.chat.run_codex_exec", return_value=(0, "new final", None)):
-                    code, output = self.run_cli("codex-chat", run_id, "main", "--from-start", "--once")
+                    code, output = self.run_cli("codex-chat", run_id, "main", "--task-id", "task-001", "--from-start", "--once")
                 self.assertEqual(code, 0)
                 self.assertIn("main -> aha: new final", output)
                 self.assertEqual(task_snapshot(root, run_id, "task-001")["result"].strip(), "new final")
@@ -131,7 +131,7 @@ class FinalizationFlowTests(unittest.TestCase):
 
                 append_message(root, run_id, "main", "先做第一轮", sender="browser", task_id="task-001", role="main")
                 with mock.patch("aha_cli.services.chat.run_codex_exec", return_value=(0, "第一轮已处理", None)):
-                    code, _ = self.run_cli("codex-chat", run_id, "main", "--from-start", "--once")
+                    code, _ = self.run_cli("codex-chat", run_id, "main", "--task-id", "task-001", "--from-start", "--once")
 
                 self.assertEqual(code, 0)
                 self.assertEqual(task_snapshot(root, run_id, "task-001")["task"]["status"], "awaiting_user")
@@ -389,7 +389,7 @@ class FinalizationFlowTests(unittest.TestCase):
 
                 with mock.patch("aha_cli.services.orchestrator.start_backend", return_value={"status": "running"}):
                     report = record_sub_agent_report(root, run_id, "task-001", sub["id"], "sub done")
-                main_messages, _ = iter_jsonl_from(inbox_path(root, run_id, "main"), 0)
+                main_messages, _ = iter_jsonl_from(inbox_path(root, run_id, "main", "task-001"), 0)
 
         self.assertTrue(report["round_summary_requested"])
         self.assertEqual(main_messages[-1]["coordination"], "subagents_complete")

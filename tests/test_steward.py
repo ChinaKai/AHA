@@ -172,7 +172,7 @@ class StewardTests(unittest.TestCase):
                 )
             )
             body = json_response_body(response)
-            main_messages, _ = iter_jsonl_from(inbox_path(root, run_id, "main"), 0)
+            main_messages, _ = iter_jsonl_from(inbox_path(root, run_id, "main", "task-001"), 0)
             rows = [json.loads(line) for line in event_path(root, run_id).read_text(encoding="utf-8").splitlines()]
 
         self.assertFalse(body["steward"]["applied"])
@@ -218,7 +218,7 @@ class StewardTests(unittest.TestCase):
                         )
                     )
                     self.assertTrue(response.startswith(b"HTTP/1.1 200 OK"))
-            host_messages, _ = iter_jsonl_from(inbox_path(root, run_id, "host"), 0)
+            host_messages, _ = iter_jsonl_from(inbox_path(root, run_id, "host", "task-001"), 0)
             rows = [json.loads(line) for line in event_path(root, run_id).read_text(encoding="utf-8").splitlines()]
 
         routed_messages = [row for row in host_messages if row.get("sender") == "main" and row.get("target") == "host"]
@@ -257,7 +257,7 @@ class StewardTests(unittest.TestCase):
                 )
             )
             body = json_response_body(response)
-            main_messages, _ = iter_jsonl_from(inbox_path(root, run_id, "main"), 0)
+            main_messages, _ = iter_jsonl_from(inbox_path(root, run_id, "main", "task-001"), 0)
             rows = [json.loads(line) for line in event_path(root, run_id).read_text(encoding="utf-8").splitlines()]
 
         self.assertFalse(body["steward"]["applied"])
@@ -333,7 +333,7 @@ class StewardTests(unittest.TestCase):
                     )
                 )
             body = json_response_body(response)
-            host_messages, _ = iter_jsonl_from(inbox_path(root, run_id, "host"), 0)
+            host_messages, _ = iter_jsonl_from(inbox_path(root, run_id, "host", "task-001"), 0)
             rows = [json.loads(line) for line in event_path(root, run_id).read_text(encoding="utf-8").splitlines()]
             task = body["task"]
 

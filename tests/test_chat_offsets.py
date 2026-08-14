@@ -196,7 +196,7 @@ class ChatOffsetTests(unittest.TestCase):
                 self.assertEqual(code, 0)
                 run_id = plan_output.splitlines()[0].split(": ", 1)[1]
 
-            inbox = inbox_path(root, run_id, "main")
+            inbox = inbox_path(root, run_id, "main", "task-001")
             run = run_dir(root, run_id)
             append_jsonl(
                 inbox,

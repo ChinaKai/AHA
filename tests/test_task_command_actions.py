@@ -80,7 +80,7 @@ class TaskCommandActionTests(unittest.TestCase):
             run_id = self.init_run(root)
 
             final_message = request_task_finalization(root, run_id, "task-001", "/aha final")
-            main_messages, _ = iter_jsonl_from(inbox_path(root, run_id, "main"), 0)
+            main_messages, _ = iter_jsonl_from(inbox_path(root, run_id, "main", "task-001"), 0)
             detail = task_snapshot(root, run_id, "task-001")["task"]
 
         self.assertIn("Finalization requested", final_message)
@@ -98,7 +98,7 @@ class TaskCommandActionTests(unittest.TestCase):
 
             with mock.patch("aha_cli.web.task_command_actions.stop_task_backends", return_value=[{"target": sub["id"], "status": "stopped"}]) as stop_backends:
                 message, payload = complete_selected_task(root, run_id, "task-001")
-            main_messages, _ = iter_jsonl_from(inbox_path(root, run_id, "main"), 0)
+            main_messages, _ = iter_jsonl_from(inbox_path(root, run_id, "main", "task-001"), 0)
             detail = task_snapshot(root, run_id, "task-001")
             events, _ = iter_jsonl_from(event_path(root, run_id), 0)
             main_agent = next(agent for agent in detail["task"]["agents"] if agent["id"] == "main")
@@ -170,7 +170,7 @@ class TaskCommandActionTests(unittest.TestCase):
             ):
                 message, payload = interrupt_selected_agent(root, run_id, "task-001", "main")
             offset = json.loads(chat_offset_path(run_dir(root, run_id), "main", "task-001").read_text(encoding="utf-8"))["offset"]
-            inbox_size = inbox_path(root, run_id, "main").stat().st_size
+            inbox_size = inbox_path(root, run_id, "main", "task-001").stat().st_size
             detail = task_snapshot(root, run_id, "task-001")["task"]
             events, _ = iter_jsonl_from(event_path(root, run_id), 0)
 
@@ -232,7 +232,7 @@ class TaskCommandActionTests(unittest.TestCase):
                 message, payload = interrupt_selected_agent(root, run_id, "task-001", "main")
 
             offset = json.loads(chat_offset_path(run_dir(root, run_id), "main", "task-001").read_text(encoding="utf-8"))["offset"]
-            inbox_size = inbox_path(root, run_id, "main").stat().st_size
+            inbox_size = inbox_path(root, run_id, "main", "task-001").stat().st_size
             detail = task_snapshot(root, run_id, "task-001")["task"]
 
         self.assertIn("Interrupted main", message)
@@ -256,7 +256,7 @@ class TaskCommandActionTests(unittest.TestCase):
             ):
                 message, payload = interrupt_selected_agent(root, run_id, "task-001", "main")
             offset = json.loads(chat_offset_path(run_dir(root, run_id), "main", "task-001").read_text(encoding="utf-8"))["offset"]
-            inbox_size = inbox_path(root, run_id, "main").stat().st_size
+            inbox_size = inbox_path(root, run_id, "main", "task-001").stat().st_size
             detail = task_snapshot(root, run_id, "task-001")["task"]
 
         self.assertIn("Interrupted main", message)
@@ -311,7 +311,7 @@ class TaskCommandActionTests(unittest.TestCase):
                 message, payload = interrupt_selected_agent(root, run_id, "task-001", sub["id"])
 
             detail = task_snapshot(root, run_id, "task-001")["task"]
-            main_messages, _ = iter_jsonl_from(inbox_path(root, run_id, "main"), 0)
+            main_messages, _ = iter_jsonl_from(inbox_path(root, run_id, "main", "task-001"), 0)
             events, _ = iter_jsonl_from(event_path(root, run_id), 0)
 
         self.assertIn(f"Interrupted {sub['id']}", message)
@@ -346,7 +346,7 @@ class TaskCommandActionTests(unittest.TestCase):
 
             detail = task_snapshot(root, run_id, "task-001")["task"]
             main_agent = next(agent for agent in detail["agents"] if agent["id"] == "main")
-            main_messages, _ = iter_jsonl_from(inbox_path(root, run_id, "main"), 0)
+            main_messages, _ = iter_jsonl_from(inbox_path(root, run_id, "main", "task-001"), 0)
 
         self.assertTrue(payload["interrupted"])
         self.assertEqual(detail["status"], "running")
@@ -442,7 +442,7 @@ class TaskCommandActionTests(unittest.TestCase):
                 message, payload = interrupt_selected_agent(root, run_id, "task-001", "host")
 
             offset = json.loads(chat_offset_path(run_dir(root, run_id), "host", "task-001").read_text(encoding="utf-8"))["offset"]
-            inbox_size = inbox_path(root, run_id, "host").stat().st_size
+            inbox_size = inbox_path(root, run_id, "host", "task-001").stat().st_size
             detail = task_snapshot(root, run_id, "task-001")["task"]
             main_agent = next(agent for agent in detail["agents"] if agent["id"] == "main")
             host_agent = next(agent for agent in detail["agents"] if agent["id"] == "host")

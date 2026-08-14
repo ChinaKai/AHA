@@ -479,7 +479,7 @@ class WebStatusTests(unittest.TestCase):
                             "message": "继续",
                         },
                     )
-                messages, _ = iter_jsonl_from(inbox_path(root, run_id, "main"), 0)
+                messages, _ = iter_jsonl_from(inbox_path(root, run_id, "main", "task-001"), 0)
                 sent_text = messages[-1]["message"]
                 consumed = task_snapshot(root, run_id, "task-001")["task"]
                 event_log = event_path(root, run_id).read_text(encoding="utf-8")
@@ -507,7 +507,7 @@ class WebStatusTests(unittest.TestCase):
                 append_message(root, run_id, "main", "hello", "browser", task_id="task-001")
                 from aha_cli.store.paths import inbox_path, run_dir
                 from aha_cli.services.chat_offsets import chat_offset_path, load_chat_offset, save_chat_offset
-                inbox = inbox_path(root, run_id, "main")
+                inbox = inbox_path(root, run_id, "main", "task-001")
                 offset_file = chat_offset_path(run_dir(root, run_id), "main", "task-001")
                 inbox_size = inbox.stat().st_size
                 save_chat_offset(offset_file, max(0, inbox_size - 10))
@@ -551,7 +551,7 @@ class WebStatusTests(unittest.TestCase):
                     stale_sub,
                     {"status": "stopped", "pid": None},
                 )
-                messages, _ = iter_jsonl_from(inbox_path(root, run_id, "main"), 0)
+                messages, _ = iter_jsonl_from(inbox_path(root, run_id, "main", "task-001"), 0)
                 detail = task_snapshot(root, run_id, "task-001")["task"]
                 event_log = event_path(root, run_id).read_text(encoding="utf-8")
                 main_page = conversation_events_page(root, run_id, "task-001", "main", limit=20, categories={"chat"})
@@ -594,7 +594,7 @@ class WebStatusTests(unittest.TestCase):
                         stale_sub,
                         {"status": "stopped", "pid": None},
                     )
-                messages, _ = iter_jsonl_from(inbox_path(root, run_id, "main"), 0)
+                messages, _ = iter_jsonl_from(inbox_path(root, run_id, "main", "task-001"), 0)
                 main_page = conversation_events_page(root, run_id, "task-001", "main", limit=20, categories={"chat"})
 
         self.assertTrue(recovered)
@@ -645,7 +645,7 @@ class WebStatusTests(unittest.TestCase):
                             "message": "继续",
                         },
                     )
-                messages, _ = iter_jsonl_from(inbox_path(root, run_id, "main"), 0)
+                messages, _ = iter_jsonl_from(inbox_path(root, run_id, "main", "task-001"), 0)
                 consumed = task_snapshot(root, run_id, "task-001")["task"]
 
         self.assertEqual(messages[-1]["message"], "继续")
@@ -716,7 +716,7 @@ class WebStatusTests(unittest.TestCase):
                 self.assertFalse(start_backend.call_args.kwargs["from_start"])
                 self.assertEqual(start_backend.call_args.kwargs["task_id"], "task-001")
                 offset = json.loads(offset_file.read_text(encoding="utf-8"))["offset"]
-                messages, _ = iter_jsonl_from(inbox_path(root, run_id, "main"), offset)
+                messages, _ = iter_jsonl_from(inbox_path(root, run_id, "main", "task-001"), offset)
                 self.assertEqual([item["message"] for item in messages], ["new follow-up"])
 
     def test_web_send_autostarts_claude_task_backend(self) -> None:
@@ -827,7 +827,7 @@ class WebStatusTests(unittest.TestCase):
                 self.assertEqual(detail["status"], "awaiting_user")
                 self.assertEqual(detail["agents"][0]["status"], "interrupted")
                 self.assertIsNotNone(detail["agents"][0]["finished_at"])
-                self.assertEqual(json.loads(offset_file.read_text(encoding="utf-8"))["offset"], inbox_path(root, run_id, "main").stat().st_size)
+                self.assertEqual(json.loads(offset_file.read_text(encoding="utf-8"))["offset"], inbox_path(root, run_id, "main", "task-001").stat().st_size)
 
     def test_aha_interrupt_stops_idle_running_backend_listener(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -575,7 +575,7 @@ def apply_supervision_real_host(
         },
     )
     offset_file = chat_offset_path(run, host_agent_id, task_id)
-    host_inbox = inbox_path(root, run_id, host_agent_id)
+    host_inbox = inbox_path(root, run_id, host_agent_id, task_id)
     if not chat_offset_exists(root, run_id, host_agent_id, task_id):
         save_chat_offset(offset_file, host_inbox.stat().st_size if host_inbox.exists() else 0)
     append_message(

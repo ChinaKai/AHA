@@ -1238,7 +1238,7 @@ class ServiceAssistantTests(unittest.TestCase):
             )
 
             executed = execute_actions(root, assistant_run, assistant_task["id"], reply)
-            messages, _offset = iter_jsonl_from(inbox_path(root, assistant_run, "main"), 0)
+            messages, _offset = iter_jsonl_from(inbox_path(root, assistant_run, "main", assistant_task["id"]), 0)
 
             self.assertTrue(executed[0]["continuation"])
             self.assertEqual(messages[-1]["coordination"], "service_assistant_action_result")

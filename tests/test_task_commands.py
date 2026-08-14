@@ -88,7 +88,7 @@ class TaskCommandTests(unittest.TestCase):
                     "/aha final",
                     "task-001",
                 )
-                main_messages, _ = iter_jsonl_from(inbox_path(root, run_id, "main"), 0)
+                main_messages, _ = iter_jsonl_from(inbox_path(root, run_id, "main", "task-001"), 0)
                 event_types = [json.loads(line)["type"] for line in event_path(root, run_id).read_text(encoding="utf-8").splitlines()]
                 task = status_snapshot(root, run_id)["tasks"][0]
                 rounds = list_task_rounds(root, run_id, "task-001")
@@ -121,7 +121,7 @@ class TaskCommandTests(unittest.TestCase):
                         "/aha complete",
                         "task-001",
                     )
-                main_messages, _ = iter_jsonl_from(inbox_path(root, run_id, "main"), 0)
+                main_messages, _ = iter_jsonl_from(inbox_path(root, run_id, "main", "task-001"), 0)
                 event_types = [json.loads(line)["type"] for line in event_path(root, run_id).read_text(encoding="utf-8").splitlines()]
                 task = status_snapshot(root, run_id)["tasks"][0]
 
@@ -147,7 +147,7 @@ class TaskCommandTests(unittest.TestCase):
                 with mock.patch("aha_cli.web.task_command_actions.stop_task_backends", return_value=[]) as stop_backends:
                     code, output = self.run_cli("task", "complete", run_id, "task-001")
                 task = status_snapshot(root, run_id)["tasks"][0]
-                main_messages, _ = iter_jsonl_from(inbox_path(root, run_id, "main"), 0)
+                main_messages, _ = iter_jsonl_from(inbox_path(root, run_id, "main", "task-001"), 0)
 
         self.assertEqual(code, 0)
         self.assertIn("completed.", output)
@@ -173,7 +173,7 @@ class TaskCommandTests(unittest.TestCase):
                     sender="browser",
                     task_id="task-001",
                 )
-                reopen_boundary = inbox_path(root, run_id, "main").stat().st_size
+                reopen_boundary = inbox_path(root, run_id, "main", "task-001").stat().st_size
 
                 reopen_handled, _, reopen_payload = handle_slash_command(
                     root,
