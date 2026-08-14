@@ -12,6 +12,7 @@ from aha_cli.store.filesystem import (
     append_event,
     append_message,
     event_path,
+    iter_jsonl_from,
     iter_jsonl_reverse,
     set_agent_status,
     set_task_status,
@@ -109,6 +110,67 @@ def agent_recovery_context(agent_id: str, reason: str) -> str:
             render_prompt_template("backend_recovery_agent_context.md").rstrip("\n"),
         ]
     )
+
+
+def reconcile_plan_with_events(root: Path, run_id: str, *, task_id: str | None = None) -> dict:
+    """Bring plan.json task statuses in line with the event stream's final state.
+
+    The event stream records every ``task_status_changed``; plan.json is a
+    projection that can fall out of sync (e.g. a crash between saving the plan
+    and appending the event, or an interrupted write). This walks each task's
+    last status event and, when it disagrees with the persisted task status,
+    corrects plan.json and records a ``plan_event_reconciled`` event.
+    """
+    path = event_path(root, run_id)
+    if not path.exists():
+        return {"run_id": run_id, "task_id": task_id, "reconciled": [], "mismatches": 0}
+    events, _ = iter_jsonl_from(path, 0)
+    latest_status: dict[str, dict] = {}
+    for event in events:
+        if str(event.get("type") or "") != "task_status_changed":
+            continue
+        data = event.get("data") if isinstance(event.get("data"), dict) else {}
+        task_id = str(data.get("task_id") or "")
+        if not task_id:
+            continue
+        # The last event wins; order in the file is chronological.
+        latest_status[task_id] = data
+    reconciled: list[dict] = []
+    mismatches = 0
+    plan_tasks: list[dict] = []
+    if task_id:
+        try:
+            plan_tasks = [task_snapshot(root, run_id, task_id)["task"]]
+        except KeyError:
+            plan_tasks = []
+    else:
+        from aha_cli.store.runs import require_plan
+
+        plan_tasks = [t for t in require_plan(root, run_id).get("tasks", []) if not t.get("deleted_at")]
+    for task in plan_tasks:
+        tid = str(task.get("id") or "")
+        event_status = latest_status.get(tid)
+        if not event_status:
+            continue
+        expected = str(event_status.get("status") or "")
+        actual = str(task.get("status") or "")
+        if not expected or expected == actual:
+            continue
+        mismatches += 1
+        updated = set_task_status(root, run_id, tid, expected, event_status.get("exit_code"))
+        reconciled.append({"task_id": tid, "from": actual, "to": expected})
+        append_event(
+            root,
+            run_id,
+            "plan_event_reconciled",
+            {
+                "task_id": tid,
+                "from_status": actual,
+                "to_status": expected,
+                "event_status": event_status,
+            },
+        )
+    return {"run_id": run_id, "task_id": task_id, "reconciled": reconciled, "mismatches": mismatches}
 
 
 def sub_agent_recovery_notice(agent_id: str, reason: str) -> str:
@@ -607,6 +669,7 @@ def recover_stale_running_agents(
     task_id: str | None = None,
     target: str | None = None,
 ) -> dict:
+    reconcile = reconcile_plan_with_events(root, run_id, task_id=task_id)
     snapshot = status_snapshot(root, run_id)
     checked = 0
     recovered: list[dict] = []
@@ -632,6 +695,8 @@ def recover_stale_running_agents(
         "checked": checked,
         "recovered_count": len(recovered),
         "recovered": recovered,
+        "reconciled_count": int(reconcile.get("mismatches") or 0),
+        "reconciled": reconcile.get("reconciled") or [],
     }
 
 
@@ -674,6 +739,7 @@ __all__ = [
     "recover_stale_running_agent",
     "recover_stale_running_agents",
     "recover_inconsistent_task_status",
+    "reconcile_plan_with_events",
     "decorate_task_status",
     "backend_runtime_payload",
     "apply_backend_runtime",

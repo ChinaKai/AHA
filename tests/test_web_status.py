@@ -13,6 +13,7 @@ from aha_cli.store.event_views import conversation_events_page
 from aha_cli.store.filesystem import (
     add_agent,
     add_task,
+    append_event,
     complete_task,
     event_path,
     inbox_path,
@@ -32,6 +33,7 @@ from aha_cli.web.server import handle_send_payload, recover_stale_running_agent,
 from aha_cli.web.status import (
     cached_backend_status,
     recover_stale_running_agents,
+    reconcile_plan_with_events,
     web_agents_runtime_snapshot,
     web_tasks_snapshot,
 )
@@ -47,6 +49,58 @@ class WebStatusTests(unittest.TestCase):
 
     def test_status_exports_do_not_include_removed_auto_compact_hook(self) -> None:
         self.assertNotIn("auto_compact_agent_context_if_needed", web_status_module.__all__)
+
+    def test_reconcile_plan_with_events_corrects_diverged_task_status(self) -> None:
+        # plan.json says the task is running but the event stream's last
+        # task_status_changed says completed: the event is the source of truth
+        # and reconcile brings the plan back in line.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Reconcile", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+
+                # Divergence: plan says running, event stream says completed.
+                set_task_status(root, run_id, "task-001", "running")
+                append_event(
+                    root,
+                    run_id,
+                    "task_status_changed",
+                    {"task_id": "task-001", "previous_status": "running", "status": "completed", "exit_code": 0},
+                )
+
+                result = reconcile_plan_with_events(root, run_id)
+                detail = task_snapshot(root, run_id, "task-001")["task"]
+                events, _ = iter_jsonl_from(event_path(root, run_id), 0)
+
+        self.assertEqual(result["mismatches"], 1)
+        self.assertEqual(result["reconciled"][0]["task_id"], "task-001")
+        self.assertEqual(detail["status"], "completed")
+        self.assertTrue(any(event["type"] == "plan_event_reconciled" for event in events))
+
+    def test_reconcile_plan_with_events_noop_when_consistent(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Reconcile ok", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+
+                set_task_status(root, run_id, "task-001", "completed", 0)
+                append_event(
+                    root,
+                    run_id,
+                    "task_status_changed",
+                    {"task_id": "task-001", "previous_status": "running", "status": "completed", "exit_code": 0},
+                )
+
+                result = reconcile_plan_with_events(root, run_id)
+
+        self.assertEqual(result["mismatches"], 0)
+        self.assertEqual(result["reconciled"], [])
 
     def test_web_status_snapshot_includes_agent_backend_process_state(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
