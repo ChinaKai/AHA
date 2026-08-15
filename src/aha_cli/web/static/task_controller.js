@@ -224,6 +224,16 @@
         item.title = taskListTitle(task, summaries);
         item.addEventListener("click", async event => {
           const target = event.target instanceof Element ? event.target : null;
+          const editBtn = target?.closest("[data-task-title-edit]");
+          if (editBtn) {
+            event.preventDefault();
+            event.stopPropagation();
+            const next = window.prompt("Edit task title", task.title || "");
+            if (next !== null && String(next).trim() && String(next).trim() !== String(task.title || "")) {
+              await dispatchAction("task-title", { taskId: task.id, title: String(next).trim() });
+            }
+            return;
+          }
           if (target?.closest("button, .conversation-filter-popover")) return;
           closeTaskSettings({ renderList: false });
           await selectTask(task.id);

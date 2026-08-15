@@ -786,6 +786,33 @@ def update_task_proxy_config(
     return task
 
 
+def update_task_title(root: Path, run_id: str, task_id: str, title: str) -> dict:
+    title = str(title or "").strip()
+    if not title:
+        raise ValueError("task title is required")
+    with locked_plan(root, run_id):
+        plan = require_plan(root, run_id)
+        task = next((item for item in plan["tasks"] if item["id"] == task_id), None)
+        if task is None or task.get("deleted_at"):
+            raise SystemExit(f"Task not found: {task_id}")
+        previous_title = str(task.get("title") or "")
+        task["title"] = title
+        plan["updated_at"] = utc_now()
+        save_plan(root, plan)
+        write_json(run_dir(root, run_id) / "tasks" / task_id / "task.json", task)
+    append_event(
+        root,
+        run_id,
+        "task_title_updated",
+        {
+            "task_id": task_id,
+            "previous_title": previous_title,
+            "title": title,
+        },
+    )
+    return task
+
+
 def update_task_supervision_config(
     root: Path,
     run_id: str,

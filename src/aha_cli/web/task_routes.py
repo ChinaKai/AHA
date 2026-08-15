@@ -59,6 +59,7 @@ from aha_cli.store.filesystem import (
     update_task_observe_proxy_config,
     update_task_proxy_config,
     update_task_skills_config,
+    update_task_title,
     update_task_supervision_config,
     update_task_token_saving_config,
 )
@@ -590,6 +591,13 @@ def handle_task_action_route(root: Path, run_id: str, path: str, body: bytes) ->
             return route_result({"ok": True, "task": task, "recovery": recovery})
         elif action == "delete":
             task = delete_task(root, run_id, task_id)
+        elif action == "title":
+            payload = parse_json_body(body)
+            title = str(payload.get("title") or "").strip()
+            if not title:
+                return route_result({"ok": False, "error": "title is required"}, "400 Bad Request")
+            task = update_task_title(root, run_id, task_id, title)
+            return route_result({"ok": True, "task": task, "title": title})
         elif action == "proxy":
             task = update_task_proxy_config(root, run_id, task_id, **parse_task_proxy_fields(parse_json_body(body)))
             return route_result({"ok": True, "task": task, "proxy": backend_proxy_config(load_config(root), task.get("preferred_backend"), require_plan(root, run_id), task)})

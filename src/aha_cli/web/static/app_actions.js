@@ -96,9 +96,32 @@
       }
     }
 
+    async function updateTaskTitle(taskId, title) {
+      const cleanTitle = String(title || "").trim();
+      if (!taskId || !cleanTitle) return;
+      setTaskActionInFlight(true);
+      try {
+        const res = await fetchWithTimeout(apiUrl(`/api/task/${encodeURIComponent(taskId)}/title`), {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ title: cleanTitle })
+        });
+        if (!res.ok) {
+          const payload = await res.json().catch(() => ({}));
+          alertUser(payload.error || `Task title update failed: ${taskId}`);
+          return;
+        }
+        await loadStatus();
+        renderOrchestrator.renderSelectionPanel?.();
+      } finally {
+        setTaskActionInFlight(false);
+      }
+    }
+
     function dispatch(action, payload = {}) {
       if (action === "select-task") return selectTask(payload.taskId || payload);
       if (action === "task-visibility") return updateTaskVisibility(payload.taskId, payload.action);
+      if (action === "task-title") return updateTaskTitle(payload.taskId, payload.title);
       if (action === "settings-save") return deps.saveBootstrapConfigForm?.(payload.form || payload);
       if (action === "web-restart") return deps.restartWebService?.();
       if (action === "web-upgrade") return deps.upgradeWebService?.();

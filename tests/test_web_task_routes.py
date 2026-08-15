@@ -434,6 +434,48 @@ class WebTaskRouteTests(unittest.TestCase):
         self.assertEqual(response["payload"]["id"], "rule-1")
         control.assert_called_once_with(root, device, {"cmd": "disarm", "id": "rule-1"})
 
+    def test_task_title_route_updates_title(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "stub")
+                code, plan_output = self.run_cli("plan", "Rename task", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+
+                response = self.route(
+                    root,
+                    run_id,
+                    "POST",
+                    "/api/task/task-001/title",
+                    {"title": "新的任务标题"},
+                )
+
+        self.assertEqual(response["status"], "200 OK")
+        self.assertTrue(response["payload"]["ok"])
+        self.assertEqual(response["payload"]["title"], "新的任务标题")
+        self.assertEqual(response["payload"]["task"]["title"], "新的任务标题")
+
+    def test_task_title_route_rejects_empty_title(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "stub")
+                code, plan_output = self.run_cli("plan", "Rename task", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+
+                response = self.route(
+                    root,
+                    run_id,
+                    "POST",
+                    "/api/task/task-001/title",
+                    {"title": "   "},
+                )
+
+        self.assertEqual(response["status"], "400 Bad Request")
+        self.assertFalse(response["payload"]["ok"])
+
 
 if __name__ == "__main__":
     unittest.main()

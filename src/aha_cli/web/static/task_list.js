@@ -258,7 +258,10 @@
       <div class="task-row">
         <div class="task-identity">
           <strong class="task-id">${escapeHtml(taskId)}</strong>
-          <div class="task-title">${escapeHtml(task?.title || "")}</div>
+          <div class="task-title-row">
+            <span class="task-title">${escapeHtml(task?.title || "")}</span>
+            <button class="task-title-edit" type="button" data-task-title-edit="${escapeHtml(taskId)}" aria-label="Edit task title" title="Edit task title">✎</button>
+          </div>
         </div>
         <div class="task-row-actions">
           <span class="task-statuses">${statusHtml}</span>
