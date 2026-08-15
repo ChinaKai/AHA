@@ -144,6 +144,35 @@ class AhaWebForwardCliTests(unittest.TestCase):
             self.assertIn("Queued stop via Windows AHA", output)
             forward.assert_called_once()
 
+    def test_cmd_hardware_attach_forwards_to_windows_web_and_tails(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root, run_id = self._init_run(tmp)
+
+            def fake_forward(_root, method, path, *, query=None, payload=None, web_token=None, timeout=15.0):
+                self.assertEqual(method, "POST")
+                self.assertEqual(path, "/api/task/task-001/hardware-attach")
+                self.assertEqual(payload["channel"], "serial")
+                return {"ok": True, "transport": "serial", "endpoint": "COM6", "bridge": {"status": "running"}}
+
+            with (
+                mock.patch("aha_cli.cli.should_forward_to_windows_web", return_value=True),
+                mock.patch("aha_cli.cli.web_forward", side_effect=fake_forward) as forward,
+                mock.patch("aha_cli.cli._tail_device_stream") as tail,
+            ):
+                code, output = self.run_cli(
+                    "hardware-attach",
+                    run_id,
+                    "task-001",
+                    "--channel",
+                    "serial",
+                    aha_home=root,
+                )
+
+            self.assertEqual(code, 0)
+            self.assertIn("Windows AHA bridge owns COM6", output)
+            forward.assert_called_once()
+            tail.assert_called_once_with(root, "COM6")
+
     def test_cmd_hardware_send_local_when_not_forwarding(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root, run_id = self._init_run(tmp)

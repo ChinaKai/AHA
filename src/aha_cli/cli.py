@@ -1313,6 +1313,44 @@ def cmd_hardware_attach(args: argparse.Namespace) -> int:
     root = command_aha_home(args)
     run_id = resolve_run_id(root, args.run_id)
     require_plan(root, run_id)
+    if should_forward_to_windows_web(root):
+        # AHA runs on Windows: ask the Windows Web service to own the bridge
+        # (it holds the COM port / network terminal), then tail the shared
+        # stream file locally. This avoids spawning a WSL-side bridge that has
+        # no COM ports and no native Chromium.
+        try:
+            result = web_forward(
+                root,
+                "POST",
+                f"/api/task/{args.task_id}/hardware-attach",
+                payload={"channel": args.channel},
+                timeout=15.0,
+            )
+        except AhaHttpClientError as exc:
+            print(f"Windows AHA hardware attach failed: {exc}", file=sys.stderr)
+            return 2
+        if not result.get("ok"):
+            print(str(result.get("error") or "hardware attach failed"), file=sys.stderr)
+            return 2
+        transport = str(result.get("transport") or "serial")
+        endpoint = str(result.get("endpoint") or result.get("device") or "")
+        print(
+            f"Windows AHA bridge owns {endpoint} (status={result.get('bridge', {}).get('status')}). "
+            "Streaming RX; Ctrl-C to stop watching (the bridge keeps holding the port). "
+            "Use `aha hardware-stop` to release it."
+        )
+        if transport == "network":
+            host, port = (endpoint.split(":", 1) + ["23"])[:2] if ":" in endpoint else (endpoint, "23")
+            try:
+                _tail_network_stream(root, host, int(port))
+            except KeyboardInterrupt:
+                pass
+        else:
+            try:
+                _tail_device_stream(root, endpoint)
+            except KeyboardInterrupt:
+                pass
+        return 0
     if _network_channel(args.channel):
         target = _network_bridge_target(root, run_id, args.task_id)
         if not target:
