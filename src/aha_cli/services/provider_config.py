@@ -22,6 +22,23 @@ def _text(value: object) -> str:
     return str(value or "").strip()
 
 
+def _auto_compact_threshold_percent(value: object) -> int | None:
+    """Parse a configured model's auto-compact threshold into 1-99 percent."""
+    try:
+        parsed = int(float(_text(value)))
+    except (TypeError, ValueError):
+        return None
+    return parsed if 1 <= parsed <= 99 else None
+
+
+def _positive_window(value: object) -> int | None:
+    try:
+        parsed = int(str(value or "").replace("_", "").replace(",", ""))
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed > 0 else None
+
+
 def _provider_id(name: str, base_url: str) -> str:
     digest = hashlib.sha256(f"{name}\0{base_url}".encode("utf-8")).hexdigest()[:12]
     slug = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")[:36] or "provider"
@@ -111,6 +128,9 @@ def normalize_configured_models(value: object, provider_ids: Iterable[str]) -> l
         for field in ("name", "context_window", "fable_model", "opus_model", "sonnet_model", "haiku_model"):
             if item.get(field) not in (None, ""):
                 model[field] = item[field]
+        threshold = _auto_compact_threshold_percent(item.get("auto_compact_threshold_percent"))
+        if threshold:
+            model["auto_compact_threshold_percent"] = threshold
         models.append(model)
     return models
 
@@ -188,6 +208,12 @@ def sync_legacy_backend_env(config: dict) -> dict:
                 })
                 if credential:
                     common["OPENAI_API_KEY"] = credential
+                threshold = _auto_compact_threshold_percent(binding.get("auto_compact_threshold_percent"))
+                context_window = _positive_window(binding.get("context_window"))
+                if threshold and context_window:
+                    # Codex has no percent knob; translate the threshold into the
+                    # absolute model_auto_compact_token_limit it understands.
+                    common["CODEX_AUTO_COMPACT_TOKEN_LIMIT"] = str(int(context_window * threshold / 100))
             else:
                 anthropic_base = _text(provider.get("anthropic_base_url")) or str(provider.get("base_url") or "")
                 common.update({"ANTHROPIC_BASE_URL": anthropic_base, "ANTHROPIC_MODEL": model_id})
@@ -201,6 +227,9 @@ def sync_legacy_backend_env(config: dict) -> dict:
                 context_window = str(binding.get("context_window") or "").replace("_", "").replace(",", "").strip()
                 if context_window.isdigit() and int(context_window) > 0:
                     common["CLAUDE_CODE_MAX_CONTEXT_TOKENS"] = context_window
+                threshold = _auto_compact_threshold_percent(binding.get("auto_compact_threshold_percent"))
+                if threshold:
+                    common["CLAUDE_AUTOCOMPACT_PCT_OVERRIDE"] = str(threshold)
                 _ROLE_MODEL_ENV_KEYS = {
                     "fable_model": "ANTHROPIC_DEFAULT_FABLE_MODEL",
                     "opus_model": "ANTHROPIC_DEFAULT_OPUS_MODEL",

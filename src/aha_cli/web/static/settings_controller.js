@@ -118,6 +118,8 @@
           const binding = { provider_id: value("provider_id"), model_id: value("model"), backend: value("backend"), wire_api: value("wire_api") };
           const contextWindow = Number(value("context_window"));
           if (Number.isFinite(contextWindow) && contextWindow > 0) binding.context_window = contextWindow;
+          const compactThreshold = Number(value("auto_compact_threshold_percent"));
+          if (Number.isFinite(compactThreshold) && compactThreshold >= 1 && compactThreshold <= 99) binding.auto_compact_threshold_percent = Math.round(compactThreshold);
           for (const key of ["fable_model", "opus_model", "sonnet_model", "haiku_model"]) {
             const text = value(key);
             if (text) binding[key] = text;

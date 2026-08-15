@@ -257,6 +257,10 @@
     const contextBadge = contextWindow > 0
       ? `<span class="bootstrap-model-binding-ctx" title="Context window">ctx ${escapeHtml(formatContextWindow(contextWindow))}</span>`
       : "";
+    const compactThreshold = Number(binding.auto_compact_threshold_percent);
+    const compactBadge = Number.isFinite(compactThreshold) && compactThreshold >= 1 && compactThreshold <= 99
+      ? `<span class="bootstrap-model-binding-ctx" title="Auto-compact threshold percent">compact ${escapeHtml(String(Math.round(compactThreshold)))}%</span>`
+      : "";
     return `
       <div class="bootstrap-model-binding" data-bootstrap-model-binding>
         <input type="hidden" data-bootstrap-binding-field="provider_id" value="${escapeHtml(configString(binding.provider_id))}">
@@ -264,11 +268,12 @@
         <input type="hidden" data-bootstrap-binding-field="backend" value="${escapeHtml(configString(binding.backend))}">
         <input type="hidden" data-bootstrap-binding-field="wire_api" value="${escapeHtml(configString(binding.wire_api))}">
         <input type="hidden" data-bootstrap-binding-field="context_window" value="${escapeHtml(contextWindow ? String(contextWindow) : "")}">
+        <input type="hidden" data-bootstrap-binding-field="auto_compact_threshold_percent" value="${escapeHtml(compactBadge ? String(Math.round(compactThreshold)) : "")}">
         <input type="hidden" data-bootstrap-binding-field="fable_model" value="${escapeHtml(configString(binding.fable_model))}">
         <input type="hidden" data-bootstrap-binding-field="opus_model" value="${escapeHtml(configString(binding.opus_model))}">
         <input type="hidden" data-bootstrap-binding-field="sonnet_model" value="${escapeHtml(configString(binding.sonnet_model))}">
         <input type="hidden" data-bootstrap-binding-field="haiku_model" value="${escapeHtml(configString(binding.haiku_model))}">
-        <div><strong>${escapeHtml(displayModelId)}</strong>${contextBadge}<div class="field-help">${escapeHtml(providerName || binding.provider_id)} · ${escapeHtml(configString(binding.wire_api).replaceAll("_", " "))}</div></div>
+        <div><strong>${escapeHtml(displayModelId)}</strong>${contextBadge}${compactBadge}<div class="field-help">${escapeHtml(providerName || binding.provider_id)} · ${escapeHtml(configString(binding.wire_api).replaceAll("_", " "))}</div></div>
         <div class="bootstrap-model-binding-actions">
           <button class="bootstrap-icon-button" type="button" data-bootstrap-edit-binding title="Edit model">&#9998;</button>
           <button class="bootstrap-icon-button" type="button" data-bootstrap-remove-binding title="Remove">x</button>
@@ -329,7 +334,9 @@
               </select>
             </label>
             <label class="field-label"><span>Context window</span><input data-bootstrap-model-field="context_window" type="number" min="0" placeholder="200000" value="${escapeHtml(configString(binding.context_window))}"></label>
+            <label class="field-label"><span>Auto-compact threshold %</span><input data-bootstrap-model-field="auto_compact_threshold_percent" type="number" min="1" max="99" placeholder="e.g. 75" value="${escapeHtml(configString(binding.auto_compact_threshold_percent))}"></label>
           </div>
+          <div class="field-help">Trigger the backend's own auto-compact at this context usage (1-99). Claude: CLAUDE_AUTOCOMPACT_PCT_OVERRIDE. Codex: needs a Context window to compute model_auto_compact_token_limit. Leave blank for the backend default.</div>
           <details class="bootstrap-env-advanced">
             <summary>Claude role models (optional)</summary>
             <div class="bootstrap-env-fields">${roleRows}<div class="field-help">Role overrides for Claude Code; leave blank to use the primary model.</div></div>
@@ -352,6 +359,8 @@
     };
     const contextWindow = Number(value("context_window"));
     if (Number.isFinite(contextWindow) && contextWindow > 0) binding.context_window = contextWindow;
+    const compactThreshold = Number(value("auto_compact_threshold_percent"));
+    if (Number.isFinite(compactThreshold) && compactThreshold >= 1 && compactThreshold <= 99) binding.auto_compact_threshold_percent = Math.round(compactThreshold);
     for (const key of ["fable_model", "opus_model", "sonnet_model", "haiku_model"]) {
       const text = value(key);
       if (text) binding[key] = text;
@@ -1115,6 +1124,8 @@
       const binding = { provider_id: value("provider_id"), model_id: value("model"), backend: value("backend"), wire_api: value("wire_api") };
       const contextWindow = Number(value("context_window"));
       if (Number.isFinite(contextWindow) && contextWindow > 0) binding.context_window = contextWindow;
+      const compactThreshold = Number(value("auto_compact_threshold_percent"));
+      if (Number.isFinite(compactThreshold) && compactThreshold >= 1 && compactThreshold <= 99) binding.auto_compact_threshold_percent = Math.round(compactThreshold);
       for (const key of ["fable_model", "opus_model", "sonnet_model", "haiku_model"]) {
         const text = value(key);
         if (text) binding[key] = text;

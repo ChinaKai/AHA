@@ -125,6 +125,41 @@ class ProviderConfigTests(unittest.TestCase):
         self.assertEqual(models[0]["sonnet_model"], "sonnet-z")
         self.assertEqual(models[0]["haiku_model"], "haiku-w")
 
+    def test_normalize_configured_models_keeps_auto_compact_threshold(self) -> None:
+        models = normalize_configured_models(
+            [
+                {"provider_id": "p1", "model_id": "deepseek-v4-flash", "backend": "claude", "wire_api": "anthropic_messages", "auto_compact_threshold_percent": "60"},
+                {"provider_id": "p1", "model_id": "gpt-5.5", "backend": "codex", "wire_api": "responses", "auto_compact_threshold_percent": 120},
+            ],
+            ["p1"],
+        )
+
+        self.assertEqual(models[0]["auto_compact_threshold_percent"], 60)
+        self.assertNotIn("auto_compact_threshold_percent", models[1])
+
+    def test_sync_legacy_env_translates_auto_compact_threshold(self) -> None:
+        cfg = {
+            "providers": [{"id": "p1", "name": "Gateway", "base_url": "https://gateway.test/v1", "auth_style": "bearer", "credential": "secret"}],
+            "configured_models": [
+                {"provider_id": "p1", "model_id": "deepseek-v4-flash", "backend": "claude", "wire_api": "anthropic_messages", "auto_compact_threshold_percent": 60},
+                {"provider_id": "p1", "model_id": "gpt-5.5", "backend": "codex", "wire_api": "responses", "context_window": 258000, "auto_compact_threshold_percent": 60},
+                {"provider_id": "p1", "model_id": "kimi-k3", "backend": "codex", "wire_api": "responses", "auto_compact_threshold_percent": 60},
+            ],
+            "codex": {"env": []},
+            "claude": {"env": []},
+        }
+
+        sync_legacy_backend_env(cfg)
+
+        claude_group = cfg["claude"]["env"][0]
+        self.assertEqual(claude_group["CLAUDE_AUTOCOMPACT_PCT_OVERRIDE"], "60")
+        gpt_group = cfg["codex"]["env"][0]
+        self.assertEqual(gpt_group["CODEX_AUTO_COMPACT_TOKEN_LIMIT"], "154800")
+        # Codex has no percent knob of its own; without a context window the
+        # threshold cannot be translated and is left to the backend default.
+        kimi_group = next(group for group in cfg["codex"]["env"] if group.get("OPENAI_MODEL") == "kimi-k3")
+        self.assertNotIn("CODEX_AUTO_COMPACT_TOKEN_LIMIT", kimi_group)
+
     def test_sync_legacy_env_propagates_claude_role_models(self) -> None:
         cfg = {
             "providers": [{"id": "p1", "name": "Gateway", "base_url": "https://gateway.test/v1", "auth_style": "bearer", "credential": "secret"}],

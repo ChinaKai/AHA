@@ -547,6 +547,14 @@ def codex_config_overrides(
         reasoning_effort = normalize_reasoning_effort(codex_config.get("reasoning_effort"), "codex")
         if reasoning_effort:
             overrides.extend(["-c", f"model_reasoning_effort={_toml_string(reasoning_effort)}"])
+        # Configured models may set an auto-compact threshold percent; the env
+        # group carries it pre-computed as an absolute token limit because Codex
+        # only understands model_auto_compact_token_limit.
+        token_limit = _positive_int(
+            _codex_group_value(codex_active_env_group(codex_config), "CODEX_AUTO_COMPACT_TOKEN_LIMIT")
+        )
+        if token_limit:
+            overrides.extend(["-c", f"model_auto_compact_token_limit={token_limit}"])
     # Declare configured model windows via a codex model catalog so custom models
     # (e.g. deepseek-v4-flash at 1M) are honored instead of the 258K fallback.
     # Scope the catalog to the active provider so the same model_id bound to two

@@ -711,12 +711,14 @@ const config = context.window.AHABootstrapConfig;
 if (typeof config.configuredModelRowHtml !== "function") process.exit(1);
 // The row html the edit-save upsert uses must expose the model fields.
 const row = config.configuredModelRowHtml(
-  { provider_id: "p1", model_id: "deepseek-v4", backend: "claude", wire_api: "anthropic_messages", context_window: 262144, opus_model: "claude-opus-5" },
+  { provider_id: "p1", model_id: "deepseek-v4", backend: "claude", wire_api: "anthropic_messages", context_window: 262144, opus_model: "claude-opus-5", auto_compact_threshold_percent: 60 },
   "Gateway"
 );
 if (!row.includes('data-bootstrap-binding-field="model" value="deepseek-v4"')) process.exit(1);
 if (!row.includes('data-bootstrap-binding-field="opus_model" value="claude-opus-5"')) process.exit(1);
 if (!row.includes('data-bootstrap-binding-field="context_window" value="262144"')) process.exit(1);
+if (!row.includes('data-bootstrap-binding-field="auto_compact_threshold_percent" value="60"')) process.exit(1);
+if (!row.includes("compact 60%")) process.exit(1);
 '''
         result = subprocess.run(
             [node, "-e", assertion],
@@ -810,11 +812,13 @@ if (config.bootstrapModelFilterValue(formWithSource("bogus"), "codex") !== "both
 // The editor renders model-level fields and readModelEditorFields parses them back.
 const editorHtml = config.configuredModelEditorHtml({
   provider_id: "p1", model_id: "deepseek-v4-flash", backend: "claude", wire_api: "anthropic_messages",
-  context_window: 262144, opus_model: "claude-opus-5"
+  context_window: 262144, opus_model: "claude-opus-5", auto_compact_threshold_percent: 60
 }, [{ id: "p1", name: "Gateway" }]);
 if (!editorHtml.includes('data-bootstrap-model-field="provider_id"')) process.exit(1);
 if (!editorHtml.includes('data-bootstrap-model-field="model_id"') || !editorHtml.includes('value="deepseek-v4-flash"')) process.exit(1);
 if (!editorHtml.includes('data-bootstrap-model-field="context_window"')) process.exit(1);
+if (!editorHtml.includes('data-bootstrap-model-field="auto_compact_threshold_percent"')) process.exit(1);
+if (!editorHtml.includes('value="60"')) process.exit(1);
 if (editorHtml.includes('data-bootstrap-model-field="max_output_tokens"')) process.exit(1);
 if (!editorHtml.includes('data-bootstrap-model-field="opus_model"') || !editorHtml.includes('value="claude-opus-5"')) process.exit(1);
 if (!editorHtml.includes("Edit Model")) process.exit(1);
@@ -832,13 +836,20 @@ function editorRoot(fields) {
 }
 const parsed = config.readModelEditorFields(editorRoot({
   provider_id: "p1", model_id: "new-model", backend: "codex", wire_api: "responses",
-  context_window: "258000", fable_model: "fable-a"
+  context_window: "258000", fable_model: "fable-a", auto_compact_threshold_percent: "60"
 }));
 if (parsed.provider_id !== "p1" || parsed.model_id !== "new-model") process.exit(1);
 if (parsed.backend !== "codex" || parsed.wire_api !== "responses") process.exit(1);
 if (parsed.context_window !== 258000) process.exit(1);
+if (parsed.auto_compact_threshold_percent !== 60) process.exit(1);
 if (parsed.max_output_tokens !== undefined) process.exit(1);
 if (parsed.fable_model !== "fable-a") process.exit(1);
+// Out-of-range thresholds are dropped instead of clamped silently.
+const invalidParsed = config.readModelEditorFields(editorRoot({
+  provider_id: "p1", model_id: "new-model", backend: "codex", wire_api: "responses",
+  auto_compact_threshold_percent: "150"
+}));
+if (invalidParsed.auto_compact_threshold_percent !== undefined) process.exit(1);
 // bootstrapConfigPayload persists model_source per backend.
 const sourceForm = {
   dataset: { bootstrapConfigMode: "settings" },

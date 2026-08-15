@@ -319,6 +319,20 @@ class BackendRunnerSessionTests(unittest.TestCase):
 
         self.assertEqual(overrides, ["-c", 'model_reasoning_effort="xhigh"'])
 
+    def test_codex_config_overrides_include_auto_compact_token_limit(self) -> None:
+        codex_config = {"env": [{"name": "gateway", "CODEX_AUTO_COMPACT_TOKEN_LIMIT": "154800"}]}
+
+        overrides = codex_config_overrides(codex_config)
+
+        joined = " ".join(overrides)
+        self.assertIn("model_auto_compact_token_limit=154800", joined)
+
+    def test_codex_config_overrides_skip_auto_compact_without_env_group(self) -> None:
+        overrides = codex_config_overrides({"reasoning_effort": "xhigh", "_aha_disable_env": True})
+
+        joined = " ".join(overrides)
+        self.assertNotIn("model_auto_compact_token_limit", joined)
+
     def test_ensure_codex_models_catalog_declares_configured_windows(self) -> None:
         cfg = {
             "configured_models": [
