@@ -182,15 +182,29 @@
       if (elements.documentRef) elements.documentRef.title = version ? `AHA ${version}` : "AHA Dashboard";
     }
 
+    function setHeaderRunPopoverOpen(open) {
+      if (!elements.headerRunToggleEl || !elements.headerRunPopoverEl) return;
+      elements.headerRunToggleEl.setAttribute("aria-expanded", String(open));
+      elements.headerRunPopoverEl.hidden = !open;
+    }
+
     function closeHeaderRunConsole() {
+      setHeaderRunPopoverOpen(false);
       if (elements.headerRunConsoleEl && "open" in elements.headerRunConsoleEl) elements.headerRunConsoleEl.open = false;
     }
 
     function renderHeaderRunTitle(run, title, runId) {
       const t = window.AHAI18n?.t || ((_, fallback) => fallback);
-      if (!elements.headerRunTitleEl) return;
       const label = title || deps.runTitleOf?.(run) || runId || t("run.short_label", "Run");
-      elements.headerRunTitleEl.textContent = label;
+      if (elements.headerRunTitleEl) elements.headerRunTitleEl.textContent = label;
+      if (elements.headerRunPopoverEl) {
+        const options = elements.headerRunPopoverEl.querySelectorAll("[data-header-run-option]");
+        options.forEach(option => {
+          const active = option.getAttribute("data-header-run-option") === runId;
+          option.classList.toggle("active", active);
+          option.setAttribute("aria-selected", String(active));
+        });
+      }
       if (elements.headerRunConsoleEl) {
         const project = String(elements.headerWorkspaceDirEl?.textContent || "").trim();
         elements.headerRunConsoleEl.title = [label, project].filter(Boolean).join(" · ");
@@ -819,6 +833,37 @@
         }
         elements.runSelectEl.disabled = actionInFlight || elements.runSelectEl.options.length === 0;
       }
+      if (elements.headerRunPopoverEl) {
+        elements.headerRunPopoverEl.innerHTML = "";
+        for (const run of runs) {
+          const id = deps.runIdOf?.(run) || "";
+          if (!id) continue;
+          const label = deps.sessionOptionLabel?.(run) || id;
+          const btn = document.createElement("button");
+          btn.type = "button";
+          btn.className = "header-run-option";
+          btn.setAttribute("data-header-run-option", id);
+          btn.setAttribute("role", "option");
+          btn.setAttribute("aria-selected", String(id === runId));
+          btn.title = id;
+          const labelSpan = document.createElement("span");
+          labelSpan.className = "header-run-option-label";
+          labelSpan.textContent = label;
+          const idSpan = document.createElement("span");
+          idSpan.className = "header-run-option-id";
+          idSpan.textContent = id;
+          btn.append(labelSpan, idSpan);
+          btn.addEventListener("click", () => {
+            if (id !== runId) deps.switchRun?.(id);
+            closeHeaderRunConsole();
+          });
+          if (id === runId) btn.classList.add("active");
+          elements.headerRunPopoverEl.appendChild(btn);
+        }
+        if (elements.headerRunToggleEl) {
+          elements.headerRunToggleEl.disabled = actionInFlight || runs.length === 0;
+        }
+      }
       if (elements.sessionRefreshEl) elements.sessionRefreshEl.disabled = actionInFlight;
       if (elements.renameRunNameEl) {
         if (document.activeElement !== elements.renameRunNameEl) {
@@ -1013,6 +1058,15 @@
       });
       elements.runMaintenanceCloseEl?.addEventListener("click", () => setRunMaintenanceConsoleOpen(false));
       elements.runSelectEl?.addEventListener("change", async () => deps.switchRun?.(elements.runSelectEl.value));
+      elements.headerRunToggleEl?.addEventListener("click", () => {
+        const open = elements.headerRunToggleEl?.getAttribute("aria-expanded") === "true";
+        setHeaderRunPopoverOpen(!open);
+      });
+      elements.headerRunPopoverEl?.addEventListener("click", event => {
+        if (event.target.closest("[data-header-run-option]")) {
+          closeHeaderRunConsole();
+        }
+      });
       const handleRunManagerClick = event => {
         const target = event.target instanceof Element ? event.target : null;
         const filterEl = target?.closest("[data-run-lifecycle-filter]");
@@ -1268,6 +1322,7 @@
       elements.documentRef?.addEventListener("click", event => {
         const target = event.target instanceof Element ? event.target : null;
         if (sessionMenuOpen && !elements.documentRef?.body?.classList?.contains("settings-home") && !elements.sessionControlEl?.contains(target)) setSessionMenu(false);
+        if (elements.headerRunToggleEl && elements.headerRunToggleEl.getAttribute("aria-expanded") === "true" && !elements.headerRunConsoleEl?.contains(target)) closeHeaderRunConsole();
         if (elements.headerRunConsoleEl && "open" in elements.headerRunConsoleEl && elements.headerRunConsoleEl.open && !elements.headerRunConsoleEl.contains(target)) closeHeaderRunConsole();
         if (runSettingsOpenId && !elements.runManagerEl?.contains(target) && !elements.runSettingsPanelEl?.contains(target)) {
           closeRunSettings();

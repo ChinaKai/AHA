@@ -9,6 +9,8 @@
     sessionRefreshEl: "session-refresh",
     headerRunConsoleEl: "header-run-console",
     headerRunTitleEl: "header-run-title",
+    headerRunToggleEl: "header-run-toggle",
+    headerRunPopoverEl: "header-run-popover",
     runSelectEl: "run-select",
     runRenameFormEl: "run-rename-form",
     renameRunNameEl: "rename-run-name",
