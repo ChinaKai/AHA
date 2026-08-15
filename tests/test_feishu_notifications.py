@@ -10,7 +10,14 @@ from unittest import mock
 
 from aha_cli.services import feishu_notifications
 from aha_cli.services.channel_notifications import wait_for_notification_queue
-from aha_cli.services.feishu_notifications import load_subscription_state, notification_message_for_event, notify_event, set_subscription
+from aha_cli.services.feishu_notifications import (
+    load_subscription_state,
+    notification_message_for_event,
+    notify_event,
+    resolve_task_chat_control,
+    set_subscription,
+    set_task_chat_control,
+)
 from aha_cli.locking import exclusive_lock
 from aha_cli.services.service_assistant_handoffs import register_service_handoff, service_handoffs_path
 from aha_cli.services.feishu_group_handoffs import feishu_group_handoffs_path, register_group_handoff
@@ -162,7 +169,11 @@ class FeishuNotificationTests(unittest.TestCase):
         self.assertIn("AHA Task 状态更新", rendered)
         self.assertIn("Run A.task-001", rendered)
         self.assertIn("等待用户确认", rendered)
-        self.assertNotIn('"tag": "button"', rendered)
+        # Status cards now carry a one-tap "进入 Task Chat" button.
+        self.assertIn('"tag": "button"', rendered)
+        self.assertIn('"content": "进入 Task Chat"', rendered)
+        self.assertIn('"kind": "aha_task_chat_entry"', rendered)
+        self.assertIn('"task_id": "task-001"', rendered)
         self.assertEqual(audit.call_args.kwargs["kind"], "status_card")
 
     def test_status_card_header_color_follows_status(self) -> None:
@@ -1344,6 +1355,145 @@ class FeishuNotificationTests(unittest.TestCase):
                 "data": {"task_id": "task-001", "sender": "main", "target": "feishu", "message": "agent reply"},
             }
             self.assertEqual(notification_message_for_event(root, run_id, event), "")
+
+    def test_set_task_chat_control_then_resolve_consumes_exit(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            run_id = _setup(root, notifications_enabled=True)
+            set_subscription(
+                root,
+                "tenant:p2p:ou-user",
+                chat_id="oc-user",
+                open_id="ou-user",
+                run_id=run_id,
+                task_id="task-001",
+                mode="task_chat",
+            )
+            set_task_chat_control(
+                root,
+                "tenant:p2p:ou-user",
+                {"message_id": "om-entry", "run_id": run_id, "task_id": "task-001", "status": "running"},
+            )
+
+            resolved = resolve_task_chat_control(
+                root,
+                message_id="om-entry",
+                chat_id="oc-user",
+                open_id="ou-user",
+                choice_id="exit",
+            )
+            # resolve 消费后 control 失效，再次 resolve 应报 stale。
+            with self.assertRaises(Exception) as ctx:
+                resolve_task_chat_control(
+                    root,
+                    message_id="om-entry",
+                    chat_id="oc-user",
+                    open_id="ou-user",
+                    choice_id="exit",
+                )
+
+        self.assertEqual(resolved["session_key"], "tenant:p2p:ou-user")
+        self.assertEqual(resolved["control"]["task_id"], "task-001")
+        self.assertEqual(resolved["control"]["choice_id"], "exit")
+        self.assertIn("已失效", str(ctx.exception))
+
+    def test_new_status_card_supersedes_previous_for_same_task(self) -> None:
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            mock.patch("aha_cli.services.feishu_notifications._send", return_value={"message_id": "om-status"}) as send,
+            mock.patch("aha_cli.services.feishu_notifications._update_card") as update,
+            mock.patch("aha_cli.services.feishu_notifications.audit_feishu_channel"),
+        ):
+            root = Path(tmp)
+            run_id = _setup(root, notifications_enabled=True)
+            set_subscription(
+                root,
+                "tenant:p2p:ou-user",
+                chat_id="oc-user",
+                open_id="ou-user",
+                run_id=run_id,
+                task_id="task-001",
+            )
+
+            def status_event(event_id: int, status: str) -> dict:
+                return {
+                    "event_id": event_id,
+                    "ts": "2026-08-05T15:48:41+00:00",
+                    "type": "task_status_changed",
+                    "data": {"task_id": "task-001", "previous_status": "running", "status": status},
+                }
+
+            notify_event(root, run_id, status_event(1, "awaiting_user"))
+            notify_event(root, run_id, status_event(2, "completed"))
+
+        # Two status cards were sent; the second should have superseded the first.
+        self.assertEqual(send.call_count, 2)
+        update.assert_called_once()
+        superseded = json.dumps(update.call_args.args[2], ensure_ascii=False)
+        self.assertIn("状态已更新", superseded)
+
+    def test_consume_status_card_invalidates_entry(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            run_id = _setup(root, notifications_enabled=True)
+            set_subscription(
+                root,
+                "tenant:p2p:ou-user",
+                chat_id="oc-user",
+                open_id="ou-user",
+                run_id=run_id,
+                task_id="task-001",
+            )
+            from aha_cli.services.feishu_notifications import status_cards_path
+
+            from aha_cli.store.io import read_json
+
+            _record = None
+            with mock.patch("aha_cli.services.feishu_notifications._send", return_value={"message_id": "om-status"}):
+                notify_event(
+                    root,
+                    run_id,
+                    {
+                        "event_id": 1,
+                        "ts": "2026-08-05T15:48:41+00:00",
+                        "type": "task_status_changed",
+                        "data": {"task_id": "task-001", "previous_status": "running", "status": "awaiting_user"},
+                    },
+                )
+                cards = read_json(status_cards_path(root))
+                _record = cards.get("run-a:task-001:oc-user") or {}
+
+            consumed = feishu_notifications.consume_status_card(root, "run-a:task-001:oc-user", "om-status")
+
+        self.assertTrue(consumed)
+        self.assertEqual(_record.get("message_id"), "om-status")
+        self.assertTrue(_record.get("active"))
+
+    def test_status_message_elements_short_text_inline(self) -> None:
+        from aha_cli.services.feishu_notifications import _status_message_elements
+
+        short = "等待用户确认"
+        elements = _status_message_elements(short)
+        self.assertEqual(len(elements), 1)
+        self.assertEqual(elements[0]["tag"], "markdown")
+        self.assertIn(short, elements[0]["content"])
+
+    def test_status_card_folds_long_message_without_truncation(self) -> None:
+        from aha_cli.services.feishu_notifications import _status_notification_card
+
+        long_text = "这是一段非常非常长的状态消息内容，" * 40
+        card = _status_notification_card(
+            "Time: -\nTask: Run A.task-001\nTask Title: Task 1\nStatus: busy -> awaiting\nMessage: " + long_text,
+            {"data": {"task_id": "task-001", "status": "awaiting_user"}},
+        )
+        elements = card["body"]["elements"]
+        panels = [element for element in elements if element["tag"] == "collapsible_panel"]
+        self.assertEqual(len(panels), 1)
+        panel = panels[0]
+        self.assertFalse(panel["expanded"])
+        # The full message is folded instead of truncated.
+        self.assertIn(long_text, json.dumps(panel, ensure_ascii=False))
+        self.assertNotIn("…", json.dumps(card, ensure_ascii=False))
 
 
 if __name__ == "__main__":

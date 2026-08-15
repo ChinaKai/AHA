@@ -38,11 +38,15 @@ from aha_cli.services.feishu_notifications import (
     TASK_CHAT_CONTROL_ACTION_KIND,
     TASK_CHAT_CONTROL_EXIT_CHOICE_ID,
     TASK_CHAT_CONTROL_STAY_CHOICE_ID,
+    TASK_CHAT_ENTRY_ACTION_KIND,
     load_subscription_state,
     remove_subscriptions,
     resolve_task_chat_control,
     set_subscription,
+    set_task_chat_control,
+    status_card_key,
     task_chat_control_terminal_card,
+    _status_card_terminal,
 )
 from aha_cli.services.feishu_owner import remember_owner_private_chat, resolve_feishu_owner, resolve_feishu_owner_by_open_id
 from aha_cli.services.feishu_runtime import feishu_config, feishu_credentials
@@ -1279,10 +1283,12 @@ def _task_for_chat(root: Path, run_id: str, task_id: str) -> dict:
     raise ServiceAssistantActionError(f"task not found: {task_id}")
 
 
-def _task_chat_confirmation_card(run_id: str, task: dict) -> dict:
+def _task_chat_confirmation_card(run_id: str, task: dict, *, current_task: dict | None = None) -> dict:
     task_id = str(task.get("id") or "")
     title = _brief_menu_text(task.get("title"), limit=120, fallback="未命名 Task")
     status = _brief_menu_text(task.get("status"), limit=40, fallback="-")
+    current_run = str((current_task or {}).get("run_id") or "").strip() if current_task is not None else ""
+    current_task_id = str((current_task or {}).get("task_id") or "").strip() if current_task is not None else ""
 
     def button(label: str, choice_id: str, button_type: str, element_id: str) -> dict:
         return {
@@ -1316,6 +1322,11 @@ def _task_chat_confirmation_card(run_id: str, task: dict) -> dict:
                             "",
                             "确认后，当前飞书私聊将进入该 Task 的 Chat 模式。",
                             "后续直接发送文本会转给该 Task；发送 `退出 task` 可退出并回到 AHA 管家。",
+                            *(
+                                [f"⚠️ 当前已处于 Task Chat（{current_run} / {current_task_id}），进入后会自动退出该会话。"]
+                                if current_task is not None
+                                else []
+                            ),
                         ]
                     ),
                 },
@@ -1339,6 +1350,56 @@ def _task_chat_confirmation_card(run_id: str, task: dict) -> dict:
     }
 
 
+def _task_chat_exit_card(run_id: str, task_id: str, title: str, *, detail: str = "") -> dict:
+    """Terminal card for a confirmed Task Chat entry, with a clickable exit button."""
+    title_text = _brief_menu_text(title, limit=120, fallback="未命名 Task")
+    return {
+        "schema": "2.0",
+        "header": {"title": {"tag": "plain_text", "content": "已进入 Task Chat"}, "template": "green"},
+        "body": {
+            "elements": [
+                {
+                    "tag": "markdown",
+                    "content": "\n".join(
+                        [
+                            f"**Task**：`{run_id} / {task_id}`",
+                            f"**标题**：{title_text}",
+                            "",
+                            detail,
+                        ]
+                    ),
+                },
+                {
+                    "tag": "column_set",
+                    "columns": [
+                        {
+                            "tag": "column",
+                            "width": "auto",
+                            "elements": [
+                                {
+                                    "tag": "button",
+                                    "element_id": "aha_task_chat_exit",
+                                    "text": {"tag": "plain_text", "content": "退出 Task"},
+                                    "type": "default",
+                                    "behaviors": [
+                                        {
+                                            "type": "callback",
+                                            "value": {
+                                                "kind": TASK_CHAT_CONTROL_ACTION_KIND,
+                                                "choice_id": TASK_CHAT_CONTROL_EXIT_CHOICE_ID,
+                                            },
+                                        }
+                                    ],
+                                }
+                            ],
+                        }
+                    ],
+                },
+            ]
+        },
+    }
+
+
 def _prepare_task_chat_confirmation(
     root: Path,
     *,
@@ -1346,9 +1407,10 @@ def _prepare_task_chat_confirmation(
     task: dict,
     open_id: str,
     session_key: str,
+    current_task: dict | None = None,
 ) -> dict:
     confirmation_id = secrets.token_urlsafe(18)
-    card = _task_chat_confirmation_card(run_id, task)
+    card = _task_chat_confirmation_card(run_id, task, current_task=current_task)
     context = {
         "operation": TASK_CHAT_CONFIRM_ACTION,
         "run_id": run_id,
@@ -1533,6 +1595,79 @@ def _handle_menu_query_card_action(root: Path, channel: Any, payload: dict, valu
         _send_text(root, channel, chat_id, f"无法处理查询：{exc}", reply_to=message_id)
 
 
+def _current_task_chat_subscription(root: Path, chat_id: str, open_id: str) -> tuple[str, dict] | None:
+    """Find the active task_chat subscription for this chat (single-instance)."""
+    state = load_subscription_state(root)
+    for session_key, subscription in state.get("subscriptions", {}).items():
+        if not isinstance(subscription, dict) or not subscription.get("enabled"):
+            continue
+        if str(subscription.get("mode") or "") != TASK_CHAT_MODE:
+            continue
+        if str(subscription.get("chat_id") or "") != str(chat_id or ""):
+            continue
+        if str(subscription.get("open_id") or "") != str(open_id or ""):
+            continue
+        return str(session_key), subscription
+    return None, {}
+
+
+def _handle_task_chat_entry_action(root: Path, channel: Any, payload: dict, value: dict) -> None:
+    chat_id = str(payload.get("chat_id") or "")
+    message_id = str(payload.get("message_id") or "")
+    open_id = str(payload.get("open_id") or "")
+    run_id = str(value.get("run_id") or "").strip()
+    task_id = str(value.get("task_id") or "").strip()
+    if not run_id or not task_id:
+        _audit_inbound_resolution(root, payload, "rejected", reason="invalid_task_chat_entry")
+        _send_text(root, channel, chat_id, "无法进入 Task Chat：任务信息不完整。", reply_to=message_id)
+        return
+    try:
+        authorization_error = _authorization_error(
+            feishu_config(root),
+            chat_type="p2p",
+            chat_id=chat_id,
+            open_id=open_id,
+        )
+        if authorization_error:
+            _audit_inbound_resolution(root, payload, "rejected", reason=authorization_error)
+            _send_text(root, channel, chat_id, "你尚未被授权执行该 AHA 操作。", reply_to=message_id)
+            return
+        task = _task_for_chat(root, run_id, task_id)
+        session_key = _owner_p2p_session_key(root, chat_id=chat_id, open_id=open_id)
+        current_session_key, current_subscription = _current_task_chat_subscription(root, chat_id, open_id)
+        current_task = None
+        if current_session_key and current_subscription:
+            current_task = {
+                "run_id": str(current_subscription.get("run_id") or ""),
+                "task_id": str(current_subscription.get("task_id") or ""),
+            }
+        # The status card that triggered this entry is consumed and invalidated:
+        # its "进入 Task Chat" button is no longer actionable once clicked.
+        from aha_cli.services.feishu_notifications import (
+            consume_status_card,
+            status_card_key,
+        )
+
+        consumed_card = consume_status_card(root, status_card_key(run_id, task_id, chat_id), message_id)
+        if consumed_card:
+            try:
+                _update_card(root, channel, message_id, _status_card_terminal({"message": ""}, "entered"))
+            except Exception:  # noqa: BLE001 - invalidation failure must not block entry.
+                pass
+        action = _prepare_task_chat_confirmation(
+            root,
+            run_id=run_id,
+            task=task,
+            open_id=open_id,
+            session_key=session_key,
+            current_task=current_task,
+        )
+        _send_menu_card(root, channel, chat_id, action)
+    except (FeishuError, ServiceAssistantActionError, KeyError, SystemExit, ValueError) as exc:
+        _audit_inbound_resolution(root, payload, "failed", error=exc)
+        _send_text(root, channel, chat_id, f"无法进入 Task Chat：{exc}", reply_to=message_id)
+
+
 def _handle_task_chat_card_action(root: Path, channel: Any, payload: dict, value: dict) -> None:
     chat_id = str(payload.get("chat_id") or "")
     message_id = str(payload.get("message_id") or "")
@@ -1583,6 +1718,34 @@ def _handle_task_chat_card_action(root: Path, channel: Any, payload: dict, value
             _audit_inbound_resolution(root, payload, "handled", reason="task_chat_cancelled", session_key=target_session_key)
             return
         task = _task_for_chat(root, run_id, task_id)
+        # Single-instance constraint: a chat can only bind one Task Chat at a
+        # time. If this chat already has an active task_chat (for a different
+        # task), exit it before entering the new one. Both tasks typically map
+        # to the same session key, so the binding switch is detected by task,
+        # not by session key.
+        current_session_key, _current_sub = _current_task_chat_subscription(root, chat_id, open_id)
+        if current_session_key and str(_current_sub.get("task_id") or "") != task_id:
+            _restore_assistant_chat_subscription(
+                root,
+                chat_id=chat_id,
+                open_id=open_id,
+                session_key=target_session_key,
+            )
+            # Invalidate the previous Task Chat's exit card so it can no longer
+            # be used after the binding switches to the new task.
+            previous_control = _current_sub.get("task_chat_control") if isinstance(_current_sub.get("task_chat_control"), dict) else {}
+            previous_exit_message_id = str(previous_control.get("message_id") or "")
+            if previous_exit_message_id:
+                try:
+                    _update_card(
+                        root,
+                        channel,
+                        previous_exit_message_id,
+                        task_chat_control_terminal_card(previous_control, "superseded"),
+                    )
+                except Exception:  # noqa: BLE001 - stale card update must not break the switch.
+                    pass
+            remove_subscriptions(root, {current_session_key})
         set_subscription(
             root,
             target_session_key,
@@ -1593,11 +1756,27 @@ def _handle_task_chat_card_action(root: Path, channel: Any, payload: dict, value
             chat_type="p2p",
             mode=TASK_CHAT_MODE,
         )
+        # Attach an active control card for the entry card's exit button: the
+        # button callback resolves against task_chat_control.message_id, which
+        # must match the updated card's message id.
+        try:
+            set_task_chat_control(
+                root,
+                target_session_key,
+                {
+                    "message_id": message_id,
+                    "run_id": run_id,
+                    "task_id": task_id,
+                    "status": str(task.get("status") or "-"),
+                },
+            )
+        except FeishuError:
+            pass
         terminal_detail = "\n".join(
             [
                 f"已进入 Task Chat：{run_id} / {task_id}",
                 f"标题：{_brief_menu_text(task.get('title'), limit=120, fallback='未命名 Task')}",
-                "后续飞书文本会直接转给该 Task；发送 `退出 task` 可退出。",
+                "后续飞书文本会直接转给该 Task；点击下方按钮可退出并回到 AHA 管家。",
             ]
         )
         record = finalize_confirmation_card(
@@ -1606,6 +1785,13 @@ def _handle_task_chat_card_action(root: Path, channel: Any, payload: dict, value
             "confirmed",
             terminal_detail,
         )
+        if isinstance(record, dict) and isinstance(record.get("terminal_card"), dict):
+            record["terminal_card"] = _task_chat_exit_card(
+                run_id,
+                task_id,
+                str(task.get("title") or ""),
+                detail=terminal_detail,
+            )
         card_updated = (
             _try_update_confirmation_card(root, channel, record or {})
             if isinstance((record or {}).get("terminal_card"), dict)
@@ -1703,7 +1889,36 @@ def _handle_task_chat_control_action(root: Path, channel: Any, payload: dict, va
         )
     except (FeishuError, ServiceAssistantActionError, KeyError, SystemExit, ValueError) as exc:
         _audit_inbound_resolution(root, payload, "failed", error=exc)
-        _send_text(root, channel, chat_id, f"无法处理 Task Chat 控制卡：{exc}", reply_to=message_id)
+        stale_updated = False
+        if str(getattr(exc, "code", "") or "") == "stale_task_chat_control" and message_id:
+            # Mark the triggering card itself as stale so it no longer looks
+            # actionable; the text reply is only a fallback when the card
+            # update fails.
+            try:
+                stale_updated = _update_card(
+                    root,
+                    channel,
+                    message_id,
+                    {
+                        "schema": "2.0",
+                        "header": {
+                            "title": {"tag": "plain_text", "content": "控制卡已失效"},
+                            "template": "grey",
+                        },
+                        "body": {
+                            "elements": [
+                                {
+                                    "tag": "markdown",
+                                    "content": "该 Task Chat 控制卡片已失效，请使用聊天中最新的 Task Chat 控制卡。",
+                                }
+                            ]
+                        },
+                    },
+                )
+            except Exception:  # noqa: BLE001 - fall back to the text reply below.
+                stale_updated = False
+        if not stale_updated:
+            _send_text(root, channel, chat_id, f"无法处理 Task Chat 控制卡：{exc}", reply_to=message_id)
 
 
 def _handle_card_action(root: Path, channel: Any, payload: dict) -> None:
@@ -1717,6 +1932,9 @@ def _handle_card_action(root: Path, channel: Any, payload: dict) -> None:
         return
     if action_kind == TASK_CHAT_CONTROL_ACTION_KIND:
         _handle_task_chat_control_action(root, channel, payload, value)
+        return
+    if action_kind == TASK_CHAT_ENTRY_ACTION_KIND:
+        _handle_task_chat_entry_action(root, channel, payload, value)
         return
     if action_kind not in {"aha_service_confirmation", "aha_service_choice"}:
         _audit_inbound_resolution(root, payload, "ignored", reason="unsupported_card_action")

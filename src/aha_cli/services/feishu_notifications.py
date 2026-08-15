@@ -47,6 +47,7 @@ USER_TRIGGER_ROUTES = {
 }
 MAX_NOTIFICATION_CHARS = 1800
 TASK_CHAT_CONTROL_ACTION_KIND = "aha_task_chat_control"
+TASK_CHAT_ENTRY_ACTION_KIND = "aha_task_chat_entry"
 TASK_CHAT_CONTROL_STAY_CHOICE_ID = "stay"
 TASK_CHAT_CONTROL_EXIT_CHOICE_ID = "exit"
 TASK_CHAT_CONTROL_STATUSES = {"awaiting_user", "completed", "failed", "blocked"}
@@ -59,6 +60,77 @@ _state_lock = threading.RLock()
 
 def subscription_state_path(root: Path) -> Path:
     return aha_home_path(root) / "feishu" / "subscriptions.json"
+
+
+def status_cards_path(root: Path) -> Path:
+    return aha_home_path(root) / "feishu" / "status_cards.json"
+
+
+def _load_status_cards_unlocked(root: Path) -> dict:
+    try:
+        cards = read_json(status_cards_path(root))
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        cards = {}
+    return cards if isinstance(cards, dict) else {}
+
+
+def status_card_key(run_id: str, task_id: str, chat_id: str) -> str:
+    return f"{run_id}:{task_id}:{chat_id}"
+
+
+def _record_status_card_unlocked(root: Path, key: str, message_id: str, *, message: str = "") -> dict | None:
+    cards = _load_status_cards_unlocked(root)
+    previous = cards.get(key)
+    cards[key] = {
+        "message_id": str(message_id or "").strip(),
+        "message": str(message or "").strip(),
+        "active": True,
+        "updated_at": utc_now(),
+    }
+    write_json(status_cards_path(root), cards)
+    return dict(previous) if isinstance(previous, dict) and previous.get("message_id") else None
+
+
+def record_status_card(root: Path, key: str, message_id: str, *, message: str = "") -> dict | None:
+    """Record the latest status card for a task/chat and return the previous one.
+
+    A new status card for the same task+chat supersedes the previous one, so the
+    caller can invalidate the old card (e.g. update it to 'status updated').
+    """
+    with _locked_subscription_state(root):
+        return _record_status_card_unlocked(root, key, message_id, message=message)
+
+
+def consume_status_card(root: Path, key: str, message_id: str) -> bool:
+    """Deactivate a status card after it has been acted on (e.g. entering Task Chat)."""
+    with _locked_subscription_state(root):
+        cards = _load_status_cards_unlocked(root)
+        record = cards.get(key)
+        if not isinstance(record, dict) or str(record.get("message_id") or "") != str(message_id or ""):
+            return False
+        record["active"] = False
+        record["consumed_at"] = utc_now()
+        write_json(status_cards_path(root), cards)
+        return True
+
+
+def _status_card_terminal(card: dict, reason: str) -> dict:
+    """Build a terminal card marking a status card as no longer actionable."""
+    labels = {
+        "entered": ("已进入 Task Chat", "green", "本状态卡已处理，请直接在该 Task Chat 中继续对话。"),
+        "superseded": ("状态已更新", "grey", "本状态卡已失效，请查看最新卡片。"),
+    }
+    title, template, detail = labels.get(reason, ("状态已更新", "grey", "本卡片已失效。"))
+    body_elements: list[dict] = []
+    content = str(card.get("message") or "")
+    if content:
+        body_elements.append({"tag": "markdown", "content": content})
+    body_elements.append({"tag": "markdown", "content": f"<font color='grey'>{detail}</font>"})
+    return {
+        "schema": "2.0",
+        "header": {"title": {"tag": "plain_text", "content": title}, "template": template},
+        "body": {"elements": body_elements},
+    }
 
 
 def subscription_state_lock_path(root: Path) -> Path:
@@ -203,6 +275,35 @@ def resolve_task_chat_control(
             _write_subscription_state_unlocked(root, state)
             return {"session_key": str(session_key), "subscription": dict(subscription), "control": dict(control)}
     raise FeishuError("该 Task Chat 控制卡片已失效，请使用最新卡片", code="stale_task_chat_control")
+
+
+def set_task_chat_control(root: Path, session_key: str, control: dict) -> dict:
+    """Attach an active Task Chat control card to a subscription.
+
+    Used when a Task Chat entry card (with its exit button) is shown so the
+    button's callback can be resolved by :func:`resolve_task_chat_control`.
+    ``control`` must carry ``message_id`` (the card's message id), ``run_id``,
+    ``task_id`` and ``status``.
+    """
+    key = str(session_key or "").strip()
+    if not key or not isinstance(control, dict) or not str(control.get("message_id") or "").strip():
+        raise FeishuError("需要有效的 session_key 和 task_chat_control.message_id", code="invalid_task_chat_control")
+    with _locked_subscription_state(root):
+        state = _load_subscription_state_unlocked(root)
+        subscription = state["subscriptions"].get(key)
+        if not isinstance(subscription, dict):
+            raise FeishuError("Task Chat 会话不存在或已结束", code="task_chat_not_found")
+        subscription["task_chat_control"] = {
+            "active": True,
+            "message_id": str(control.get("message_id") or "").strip(),
+            "run_id": str(control.get("run_id") or subscription.get("run_id") or ""),
+            "task_id": str(control.get("task_id") or subscription.get("task_id") or "") or None,
+            "status": str(control.get("status") or "-"),
+            "sent_at": utc_now(),
+        }
+        state["updated_at"] = utc_now()
+        _write_subscription_state_unlocked(root, state)
+        return dict(subscription["task_chat_control"])
 
 
 def _session_tenant_key(session_key: object) -> str:
@@ -460,6 +561,33 @@ def notification_message_for_event(root: Path, run_id: str, event: dict) -> str:
     return _trim_notification(message)
 
 
+_STATUS_MESSAGE_MAX_CHARS = 96
+
+
+def _status_message_elements(value: str, *, max_chars: int = _STATUS_MESSAGE_MAX_CHARS) -> list[dict]:
+    """Render the status Message as at most two visible lines.
+
+    Card JSON 2.0 supports collapsible_panel, so a long message is folded in
+    full behind a collapsed panel instead of being truncated; the plain-text
+    transport (which cannot fold) keeps its truncation in ``_trim_notification``.
+    """
+    text = " ".join(str(value or "-").split())
+    if len(text) <= max_chars:
+        return [{"tag": "markdown", "content": f"**Message**\n{text}"}]
+    return [
+        {
+            "tag": "collapsible_panel",
+            "expanded": False,
+            "header": {
+                "title": {"tag": "plain_text", "content": "Message（正文较长，点击展开）"},
+                "vertical_align": "center",
+            },
+            "border": {"color": "grey", "corner_radius": "5px"},
+            "elements": [{"tag": "markdown", "content": text}],
+        }
+    ]
+
+
 def _status_notification_card(message: str, event: dict) -> dict:
     fields: dict[str, str] = {}
     for line in str(message or "").splitlines():
@@ -475,29 +603,59 @@ def _status_notification_card(message: str, event: dict) -> dict:
         "failed": "red",
         "blocked": "red",
     }.get(status, "grey")
+    body_elements = [
+        {
+            "tag": "markdown",
+            "content": "\n".join(
+                [
+                    f"**Time**：{fields.get('Time', '-')}",
+                    f"**Task**：`{fields.get('Task', '-')}`",
+                    f"**Task Title**：{fields.get('Task Title', '-')}",
+                    f"**Status**：`{fields.get('Status', '-')}`",
+                ]
+            ),
+        },
+        *_status_message_elements(fields.get("Message", "-")),
+    ]
+    task_id = str(data.get("task_id") or "").strip()
+    run_id = str(event.get("run_id") or "").strip()
+    if task_id:
+        body_elements.append(
+            {
+                "tag": "column_set",
+                "columns": [
+                    {
+                        "tag": "column",
+                        "width": "auto",
+                        "elements": [
+                            {
+                                "tag": "button",
+                                "element_id": "aha_task_chat_entry",
+                                "text": {"tag": "plain_text", "content": "进入 Task Chat"},
+                                "type": "primary",
+                                "behaviors": [
+                                    {
+                                        "type": "callback",
+                                        "value": {
+                                            "kind": TASK_CHAT_ENTRY_ACTION_KIND,
+                                            "run_id": run_id,
+                                            "task_id": task_id,
+                                        },
+                                    }
+                                ],
+                            }
+                        ],
+                    }
+                ],
+            }
+        )
     return {
         "schema": "2.0",
         "header": {
             "title": {"tag": "plain_text", "content": "AHA Task 状态更新"},
             "template": template,
         },
-        "body": {
-            "elements": [
-                {
-                    "tag": "markdown",
-                    "content": "\n".join(
-                        [
-                            f"**Time**：{fields.get('Time', '-')}",
-                            f"**Task**：`{fields.get('Task', '-')}`",
-                            f"**Task Title**：{fields.get('Task Title', '-')}",
-                            f"**Status**：`{fields.get('Status', '-')}`",
-                            "",
-                            f"**Message**\n{fields.get('Message', '-')}",
-                        ]
-                    ),
-                }
-            ]
-        },
+        "body": {"elements": body_elements},
     }
 
 
@@ -1228,6 +1386,20 @@ def notify_event(root: Path, run_id: str, event: dict) -> dict:
                 "sent_at": utc_now(),
                 "message_id": result.get("message_id"),
             }
+            # Track the latest status card per task+chat so a newer card can
+            # invalidate the older one, and the entry button can be consumed.
+            if is_status_event and result.get("message_id"):
+                card_key = status_card_key(run_id, task_id, chat_id)
+                previous = _record_status_card_unlocked(root, card_key, str(result.get("message_id") or ""), message=outbound_message)
+                if previous and previous.get("message_id"):
+                    try:
+                        _update_card(
+                            root,
+                            str(previous["message_id"]),
+                            _status_card_terminal(previous, "superseded"),
+                        )
+                    except Exception:  # noqa: BLE001 - stale card update must not break the new push.
+                        pass
             if is_task_chat_message:
                 _remember_task_chat_mirror(subscription, event)
             sent_count += 1
@@ -1262,6 +1434,7 @@ def notify_event(root: Path, run_id: str, event: dict) -> dict:
 
 __all__ = [
     "TASK_CHAT_CONTROL_ACTION_KIND",
+    "TASK_CHAT_ENTRY_ACTION_KIND",
     "TASK_CHAT_CONTROL_EXIT_CHOICE_ID",
     "TASK_CHAT_CONTROL_STAY_CHOICE_ID",
     "load_subscription_state",
@@ -1271,7 +1444,12 @@ __all__ = [
     "resolve_task_chat_control",
     "send_direct_message",
     "set_subscription",
+    "status_cards_path",
+    "status_card_key",
+    "record_status_card",
+    "consume_status_card",
     "subscription_state_lock_path",
     "subscription_state_path",
     "task_chat_control_terminal_card",
+    "_status_card_terminal",
 ]

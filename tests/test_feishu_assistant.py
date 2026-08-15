@@ -1027,7 +1027,12 @@ class FeishuAssistantTests(unittest.TestCase):
             current = load_subscription_state(root)["subscriptions"][session_key]
             self.assertEqual(current["mode"], "task_chat")
             self.assertTrue(current["task_chat_control"]["active"])
-            self.assertIn("已失效", channel.sent[-1][1]["text"])
+            # Clicking the stale card marks that card itself as stale instead
+            # of sending a text rejection.
+            stale_updates = [card for mid, card in channel.updated if mid == "om-control-1"]
+            self.assertEqual(len(stale_updates), 2)
+            self.assertEqual(stale_updates[-1]["header"]["title"]["content"], "控制卡已失效")
+            self.assertEqual(len(channel.sent), 0)
 
             feishu_assistant._handle_card_action(
                 root,
@@ -2312,6 +2317,162 @@ class FeishuAssistantTests(unittest.TestCase):
             self.assertEqual(final_subscription["mode"], "task_chat")
             self.assertEqual(final_subscription["run_id"], work["id"])
             self.assertEqual(final_subscription["task_id"], task_id)
+
+    def test_task_chat_exit_card_has_clickable_exit_button(self) -> None:
+        card = feishu_assistant._task_chat_exit_card(
+            "run-001",
+            "task-001",
+            "AHA 本地开发",
+            detail="已进入 Task Chat：run-001 / task-001",
+        )
+        self.assertEqual(card["schema"], "2.0")
+        self.assertEqual(card["header"]["title"]["content"], "已进入 Task Chat")
+        elements = card["body"]["elements"]
+        self.assertTrue(any(el.get("tag") == "markdown" and "run-001 / task-001" in el.get("content", "") for el in elements))
+        # 找到「退出 Task」按钮并验证回调
+        buttons = [
+            btn
+            for el in elements
+            if el.get("tag") == "column_set"
+            for col in el.get("columns", [])
+            for btn in col.get("elements", [])
+            if btn.get("tag") == "button"
+        ]
+        self.assertTrue(buttons)
+        btn = buttons[0]
+        self.assertEqual(btn["text"]["content"], "退出 Task")
+        behaviors = btn.get("behaviors") or []
+        self.assertTrue(behaviors)
+        value = behaviors[0].get("value") or {}
+        from aha_cli.services.feishu_notifications import TASK_CHAT_CONTROL_ACTION_KIND, TASK_CHAT_CONTROL_EXIT_CHOICE_ID
+
+        self.assertEqual(value.get("kind"), TASK_CHAT_CONTROL_ACTION_KIND)
+        self.assertEqual(value.get("choice_id"), TASK_CHAT_CONTROL_EXIT_CHOICE_ID)
+
+    def test_task_chat_entry_action_opens_confirmation_card(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, mock.patch(
+            "aha_cli.services.feishu_assistant.handle_send_payload",
+            return_value={"ok": True},
+        ):
+            root = Path(tmp)
+            home = root / ".aha"
+            work = create_plan(home, "Work", 1, "implementation", ["Chat task"], [], backend="stub")
+            task_id = str(work["tasks"][0]["id"])
+            (home / "config.json").write_text(
+                json.dumps(
+                    {
+                        "backend": "stub",
+                        "integrations": {
+                            "feishu": {
+                                "enabled": True,
+                                "app_id": "tenant-1",
+                                "allowed_open_ids": ["ou_user"],
+                                "allowed_chat_ids": ["oc_chat"],
+                                "owner_open_id": "ou_user",
+                                "owner_chat_id": "oc_chat",
+                                "default_run_id": work["id"],
+                            }
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            channel = SequencedChannel()
+
+            feishu_assistant._handle_card_action(
+                home,
+                channel,
+                {
+                    "kind": "card_action",
+                    "chat_id": "oc_chat",
+                    "message_id": "om_status_card",
+                    "open_id": "ou_user",
+                    "action": {"kind": "aha_task_chat_entry", "run_id": work["id"], "task_id": task_id},
+                },
+            )
+
+        sent = channel.sent
+        self.assertTrue(sent)
+        card = sent[-1][1]["card"]
+        self.assertEqual(card["header"]["title"]["content"], "进入 Task Chat")
+        rendered = json.dumps(card, ensure_ascii=False)
+        self.assertIn(f"`{work['id']} / {task_id}`", rendered)
+
+    def test_task_chat_entry_switches_single_instance(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, mock.patch(
+            "aha_cli.services.feishu_assistant.handle_send_payload",
+            return_value={"ok": True},
+        ):
+            root = Path(tmp)
+            home = root / ".aha"
+            work = create_plan(home, "Work", 2, "implementation", ["Task A", "Task B"], [], backend="stub")
+            task_a = str(work["tasks"][0]["id"])
+            task_b = str(work["tasks"][1]["id"])
+            (home / "config.json").write_text(
+                json.dumps(
+                    {
+                        "backend": "stub",
+                        "integrations": {
+                            "feishu": {
+                                "enabled": True,
+                                "app_id": "tenant-1",
+                                "allowed_open_ids": ["ou_user"],
+                                "allowed_chat_ids": ["oc_chat"],
+                                "owner_open_id": "ou_user",
+                                "owner_chat_id": "oc_chat",
+                                "default_run_id": work["id"],
+                            }
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            channel = SequencedChannel()
+            base = {
+                "kind": "card_action",
+                "chat_id": "oc_chat",
+                "open_id": "ou_user",
+            }
+
+            # 1) Enter Task A via its status card entry button, then confirm.
+            feishu_assistant._handle_card_action(
+                home,
+                channel,
+                {**base, "message_id": "om_status_a", "action": {"kind": "aha_task_chat_entry", "run_id": work["id"], "task_id": task_a}},
+            )
+            feishu_assistant._handle_card_action(
+                home,
+                channel,
+                {**base, "message_id": "om_reply_1", "action": {"kind": "aha_task_chat", "choice_id": "confirm"}},
+            )
+            sub_after_a = load_subscription_state(home)["subscriptions"]
+            active_a = [s for s in sub_after_a.values() if s.get("enabled") and s.get("mode") == "task_chat"]
+            self.assertEqual(len(active_a), 1)
+            self.assertEqual(active_a[0]["task_id"], task_a)
+
+            # 2) Enter Task B via its status card entry button, then confirm.
+            feishu_assistant._handle_card_action(
+                home,
+                channel,
+                {**base, "message_id": "om_status_b", "action": {"kind": "aha_task_chat_entry", "run_id": work["id"], "task_id": task_b}},
+            )
+            feishu_assistant._handle_card_action(
+                home,
+                channel,
+                {**base, "message_id": "om_reply_2", "action": {"kind": "aha_task_chat", "choice_id": "confirm"}},
+            )
+            sub_after_b = load_subscription_state(home)["subscriptions"]
+            active = [s for s in sub_after_b.values() if s.get("enabled") and s.get("mode") == "task_chat"]
+
+            # Task A's exit card ("om_reply_1") is invalidated when the binding
+            # switches to Task B.
+            superseded = [card for mid, card in channel.updated if mid == "om_reply_1"]
+
+        # Single-instance: after entering Task B, only one task_chat remains, bound to Task B.
+        self.assertEqual(len(active), 1)
+        self.assertEqual(active[0]["task_id"], task_b)
+        self.assertTrue(superseded)
+        self.assertIn("已更新", superseded[-1]["header"]["title"]["content"])
 
 
 if __name__ == "__main__":
