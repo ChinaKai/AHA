@@ -16,6 +16,7 @@ from aha_cli.services.hardware_bridge import (
     DeviceBridgeDaemon,
     append_bridge_control,
     bridge_status,
+    device_bridge_dir,
     device_bridge_state_path,
     device_key,
     device_stream_page,
@@ -113,6 +114,42 @@ class DeviceBridgeDaemonTests(unittest.TestCase):
             tx = [r for r in rows if r["direction"] == "tx"]
             self.assertTrue(any(r["data"] == "ps\r" and r.get("source") == "interactive" for r in tx))
             self.assertEqual(read_bridge_state(root, device)["status"], "stopped")
+
+    def test_archive_previous_stream_moves_old_device_data(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            device = "/dev/ttyUSB-old"
+            # Seed a prior session's stream (e.g. a different board on the same port).
+            stream_path = device_stream_path(root, device)
+            stream_path.parent.mkdir(parents=True, exist_ok=True)
+            append_jsonl(
+                stream_path,
+                {"ts": "2026-08-01T00:00:00+00:00", "device": device, "direction": "rx", "data": "old board output", "source": ""},
+            )
+            daemon = DeviceBridgeDaemon(root, device, 115200, self_reap=False)
+
+            daemon._archive_previous_stream()
+
+            # Old data moved to an archive file, not lost.
+            archive_dir = device_bridge_dir(root, device) / "archive"
+            archives = list(archive_dir.glob("stream.*.jsonl"))
+            self.assertEqual(len(archives), 1)
+            archived_rows, _ = iter_jsonl_from(archives[0], 0)
+            self.assertTrue(any("old board output" in row.get("data", "") for row in archived_rows))
+            # Live stream is empty now (or only holds the archive marker).
+            live_rows, _ = iter_jsonl_from(stream_path, 0)
+            self.assertFalse(any("old board output" in row.get("data", "") for row in live_rows))
+
+    def test_archive_previous_stream_skips_empty(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            device = "/dev/ttyUSB-fresh"
+            daemon = DeviceBridgeDaemon(root, device, 115200, self_reap=False)
+
+            daemon._archive_previous_stream()
+
+            archive_dir = device_bridge_dir(root, device) / "archive"
+            self.assertFalse(archive_dir.exists() or list(archive_dir.glob("stream.*.jsonl")))
 
     def test_live_external_lock_keeps_bridge_blocked_without_opening_device(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

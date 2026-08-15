@@ -508,10 +508,40 @@ class DeviceBridgeDaemon:
                 self._send(str(command.get("data") or "")[:65536], source="web-xterm")
 
     # -- main loop ------------------------------------------------------
+    def _archive_previous_stream(self) -> None:
+        """Move the existing device stream aside before a new bridge session.
+
+        A serial device is a machine-level resource shared across tasks, and the
+        same physical port (e.g. COM6) may be reconnected to a different board
+        between sessions (Luckfox -> MI_CW500_Dual). Keeping the accumulated
+        stream would mix old and new board output in the Web Terminal replay.
+        Rename the existing stream.jsonl to an archive file so each bridge
+        session starts clean while the history stays available for forensics.
+        """
+        stream_path = device_stream_path(self.root, self.device)
+        if not stream_path.exists() or stream_path.stat().st_size == 0:
+            return
+        archive_dir = device_bridge_dir(self.root, self.device) / "archive"
+        archive_dir.mkdir(parents=True, exist_ok=True)
+        stamp = utc_now().replace("+00:00", "Z").replace(":", "-").replace("T", "_")
+        target = archive_dir / f"stream.{stamp}.jsonl"
+        try:
+            stream_path.rename(target)
+            self._log("system", f"archived previous stream to {target.name}", source="bridge")
+        except OSError as exc:
+            # Renaming must not break bridge startup; fall back to truncating so
+            # the new session still starts clean.
+            self._log("system", f"stream archive failed ({exc}); truncating", source="bridge")
+            try:
+                stream_path.write_text("", encoding="utf-8")
+            except OSError:
+                pass
+
     def run(self) -> None:
         # Skip any control backlog so a fresh bridge never replays stale commands.
         path = device_control_path(self.root, self.device)
         self._control_offset = path.stat().st_size if path.exists() else 0
+        self._archive_previous_stream()
         self._terminal_ipc.start()
         try:
             if self._open_port():
