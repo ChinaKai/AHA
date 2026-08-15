@@ -54,13 +54,25 @@ from aha_cli.services.terminal_ipc import BridgeTerminalIpc
 from aha_cli.store.io import append_jsonl, iter_jsonl_records_from, iter_jsonl_reverse
 from aha_cli.store.paths import aha_home_path
 
-HARDWARE_BRIDGE_CONTROL_COMMANDS = {"send", "send_raw", "arm", "disarm", "pause", "resume", "stop"}
+HARDWARE_BRIDGE_CONTROL_COMMANDS = {
+    "send",
+    "send_raw",
+    "transfer_begin",
+    "transfer_send",
+    "transfer_end",
+    "arm",
+    "disarm",
+    "pause",
+    "resume",
+    "stop",
+}
 _STREAM_INLINE_LIMIT = 12000
 _MAX_SERIAL_TX_PENDING_BYTES = 256 * 1024
 # Many bootloader and small-board UART receivers lose characters when a paste or
 # key-repeat is handed to the tty driver as one host-side burst.  Keep the first
 # byte immediate, then pace the remaining bytes without blocking the bridge loop.
 _SERIAL_TX_BYTE_INTERVAL = 0.001
+_SERIAL_TRANSFER_CHUNK_BYTES = 16
 _PR_SET_PDEATHSIG = 1
 _TERMINAL_TASK_STATUSES = {"completed", "failed", "blocked"}
 
@@ -141,6 +153,10 @@ def device_terminal_socket_path(root: Path, device: str) -> Path:
     return device_bridge_dir(root, device) / "terminal.sock"
 
 
+def device_transfer_lock_path(root: Path, device: str) -> Path:
+    return device_bridge_dir(root, device) / "transfer.lock"
+
+
 def _inline(value: object) -> tuple[str, bool]:
     data = str(value if value is not None else "")
     if len(data) <= _STREAM_INLINE_LIMIT:
@@ -181,7 +197,10 @@ def bridge_status(root: Path, device: str) -> dict:
         "pid": state.get("pid"),
         "baudrate": state.get("baudrate"),
         "rules": state.get("rules") or [],
+        "capabilities": state.get("capabilities") or [],
     }
+    if isinstance(state.get("transfer"), dict):
+        result["transfer"] = state["transfer"]
     if state.get("error"):
         result["error"] = state["error"]
         result["device_owner"] = state.get("device_owner")
@@ -318,6 +337,7 @@ class DeviceBridgeDaemon:
         self._tx_pending_bytes = 0
         self._tx_byte_interval = max(0.0, float(tx_byte_interval))
         self._tx_next_write_at = 0.0
+        self._transfer: dict[str, str] | None = None
         self._open_error = ""
         self._device_owner: dict | None = None
         self._terminal_ipc = BridgeTerminalIpc(
@@ -367,7 +387,10 @@ class DeviceBridgeDaemon:
             "paused": self._paused,
             "updated_at": utc_now(),
             "rules": self.engine.snapshot(),
+            "capabilities": ["serial-transfer-v1"],
         }
+        if self._transfer is not None:
+            state["transfer"] = dict(self._transfer)
         if self._open_error:
             state["error"] = self._open_error
             state["device_owner"] = self._device_owner
@@ -413,25 +436,42 @@ class DeviceBridgeDaemon:
         self._log("system", f"discarded {dropped} pending TX bytes ({reason})", source="bridge")
 
     # -- TX + rules -----------------------------------------------------
-    def _send(self, data_text: str, *, source: str) -> None:
+    def _send(
+        self,
+        data_text: str,
+        *,
+        source: str,
+        byte_interval: float | None = None,
+        chunk_size: int = 1,
+        audit_text: str | None = None,
+    ) -> None:
         if not data_text or self.transport is None:
             return
         payload = data_text.encode("utf-8", "replace")
         if self._tx_pending_bytes + len(payload) > _MAX_SERIAL_TX_PENDING_BYTES:
             self._log("system", f"TX queue full; rejected {len(payload)} bytes", source=source)
             return
-        self._tx_queue.append({"data": payload, "offset": 0, "text": data_text, "source": source})
+        self._tx_queue.append({
+            "data": payload,
+            "offset": 0,
+            "text": data_text if audit_text is None else audit_text,
+            "source": source,
+            "byte_interval": self._tx_byte_interval if byte_interval is None else max(0.0, float(byte_interval)),
+            "chunk_size": max(1, int(chunk_size)),
+        })
         self._tx_pending_bytes += len(payload)
         self._flush_tx()
 
     def _flush_tx(self) -> None:
         while self.transport is not None and self._tx_queue:
-            if self._tx_byte_interval and self._clock() < self._tx_next_write_at:
-                return
             pending = self._tx_queue[0]
+            byte_interval = float(pending.get("byte_interval") or 0.0)
+            if byte_interval and self._clock() < self._tx_next_write_at:
+                return
             payload = pending["data"]
             offset = int(pending["offset"])
-            chunk_end = offset + 1 if self._tx_byte_interval else len(payload)
+            chunk_size = int(pending.get("chunk_size") or 1)
+            chunk_end = min(len(payload), offset + chunk_size) if byte_interval else len(payload)
             try:
                 written = int(self.transport.write(payload[offset:chunk_end]) or 0)
             except (OSError, ValueError, TypeError):
@@ -444,12 +484,15 @@ class DeviceBridgeDaemon:
             if int(pending["offset"]) >= len(payload):
                 self._tx_queue.popleft()
                 self._log("tx", str(pending["text"]), source=str(pending["source"]))
-            if self._tx_byte_interval:
-                self._tx_next_write_at = self._clock() + self._tx_byte_interval
+            if byte_interval:
+                self._tx_next_write_at = self._clock() + byte_interval
                 return
 
     def _fire(self, fired: list[dict]) -> None:
         for rule in fired:
+            if self._transfer is not None:
+                self._log("system", f"rule {rule['id']} suppressed during file transfer", source=f"rule:{rule['id']}")
+                continue
             self._send(rule["send"], source=f"rule:{rule['id']}")
             self._log("system", f"rule {rule['id']} fired (fires={rule['fires']})", source=f"rule:{rule['id']}")
 
@@ -465,10 +508,12 @@ class DeviceBridgeDaemon:
             cmd = str(record.get("cmd") or "").strip().lower()
             if cmd == "stop":
                 self._log("system", "stop requested", source="control")
+                self._transfer = None
                 self._running = False
             elif cmd == "pause":
                 if not self._paused:
                     self._paused = True
+                    self._transfer = None
                     self._discard_tx("bridge paused")
                     self._close_port()
                     self._open_error = ""
@@ -483,7 +528,45 @@ class DeviceBridgeDaemon:
             elif self._paused:
                 # While paused we accept no TX/rule changes against a released port.
                 self._log("system", f"ignored {cmd} while paused", source="control")
+            elif cmd == "transfer_begin":
+                transfer_id = str(record.get("transfer_id") or "").strip()
+                if not transfer_id:
+                    self._log("system", "file transfer rejected: transfer_id is required", source="file-transfer")
+                else:
+                    if self._transfer is not None and self._transfer.get("id") != transfer_id:
+                        self._log("system", "replacing stale file transfer lease", source="file-transfer")
+                    self._discard_tx("file transfer lease acquired")
+                    self._transfer = {
+                        "id": transfer_id,
+                        "source": str(record.get("source") or "file-transfer"),
+                        "started_at": str(record.get("ts") or utc_now()),
+                    }
+                    self._log("system", "file transfer lease acquired", source="file-transfer")
+                    self._write_state("running")
+            elif cmd == "transfer_send":
+                transfer_id = str(record.get("transfer_id") or "").strip()
+                if self._transfer is None or self._transfer.get("id") != transfer_id:
+                    self._log("system", "file transfer data rejected: lease mismatch", source="file-transfer")
+                    continue
+                data = str(record.get("data") or "")
+                wire_seconds = (10.0 * _SERIAL_TRANSFER_CHUNK_BYTES) / max(1, self.baudrate)
+                self._send(
+                    data,
+                    source="file-transfer",
+                    byte_interval=max(0.0005, wire_seconds),
+                    chunk_size=_SERIAL_TRANSFER_CHUNK_BYTES,
+                    audit_text=f"[file transfer {len(data.encode('utf-8'))} wire bytes]",
+                )
+            elif cmd == "transfer_end":
+                transfer_id = str(record.get("transfer_id") or "").strip()
+                if self._transfer is not None and self._transfer.get("id") == transfer_id:
+                    self._transfer = None
+                    self._log("system", "file transfer lease released", source="file-transfer")
+                    self._write_state("running")
             elif cmd in {"send", "send_raw"}:
+                if self._transfer is not None:
+                    self._log("system", f"ignored {cmd} during file transfer", source="control")
+                    continue
                 raw = record.get("data", record.get("send", ""))
                 data = str(raw or "") if cmd == "send_raw" else decode_escapes(raw)
                 self._send(data, source=str(record.get("source") or "interactive"))
@@ -505,6 +588,8 @@ class DeviceBridgeDaemon:
         for command in commands:
             command_type = str(command.get("type") or "").strip().lower()
             if command_type == "input" and not self._paused:
+                if self._transfer is not None:
+                    continue
                 self._send(str(command.get("data") or "")[:65536], source="web-xterm")
 
     # -- main loop ------------------------------------------------------
@@ -622,6 +707,7 @@ class DeviceBridgeDaemon:
             self._discard_tx("bridge stopped")
             self._close_port()
             self._paused = False
+            self._transfer = None
             self._open_error = ""
             self._device_owner = None
             self._write_state("stopped")
@@ -685,6 +771,7 @@ __all__ = [
     "device_stream_page",
     "device_stream_path",
     "device_terminal_socket_path",
+    "device_transfer_lock_path",
     "ensure_bridge",
     "pid_alive",
     "read_bridge_state",

@@ -13,6 +13,7 @@ from aha_cli.services.network_terminal import (
     TelnetCodec,
     append_network_control,
     network_credentials_path,
+    network_status,
     network_stream_page,
     network_terminal_socket_path,
     task_network_target,
@@ -40,6 +41,17 @@ class NetworkTerminalTests(unittest.TestCase):
             }
         )
         self.assertEqual(target, ("192.168.1.20", 23, "root", "secret"))
+        self.assertEqual(
+            task_network_target(
+                {
+                    "hardware_debug": {
+                        "mode": "both",
+                        "network": {"device_ip": "192.168.1.21"},
+                    }
+                }
+            ),
+            ("192.168.1.21", 23, "", ""),
+        )
         self.assertIsNone(task_network_target({"hardware_debug": {"mode": "off"}}))
 
     def test_telnet_codec_removes_negotiation_and_replies(self) -> None:
@@ -125,6 +137,70 @@ class NetworkTerminalTests(unittest.TestCase):
             stream_text = "\n".join(str(item.get("data") or "") for item in network_stream_page(root, host, port)["events"])
             self.assertNotIn("secret", stream_text)
             self.assertIn("password submitted", stream_text)
+
+    def test_file_transfer_lease_blocks_interactive_network_tx(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            listener = socket.socket()
+            listener.bind(("127.0.0.1", 0))
+            listener.listen(1)
+            host, port = listener.getsockname()
+            received = bytearray()
+            server_done = threading.Event()
+
+            def serve() -> None:
+                conn, _address = listener.accept()
+                with conn:
+                    conn.settimeout(0.05)
+                    while not server_done.is_set():
+                        try:
+                            chunk = conn.recv(4096)
+                        except socket.timeout:
+                            continue
+                        if not chunk:
+                            break
+                        received.extend(chunk)
+
+            server_thread = threading.Thread(target=serve, daemon=True)
+            server_thread.start()
+            daemon = NetworkTerminalDaemon(root, host, port, self_reap=False, poll_interval=0.01)
+            daemon_thread = threading.Thread(target=daemon.run, daemon=True)
+            daemon_thread.start()
+            ipc_client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            try:
+                self.assertTrue(wait_until(lambda: network_status(root, host, port).get("status") == "running"))
+                ipc_path = network_terminal_socket_path(root, host, port)
+                self.assertTrue(wait_until(ipc_path.exists))
+                ipc_client.connect(str(ipc_path))
+
+                append_network_control(root, host, port, {"cmd": "transfer_begin", "transfer_id": "transfer-1"})
+                self.assertTrue(
+                    wait_until(lambda: (network_status(root, host, port).get("transfer") or {}).get("id") == "transfer-1")
+                )
+                self.assertIn("network-transfer-v1", network_status(root, host, port).get("capabilities") or [])
+                append_network_control(root, host, port, {"cmd": "send_raw", "data": "interactive-control"})
+                append_network_control(
+                    root,
+                    host,
+                    port,
+                    {"cmd": "transfer_send", "transfer_id": "transfer-1", "data": "file-data"},
+                )
+                ipc_client.sendall(b'{"type":"input","data":"interactive-web"}\n')
+                self.assertTrue(wait_until(lambda: b"file-data" in received))
+
+                append_network_control(root, host, port, {"cmd": "transfer_end", "transfer_id": "transfer-1"})
+                self.assertTrue(wait_until(lambda: not network_status(root, host, port).get("transfer")))
+                append_network_control(root, host, port, {"cmd": "send_raw", "data": "after-transfer"})
+                self.assertTrue(wait_until(lambda: b"after-transfer" in received))
+            finally:
+                ipc_client.close()
+                append_network_control(root, host, port, {"cmd": "stop"})
+                daemon_thread.join(timeout=2)
+                server_done.set()
+                listener.close()
+
+            self.assertNotIn(b"interactive-control", received)
+            self.assertNotIn(b"interactive-web", received)
 
 
 if __name__ == "__main__":

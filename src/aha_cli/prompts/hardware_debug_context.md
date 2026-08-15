@@ -16,6 +16,16 @@ Hardware debug operating rules:
     aha hardware-send  <run> <task> --channel network --data 'ps\r'
     aha hardware-rules <run> <task> --channel serial
     aha hardware-stop  <run> <task> --channel serial
+- For a `read_write` Serial or Telnet Network task, send a local file without a preinstalled board transfer tool:
+    aha hardware-file-send <run> <task> /absolute/local/file /tmp/remote-file --channel serial
+    aha hardware-file-send <run> <task> /absolute/local/file /tmp/remote-file --channel network
+  `mode=both` still supports file transfer; `--channel` explicitly selects the active bridge.
+  The first path is opened by the backend process running this command; the second path is on the board.
+  Prefer an absolute source path and quote paths containing spaces. In a WSL backend, use a WSL-visible path
+  such as `/home/...`, `/mnt/c/...`, or a resolvable `\\wsl.localhost\\<distro>\\...` path. The WSL backend
+  reads the file itself and forwards only protocol data to the Windows-owned hardware bridge, so do not rewrite a
+  valid `/home/...` path as a Windows drive path. In a Windows backend, use a Windows path or WSL UNC path;
+  a raw `/home/...` path is not a Windows filesystem path.
 - A network task stores only the target IP. Before opening it, use the enabled hardware-debug skill's
   bounded probe tool to discover SSH or Telnet. The current shared Network bridge is Telnet-only;
   use its persistent helpers only for a Telnet result, and use the recommended system `ssh` command

@@ -10,6 +10,7 @@ from unittest import mock
 
 from aha_cli.cli import main
 from aha_cli.services.aha_http_client import web_forward
+from aha_cli.services.hardware_file_transfer import HardwareFileTransferResult
 from tests.helpers import isolated_cli_environment
 
 
@@ -197,6 +198,114 @@ class AhaWebForwardCliTests(unittest.TestCase):
             self.assertEqual(code, 2)
             self.assertNotIn("Queued send via Windows AHA", output)
             forward.assert_not_called()
+
+    def test_cmd_hardware_file_send_uses_forwarded_bridge_status_and_literal_text(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root, run_id = self._init_run(tmp)
+            source = Path(tmp) / "payload.bin"
+            source.write_bytes(b"payload")
+            requests: list[tuple[str, dict]] = []
+
+            def fake_forward(_root, method, path, *, query=None, payload=None, web_token=None, timeout=30.0):
+                self.assertEqual(method, "POST")
+                requests.append((path, payload or {}))
+                if path.endswith("/hardware-attach"):
+                    return {"ok": True, "bridge": {"status": "running"}}
+                return {"ok": True}
+
+            def fake_transfer(_root, _device, source_path, destination, *, send_text, **_kwargs):
+                send_text("D0:\\0000\n")
+                return HardwareFileTransferResult(
+                    source=str(source_path),
+                    destination=destination,
+                    size=7,
+                    sha256="239f59ed55e737c77147cf55ad0c1b030b6d7ee748a7426952f9b852d5a935e5",
+                    chunks=1,
+                    retries=0,
+                    elapsed_seconds=0.1,
+                )
+
+            with (
+                mock.patch("aha_cli.cli.should_forward_to_windows_web", return_value=True),
+                mock.patch("aha_cli.cli.web_forward", side_effect=fake_forward),
+                mock.patch("aha_cli.cli._task_hardware_write_allowed", return_value=True),
+                mock.patch("aha_cli.cli._bridge_target", return_value=("COM6", 115200)),
+                mock.patch("aha_cli.cli.send_file_via_shell", side_effect=fake_transfer),
+            ):
+                code, output = self.run_cli(
+                    "hardware-file-send",
+                    run_id,
+                    "task-001",
+                    str(source),
+                    "/tmp/payload.bin",
+                    "--quiet",
+                    "--json",
+                    aha_home=root,
+                )
+
+            self.assertEqual(code, 0)
+            self.assertTrue(json.loads(output)["ok"])
+            self.assertEqual(requests[0][0], "/api/task/task-001/hardware-attach")
+            self.assertEqual(requests[1][0], "/api/task/task-001/hardware-send")
+            self.assertEqual(requests[1][1]["data"], "D0:\\\\0000\n")
+
+    def test_cmd_hardware_file_send_supports_network_web_fallback(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root, run_id = self._init_run(tmp)
+            source = Path(tmp) / "payload.bin"
+            source.write_bytes(b"payload")
+            requests: list[tuple[str, dict]] = []
+
+            def fake_forward(_root, method, path, *, query=None, payload=None, web_token=None, timeout=30.0):
+                self.assertEqual(method, "POST")
+                requests.append((path, payload or {}))
+                if path.endswith("/hardware-attach"):
+                    return {"ok": True, "bridge": {"status": "running"}}
+                return {"ok": True}
+
+            def fake_transfer(_root, endpoint, source_path, destination, *, send_text, stream_path=None, **_kwargs):
+                self.assertEqual(endpoint, "192.168.1.20:23")
+                self.assertIsNotNone(stream_path)
+                send_text("D0:\\0000\n")
+                return HardwareFileTransferResult(
+                    source=str(source_path),
+                    destination=destination,
+                    size=7,
+                    sha256="239f59ed55e737c77147cf55ad0c1b030b6d7ee748a7426952f9b852d5a935e5",
+                    chunks=1,
+                    retries=0,
+                    elapsed_seconds=0.1,
+                )
+
+            with (
+                mock.patch("aha_cli.cli.should_forward_to_windows_web", return_value=True),
+                mock.patch("aha_cli.cli.web_forward", side_effect=fake_forward),
+                mock.patch("aha_cli.cli._task_hardware_write_allowed", return_value=True),
+                mock.patch("aha_cli.cli._network_bridge_target", return_value=("192.168.1.20", 23, "root", "secret")),
+                mock.patch("aha_cli.cli.send_file_via_shell", side_effect=fake_transfer),
+            ):
+                code, output = self.run_cli(
+                    "hardware-file-send",
+                    run_id,
+                    "task-001",
+                    str(source),
+                    "/tmp/payload.bin",
+                    "--channel",
+                    "network",
+                    "--quiet",
+                    "--json",
+                    aha_home=root,
+                )
+
+            self.assertEqual(code, 0)
+            result = json.loads(output)
+            self.assertEqual(result["channel"], "network")
+            self.assertEqual(result["endpoint"], "192.168.1.20:23")
+            self.assertEqual(requests[0][0], "/api/task/task-001/hardware-attach")
+            self.assertEqual(requests[0][1]["channel"], "network")
+            self.assertEqual(requests[1][0], "/api/task/task-001/hardware-send")
+            self.assertEqual(requests[1][1]["channel"], "network")
+            self.assertEqual(requests[1][1]["data"], "D0:\\\\0000\n")
 
 
 if __name__ == "__main__":

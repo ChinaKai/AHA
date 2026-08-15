@@ -61,6 +61,10 @@ claude
 # Hardware Debug
 ~/.venvs/aha/bin/python -m pip install pyserial
 
+# Send a file through an interactive Serial or Telnet Network shell
+aha hardware-file-send <run-id> <task-id> ./local.bin /tmp/remote.bin --channel serial
+aha hardware-file-send <run-id> <task-id> ./local.bin /tmp/remote.bin --channel network
+
 # 飞书助手
 ~/.venvs/aha/bin/python -m pip install 'lark-channel-sdk>=1.2,<2'
 ```
@@ -159,6 +163,10 @@ $AhaPython = "$env:USERPROFILE\.venvs\aha\Scripts\python.exe"
 
 # Hardware Debug
 & $AhaPython -m pip install pyserial
+
+# Send a file through an interactive Serial or Telnet Network shell
+aha hardware-file-send <run-id> <task-id> .\local.bin /tmp/remote.bin --channel serial
+aha hardware-file-send <run-id> <task-id> .\local.bin /tmp/remote.bin --channel network
 
 # 飞书助手
 & $AhaPython -m pip install "lark-channel-sdk>=1.2,<2"

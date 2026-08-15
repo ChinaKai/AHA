@@ -23,7 +23,19 @@ from aha_cli.services.terminal_ipc import BridgeTerminalIpc
 from aha_cli.store.io import append_jsonl, iter_jsonl_records_from, iter_jsonl_reverse
 from aha_cli.store.paths import aha_home_path
 
-NETWORK_CONTROL_COMMANDS = {"send", "send_raw", "resize", "arm", "disarm", "pause", "resume", "stop"}
+NETWORK_CONTROL_COMMANDS = {
+    "send",
+    "send_raw",
+    "resize",
+    "arm",
+    "disarm",
+    "pause",
+    "resume",
+    "stop",
+    "transfer_begin",
+    "transfer_send",
+    "transfer_end",
+}
 _STREAM_INLINE_LIMIT = 12000
 _TERMINAL_TASK_STATUSES = {"completed", "failed", "blocked"}
 
@@ -93,6 +105,10 @@ def network_terminal_socket_path(root: Path, host: str, port: int = 23) -> Path:
     return network_terminal_dir(root, host, port) / "terminal.sock"
 
 
+def network_transfer_lock_path(root: Path, host: str, port: int = 23) -> Path:
+    return network_terminal_dir(root, host, port) / "transfer.lock"
+
+
 def _write_credentials(root: Path, host: str, port: int, username: str, password: str) -> None:
     path = network_credentials_path(root, host, port)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -117,7 +133,7 @@ def network_status(root: Path, host: str, port: int = 23) -> dict:
     if not state or not pid_alive(state.get("pid")):
         return {"endpoint": endpoint, "host": host, "port": int(port), "status": "stopped", "alive": False, "paused": False}
     status = str(state.get("status") or "connecting")
-    return {
+    result = {
         "endpoint": endpoint,
         "host": host,
         "port": int(port),
@@ -127,7 +143,11 @@ def network_status(root: Path, host: str, port: int = 23) -> dict:
         "connected": status == "running",
         "pid": state.get("pid"),
         "rules": state.get("rules") or [],
+        "capabilities": state.get("capabilities") or [],
     }
+    if isinstance(state.get("transfer"), dict):
+        result["transfer"] = state["transfer"]
+    return result
 
 
 def append_network_control(root: Path, host: str, port: int, command: dict) -> dict:
@@ -325,6 +345,7 @@ class NetworkTerminalDaemon:
         self._login_buffer = ""
         self._username_sent = False
         self._password_sent = False
+        self._transfer: dict[str, str] | None = None
         self.engine = ArmedRuleEngine(clock=clock)
         self._terminal_ipc = BridgeTerminalIpc(
             network_terminal_socket_path(root, host, port),
@@ -364,7 +385,10 @@ class NetworkTerminalDaemon:
             "status": status,
             "updated_at": utc_now(),
             "rules": self.engine.snapshot(),
+            "capabilities": ["network-transfer-v1"],
         }
+        if self._transfer is not None:
+            state["transfer"] = dict(self._transfer)
         path.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
         self._terminal_ipc.broadcast(
             "status",
@@ -402,7 +426,7 @@ class NetworkTerminalDaemon:
                 pass
         self._socket = None
 
-    def _send(self, text: str, *, source: str, secret: bool = False) -> None:
+    def _send(self, text: str, *, source: str, secret: bool = False, audit_text: str | None = None) -> None:
         if not text or self._socket is None:
             return
         try:
@@ -413,7 +437,7 @@ class NetworkTerminalDaemon:
         if secret:
             self._log("system", "password submitted", source=source)
         else:
-            self._log("tx", text, source=source)
+            self._log("tx", audit_text if audit_text is not None else text, source=source)
 
     def _auto_login(self, text: str) -> None:
         self._login_buffer = (self._login_buffer + text)[-2048:]
@@ -434,9 +458,11 @@ class NetworkTerminalDaemon:
         for record, _line_end in records:
             cmd = str(record.get("cmd") or "").strip().lower()
             if cmd == "stop":
+                self._transfer = None
                 self._running = False
             elif cmd == "pause":
                 self._paused = True
+                self._transfer = None
                 self._disconnect()
                 self._log("system", "network terminal paused", source="control")
                 self._write_state("paused")
@@ -445,11 +471,48 @@ class NetworkTerminalDaemon:
                 self._write_state("connecting")
             elif self._paused:
                 self._log("system", f"ignored {cmd} while paused", source="control")
+            elif cmd == "transfer_begin":
+                transfer_id = str(record.get("transfer_id") or "").strip()
+                if not transfer_id:
+                    self._log("system", "file transfer rejected: transfer_id is required", source="file-transfer")
+                else:
+                    if self._transfer is not None and self._transfer.get("id") != transfer_id:
+                        self._log("system", "replacing stale file transfer lease", source="file-transfer")
+                    self._transfer = {
+                        "id": transfer_id,
+                        "source": str(record.get("source") or "file-transfer"),
+                        "started_at": str(record.get("ts") or utc_now()),
+                    }
+                    self._log("system", "file transfer lease acquired", source="file-transfer")
+                    self._write_state("running" if self._socket else "connecting")
+            elif cmd == "transfer_send":
+                transfer_id = str(record.get("transfer_id") or "").strip()
+                if self._transfer is None or self._transfer.get("id") != transfer_id:
+                    self._log("system", "file transfer data rejected: lease mismatch", source="file-transfer")
+                    continue
+                data = str(record.get("data") or "")
+                self._send(
+                    data,
+                    source="file-transfer",
+                    audit_text=f"[file transfer {len(data.encode('utf-8'))} wire bytes]",
+                )
+            elif cmd == "transfer_end":
+                transfer_id = str(record.get("transfer_id") or "").strip()
+                if self._transfer is not None and self._transfer.get("id") == transfer_id:
+                    self._transfer = None
+                    self._log("system", "file transfer lease released", source="file-transfer")
+                    self._write_state("running" if self._socket else "connecting")
             elif cmd in {"send", "send_raw"}:
+                if self._transfer is not None:
+                    self._log("system", f"ignored {cmd} during file transfer", source="control")
+                    continue
                 raw = record.get("data", record.get("send", ""))
                 data = str(raw or "") if cmd == "send_raw" else decode_escapes(raw)
                 self._send(data, source=str(record.get("source") or "interactive"))
             elif cmd == "resize":
+                if self._transfer is not None:
+                    self._log("system", "ignored resize during file transfer", source="control")
+                    continue
                 self._resize(record.get("cols"), record.get("rows"))
             elif cmd == "arm":
                 try:
@@ -481,12 +544,17 @@ class NetworkTerminalDaemon:
         for command in commands:
             command_type = str(command.get("type") or "").strip().lower()
             if command_type == "input" and not self._paused:
+                if self._transfer is not None:
+                    continue
                 self._send(str(command.get("data") or "")[:65536], source="web-xterm")
-            elif command_type == "resize":
+            elif command_type == "resize" and self._transfer is None:
                 self._resize(command.get("cols"), command.get("rows"))
 
     def _fire(self, rules: list[dict]) -> None:
         for rule in rules:
+            if self._transfer is not None:
+                self._log("system", f"rule {rule['id']} suppressed during file transfer", source=f"rule:{rule['id']}")
+                continue
             self._send(rule["send"], source=f"rule:{rule['id']}")
             self._log("system", f"rule {rule['id']} fired (fires={rule['fires']})", source=f"rule:{rule['id']}")
 
@@ -564,6 +632,7 @@ class NetworkTerminalDaemon:
             self._log("system", "network terminal stopped", source="network")
             self._disconnect()
             self._paused = False
+            self._transfer = None
             self._write_state("stopped")
             self._terminal_ipc.close()
 
@@ -610,7 +679,9 @@ __all__ = [
     "ensure_network_terminal",
     "network_status",
     "network_stream_page",
+    "network_stream_path",
     "network_terminal_socket_path",
+    "network_transfer_lock_path",
     "network_target_referenced_by_active_task",
     "task_network_target",
 ]

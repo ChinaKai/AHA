@@ -115,6 +115,46 @@ class DeviceBridgeDaemonTests(unittest.TestCase):
             self.assertTrue(any(r["data"] == "ps\r" and r.get("source") == "interactive" for r in tx))
             self.assertEqual(read_bridge_state(root, device)["status"], "stopped")
 
+    def test_file_transfer_lease_blocks_interactive_tx(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            master, device = self._pty()
+            daemon = DeviceBridgeDaemon(
+                root,
+                device,
+                115200,
+                poll_interval=0.005,
+                tx_byte_interval=0.0,
+                self_reap=False,
+            )
+            thread = threading.Thread(target=daemon.run, daemon=True)
+            thread.start()
+            try:
+                self.assertTrue(_wait_until(
+                    lambda: (read_bridge_state(root, device) or {}).get("status") == "running",
+                    timeout=2.0,
+                ))
+                append_bridge_control(root, device, {"cmd": "transfer_begin", "transfer_id": "transfer-1"})
+                append_bridge_control(root, device, {"cmd": "send_raw", "data": "blocked", "source": "interactive"})
+                append_bridge_control(
+                    root,
+                    device,
+                    {"cmd": "transfer_send", "transfer_id": "transfer-1", "data": "file-data"},
+                )
+                injected = _await_bytes(master, b"file-data", timeout=2.0)
+                self.assertIn(b"file-data", injected)
+                self.assertNotIn(b"blocked", injected)
+                self.assertEqual(read_bridge_state(root, device)["transfer"]["id"], "transfer-1")
+
+                append_bridge_control(root, device, {"cmd": "transfer_end", "transfer_id": "transfer-1"})
+                append_bridge_control(root, device, {"cmd": "send_raw", "data": "allowed", "source": "interactive"})
+                injected = _await_bytes(master, b"allowed", timeout=2.0)
+                self.assertIn(b"allowed", injected)
+            finally:
+                append_bridge_control(root, device, {"cmd": "stop"})
+                thread.join(timeout=2.0)
+                os.close(master)
+
     def test_archive_previous_stream_moves_old_device_data(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

@@ -35,6 +35,7 @@ COMMANDS = {
     "hardware-network-bridge",
     "hardware-attach",
     "hardware-send",
+    "hardware-file-send",
     "hardware-arm",
     "hardware-disarm",
     "hardware-rules",
@@ -478,6 +479,22 @@ def build_parser(handlers: Mapping[str, Callable[[argparse.Namespace], int]]) ->
     hardware_send_p.add_argument("--channel", default="uart")
     hardware_send_p.add_argument("--data", required=True, help="Text to send; backslash escapes like \\r are honored")
     hardware_send_p.set_defaults(func=handlers["hardware-send"])
+
+    hardware_file_send_p = sub.add_parser(
+        "hardware-file-send",
+        help="Send a local file through a serial shell without a preinstalled board transfer tool",
+    )
+    hardware_file_send_p.add_argument("run_id")
+    hardware_file_send_p.add_argument("task_id")
+    hardware_file_send_p.add_argument("path", help="Local source file")
+    hardware_file_send_p.add_argument("destination", help="Destination path on the board")
+    hardware_file_send_p.add_argument("--channel", default="serial", help="Hardware channel: serial or network")
+    hardware_file_send_p.add_argument("--chunk-size", type=int, default=256)
+    hardware_file_send_p.add_argument("--timeout", type=float, default=20.0)
+    hardware_file_send_p.add_argument("--retries", type=int, default=3)
+    hardware_file_send_p.add_argument("--quiet", action="store_true")
+    hardware_file_send_p.add_argument("--json", action="store_true")
+    hardware_file_send_p.set_defaults(func=handlers["hardware-file-send"])
 
     hardware_arm_p = sub.add_parser(
         "hardware-arm",

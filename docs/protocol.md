@@ -330,6 +330,32 @@ agent and manual interaction. In `both` mode the view can switch between Serial
 and Network. Future network transports can be added without changing the task's
 board IP.
 
+Serial and Telnet Network tasks with `read_write` access can also transfer a file
+through the board shell without a preinstalled `rz`, `scp`, `tftp`, Python, or
+compiler. In `both` mode, `--channel` explicitly selects the bridge:
+
+```bash
+aha hardware-file-send <run-id> <task-id> ./local.bin /tmp/remote.bin \
+  --channel serial
+aha hardware-file-send <run-id> <task-id> ./local.bin /tmp/remote.bin \
+  --channel network
+```
+
+The Network form uses the shared Telnet bridge; an SSH discovery result continues
+to use the system `ssh` command rather than the Telnet bridge. The sender bootstraps
+a cached `/tmp/.aha-recv-v1` shell receiver, sends numbered
+octal blocks with ACK and timeout retry, writes to a temporary destination, checks
+the final byte count and SHA-256, then atomically renames the file. A device-level
+transfer lease blocks terminal and armed-rule TX from interleaving with protocol
+data. The receiver requires an interactive shell, writable destination, `printf`,
+and `sha256sum` (directly or through BusyBox), but no dedicated transfer utility.
+The source path is resolved and opened by the backend process that runs the CLI,
+not by the Windows Web service that may own the Serial or Network bridge. A WSL
+backend should use an absolute WSL-visible path such as `/home/...` or `/mnt/c/...`;
+a Windows backend must use a Windows path or
+`\\wsl.localhost\\<distro>\\...` UNC path for WSL files. The destination argument
+is always a path on the board.
+
 The browser renders this shared stream with xterm.js and connects through
 `/ws/hardware-terminal?task_id=<id>&transport=serial|network`. Its realtime path
 is event-driven: `xterm -> WebSocket -> 0600 Unix socket -> machine bridge ->

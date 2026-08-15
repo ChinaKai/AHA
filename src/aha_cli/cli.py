@@ -9,6 +9,8 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+import time
+import uuid
 
 from aha_cli.backends.claude import claude_runner_command
 from aha_cli.backends.codex import codex_runner_command
@@ -33,8 +35,13 @@ from aha_cli.services.hardware_bridge import (
     append_bridge_control,
     bridge_status,
     device_stream_page,
+    device_transfer_lock_path,
     ensure_bridge,
     task_devices,
+)
+from aha_cli.services.hardware_file_transfer import (
+    HardwareFileTransferError,
+    send_file_via_shell,
 )
 from aha_cli.services.network_terminal import (
     NetworkTerminalDaemon,
@@ -42,6 +49,8 @@ from aha_cli.services.network_terminal import (
     ensure_network_terminal,
     network_status,
     network_stream_page,
+    network_stream_path,
+    network_transfer_lock_path,
     task_network_target,
 )
 from aha_cli.services.messages import format_event
@@ -122,6 +131,7 @@ from aha_cli.store.filesystem import (
     update_task_proxy_config,
     write_json,
 )
+from aha_cli.store.io import exclusive_sidecar_lock
 from aha_cli.services.knowledge_git import sync as knowledge_sync
 from aha_cli.store.knowledge import (
     approve_candidate as knowledge_approve_candidate,
@@ -1420,6 +1430,219 @@ def cmd_hardware_send(args: argparse.Namespace) -> int:
     return 0
 
 
+def _wait_serial_bridge(root: Path, device: str, *, timeout: float = 10.0) -> dict:
+    deadline = time.monotonic() + max(0.1, timeout)
+    state: dict = {}
+    while time.monotonic() < deadline:
+        state = bridge_status(root, device)
+        if state.get("status") == "running":
+            return state
+        if state.get("status") == "blocked" or state.get("error"):
+            break
+        time.sleep(0.05)
+    raise HardwareFileTransferError(str(state.get("error") or f"serial bridge is not ready: {device}"))
+
+
+def _forward_literal_hardware_text(root: Path, task_id: str, channel: str, text: str, timeout: float) -> None:
+    result = web_forward(
+        root,
+        "POST",
+        f"/api/task/{task_id}/hardware-send",
+        payload={"data": text.replace("\\", "\\\\"), "channel": channel},
+        timeout=max(15.0, timeout),
+    )
+    if not result.get("ok"):
+        raise HardwareFileTransferError(str(result.get("error") or "hardware send failed"))
+
+
+def _wait_forwarded_hardware_bridge(
+    root: Path,
+    task_id: str,
+    channel: str,
+    *,
+    timeout: float = 10.0,
+) -> dict:
+    deadline = time.monotonic() + max(0.1, timeout)
+    state: dict = {}
+    while time.monotonic() < deadline:
+        result = web_forward(
+            root,
+            "POST",
+            f"/api/task/{task_id}/hardware-attach",
+            payload={"channel": channel},
+            timeout=15.0,
+        )
+        if not result.get("ok"):
+            raise HardwareFileTransferError(str(result.get("error") or "hardware attach failed"))
+        state = result.get("bridge") if isinstance(result.get("bridge"), dict) else {}
+        if state.get("status") == "running":
+            return state
+        if state.get("status") == "blocked" or state.get("error"):
+            break
+        time.sleep(0.1)
+    raise HardwareFileTransferError(str(state.get("error") or "Windows hardware bridge is not ready"))
+
+
+def _wait_network_bridge(root: Path, host: str, port: int, *, timeout: float = 10.0) -> dict:
+    deadline = time.monotonic() + max(0.1, timeout)
+    state: dict = {}
+    while time.monotonic() < deadline:
+        state = network_status(root, host, port)
+        if state.get("status") == "running":
+            return state
+        if state.get("error"):
+            break
+        time.sleep(0.05)
+    raise HardwareFileTransferError(str(state.get("error") or f"network bridge is not ready: {host}:{port}"))
+
+
+def cmd_hardware_file_send(args: argparse.Namespace) -> int:
+    root = command_aha_home(args)
+    run_id = resolve_run_id(root, args.run_id)
+    require_plan(root, run_id)
+    if not _task_hardware_write_allowed(root, run_id, args.task_id):
+        print("Hardware debug permission is read-only.", file=sys.stderr)
+        return 2
+
+    network_channel = _network_channel(args.channel)
+    if network_channel:
+        target = _network_bridge_target(root, run_id, args.task_id)
+        if not target:
+            print(f"No network device IP configured on task {args.task_id}.", file=sys.stderr)
+            return 2
+        host, port, username, password = target
+        endpoint = f"{host}:{port}"
+        stream_path = network_stream_path(root, host, port)
+        transfer_lock_path = network_transfer_lock_path(root, host, port)
+        transfer_capability = "network-transfer-v1"
+    else:
+        device, baudrate = _bridge_target(root, run_id, args.task_id)
+        if not device:
+            print(f"No UART device configured on task {args.task_id}.", file=sys.stderr)
+            return 2
+        endpoint = device
+        stream_path = None
+        transfer_lock_path = device_transfer_lock_path(root, device)
+        transfer_capability = "serial-transfer-v1"
+
+    source = Path(host_native_path(str(args.path or ""), aha_home=str(root)))
+    forwarded = should_forward_to_windows_web(root)
+    try:
+        if forwarded:
+            state = _wait_forwarded_hardware_bridge(root, args.task_id, args.channel)
+        elif network_channel:
+            ensure_network_terminal(root, host, port, username=username, password=password)
+            state = _wait_network_bridge(root, host, port)
+        else:
+            ensure_bridge(root, device, baudrate)
+            state = _wait_serial_bridge(root, device)
+        native_transfer = transfer_capability in (state.get("capabilities") or [])
+        transfer_id = uuid.uuid4().hex
+        last_percent = -1
+
+        def report_progress(done: int, total: int) -> None:
+            nonlocal last_percent
+            percent = 100 if total == 0 else int((done * 100) / total)
+            if args.quiet or percent == last_percent:
+                return
+            last_percent = percent
+            print(f"\rSending {done}/{total} bytes ({percent}%)", end="", file=sys.stderr, flush=True)
+
+        if native_transfer:
+            def send_text(text: str) -> None:
+                command = {
+                    "cmd": "transfer_send",
+                    "transfer_id": transfer_id,
+                    "data": text,
+                    "source": "hardware-file-send",
+                }
+                if network_channel:
+                    append_network_control(root, host, port, command)
+                else:
+                    append_bridge_control(root, device, command)
+        elif forwarded:
+            def send_text(text: str) -> None:
+                _forward_literal_hardware_text(root, args.task_id, args.channel, text, args.timeout)
+        elif network_channel:
+            def send_text(text: str) -> None:
+                append_network_control(root, host, port, {"cmd": "send_raw", "data": text, "source": "hardware-file-send"})
+        else:
+            def send_text(text: str) -> None:
+                append_bridge_control(root, device, {"cmd": "send_raw", "data": text, "source": "hardware-file-send"})
+
+        with exclusive_sidecar_lock(transfer_lock_path, timeout=5.0):
+            if native_transfer:
+                begin = {"cmd": "transfer_begin", "transfer_id": transfer_id, "source": "hardware-file-send"}
+                if network_channel:
+                    append_network_control(root, host, port, begin)
+                else:
+                    append_bridge_control(root, device, begin)
+            try:
+                transfer = send_file_via_shell(
+                    root,
+                    endpoint,
+                    source,
+                    args.destination,
+                    send_text=send_text,
+                    stream_path=stream_path,
+                    chunk_size=args.chunk_size,
+                    timeout=args.timeout,
+                    retries=args.retries,
+                    progress=report_progress,
+                )
+            finally:
+                if native_transfer:
+                    end = {"cmd": "transfer_end", "transfer_id": transfer_id}
+                    if network_channel:
+                        append_network_control(root, host, port, end)
+                    else:
+                        append_bridge_control(root, device, end)
+        if not args.quiet:
+            print(file=sys.stderr)
+        append_hardware_io_record(
+            root,
+            run_id,
+            args.task_id,
+            {
+                "channel": "network" if network_channel else "serial",
+                "endpoint": endpoint,
+                "direction": "system",
+                "source": "hardware-file-send",
+                "data": (
+                    f"sent {transfer.size} bytes to {transfer.destination}; "
+                    f"sha256={transfer.sha256}; chunks={transfer.chunks}; retries={transfer.retries}"
+                ),
+            },
+        )
+        payload = {
+            "ok": True,
+            "channel": "network" if network_channel else "serial",
+            "endpoint": endpoint,
+            "device": endpoint,
+            "source": transfer.source,
+            "destination": transfer.destination,
+            "size": transfer.size,
+            "sha256": transfer.sha256,
+            "chunks": transfer.chunks,
+            "retries": transfer.retries,
+            "elapsed_seconds": round(transfer.elapsed_seconds, 3),
+            "receiver": "shell-v1",
+        }
+        if args.json:
+            print(json.dumps(payload, ensure_ascii=False))
+        else:
+            print(
+                f"Sent {transfer.size} bytes to {endpoint}:{transfer.destination} "
+                f"(sha256={transfer.sha256}, {transfer.elapsed_seconds:.1f}s)."
+            )
+        return 0
+    except (AhaHttpClientError, HardwareFileTransferError, OSError, TimeoutError, ValueError) as exc:
+        if not args.quiet:
+            print(file=sys.stderr)
+        print(f"hardware-file-send failed: {exc}", file=sys.stderr)
+        return 2
+
+
 def cmd_hardware_arm(args: argparse.Namespace) -> int:
     root = command_aha_home(args)
     run_id = resolve_run_id(root, args.run_id)
@@ -2165,6 +2388,7 @@ def command_handlers() -> dict[str, object]:
         "hardware-network-bridge": cmd_hardware_network_bridge,
         "hardware-attach": cmd_hardware_attach,
         "hardware-send": cmd_hardware_send,
+        "hardware-file-send": cmd_hardware_file_send,
         "hardware-arm": cmd_hardware_arm,
         "hardware-disarm": cmd_hardware_disarm,
         "hardware-rules": cmd_hardware_rules,
