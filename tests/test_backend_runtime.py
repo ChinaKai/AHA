@@ -22,6 +22,7 @@ from aha_cli.services.backend_runtime import (
     _provider_id_for_model,
     _resolve_wsl_target,
     _state_wsl_context,
+    _wsl_backend_process_env,
     _wsl_session_paths,
     backend_status,
     detect_runtime_context_compaction,
@@ -96,6 +97,146 @@ class BackendRuntimeTests(unittest.TestCase):
 
         self.assertNotIn("wsl.exe", command)
         self.assertIn("codex-chat", command)
+
+    def test_wsl_backend_process_env_scrubs_windows_environment(self) -> None:
+        with mock.patch.dict(
+            os.environ,
+            {
+                "PATH": r"C:\Users\toope\AppData\Local\AHA;C:\Windows\System32",
+                "OPENAI_API_KEY": "secret",
+                "PYTHONPATH": "src",
+                "SystemRoot": r"C:\Windows",
+            },
+            clear=True,
+        ):
+            env = _wsl_backend_process_env(
+                {
+                    "AHA_ROOT": r"C:\Users\toope\.aha",
+                    "AHA_WSL_DISTRO": "Ubuntu-24.04",
+                    "AHA_MODEL": "",
+                    "WSLENV": "AHA_WSL_DISTRO:AHA_WSL_AHA_HOME",
+                }
+            )
+
+        # Only the Windows basics plus the WSLENV-forwarded AHA vars cross the
+        # hop; the service PATH (translated AHA install dir first) and any
+        # provider secrets must stay behind on the Windows side.
+        self.assertEqual(set(env), {"SystemRoot", "AHA_ROOT", "AHA_WSL_DISTRO", "WSLENV"})
+        self.assertEqual(env["SystemRoot"], r"C:\Windows")
+
+    def test_wsl_backend_process_env_defaults_system_root(self) -> None:
+        with mock.patch.dict(os.environ, {}, clear=True):
+            env = _wsl_backend_process_env({"AHA_WSL_DISTRO": "Ubuntu-24.04"})
+
+        self.assertEqual(env["SystemRoot"], r"C:\Windows")
+        self.assertEqual(env["AHA_WSL_DISTRO"], "Ubuntu-24.04")
+
+    def test_wsl_backend_process_env_passes_task_proxy(self) -> None:
+        with mock.patch.dict(os.environ, {}, clear=True):
+            env = _wsl_backend_process_env(
+                {"AHA_WSL_DISTRO": "Ubuntu-24.04"},
+                {
+                    "HTTP_PROXY": "http://proxy.test:7890",
+                    "no_proxy": "localhost,127.0.0.1",
+                    "UNRELATED_VAR": "must-not-cross",
+                },
+            )
+
+        # Proxy config is the one non-AHA payload allowed across the hop, so
+        # WSL backends honor the same task egress settings; unknown vars stay
+        # behind with the rest of the service environment.
+        self.assertEqual(env["HTTP_PROXY"], "http://proxy.test:7890")
+        self.assertEqual(env["no_proxy"], "localhost,127.0.0.1")
+        self.assertNotIn("UNRELATED_VAR", env)
+
+    def test_start_backend_wsl_launch_uses_scrubbed_env(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "WSL env scrub", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+
+            class FakeProcess:
+                pid = 4242
+
+            with (
+                mock.patch.dict(
+                    os.environ,
+                    {
+                        "PATH": r"C:\Users\toope\AppData\Local\AHA;C:\Windows\System32",
+                        "OPENAI_API_KEY": "secret",
+                        "SystemRoot": r"C:\Windows",
+                    },
+                    clear=True,
+                ),
+                mock.patch(
+                    "aha_cli.services.backend_runtime._resolve_wsl_target",
+                    return_value={
+                        "distro": "Ubuntu-24.04",
+                        "aha_home": "/mnt/c/Users/toope/.aha",
+                        "aha_bin": "/mnt/c/Users/toope/AppData/Local/AHA/aha",
+                        "backend_bin": "/home/kaikai/.nvm/versions/node/v24.18.0/bin/codex",
+                        "python": "/usr/bin/python3",
+                    },
+                ),
+                mock.patch("aha_cli.services.backend_runtime.subprocess.Popen", return_value=FakeProcess()) as popen,
+                mock.patch("aha_cli.services.backend_runtime.pid_is_running", side_effect=lambda pid: bool(pid)),
+            ):
+                start_backend(root / ".aha", run_id, "main", task_id="task-001")
+
+        command = popen.call_args.args[0]
+        self.assertEqual(command[0], "wsl.exe")
+        env = popen.call_args.kwargs["env"]
+        self.assertNotIn("PATH", env)
+        self.assertNotIn("OPENAI_API_KEY", env)
+        self.assertEqual(env["SystemRoot"], r"C:\Windows")
+        self.assertEqual(env["AHA_WSL_DISTRO"], "Ubuntu-24.04")
+        self.assertEqual(env["AHA_WSL_AHA_HOME"], "/mnt/c/Users/toope/.aha")
+        self.assertIn("AHA_WSL_DISTRO", env["WSLENV"])
+        self.assertIn("AHA_WSL_AHA_HOME", env["WSLENV"])
+
+    def test_start_backend_wsl_launch_forwards_task_proxy_via_wslenv(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "WSL proxy forward", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+
+            class FakeProcess:
+                pid = 4242
+
+            with (
+                mock.patch.dict(os.environ, {"SystemRoot": r"C:\Windows"}, clear=True),
+                mock.patch(
+                    "aha_cli.services.backend_runtime._resolve_wsl_target",
+                    return_value={
+                        "distro": "Ubuntu-24.04",
+                        "aha_home": "/mnt/c/Users/toope/.aha",
+                        "aha_bin": "/mnt/c/Users/toope/AppData/Local/AHA/aha",
+                        "backend_bin": "/home/kaikai/.nvm/versions/node/v24.18.0/bin/codex",
+                        "python": "/usr/bin/python3",
+                    },
+                ),
+                mock.patch(
+                    "aha_cli.services.backend_runtime._backend_proxy_env",
+                    return_value={"HTTP_PROXY": "http://proxy.test:7890", "NO_PROXY": "localhost"},
+                ),
+                mock.patch("aha_cli.services.backend_runtime.subprocess.Popen", return_value=FakeProcess()) as popen,
+                mock.patch("aha_cli.services.backend_runtime.pid_is_running", side_effect=lambda pid: bool(pid)),
+            ):
+                start_backend(root / ".aha", run_id, "main", task_id="task-001")
+
+        env = popen.call_args.kwargs["env"]
+        # Proxy vars ride the scrubbed env AND get declared in WSLENV, or
+        # wsl.exe would drop them at the hop.
+        self.assertEqual(env["HTTP_PROXY"], "http://proxy.test:7890")
+        self.assertEqual(env["NO_PROXY"], "localhost")
+        for part in ("AHA_WSL_DISTRO", "HTTP_PROXY", "NO_PROXY"):
+            self.assertIn(part, env["WSLENV"].split(":"))
 
     def test_resolve_wsl_target_requires_wsl_workspace(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

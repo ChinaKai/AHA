@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import os
 from pathlib import Path
 import threading
 import tempfile
@@ -8,7 +9,7 @@ import unittest
 from unittest import mock
 
 from aha_cli.cli import append_message, main, task_snapshot
-from aha_cli.services.chat import chat_offset_path
+from aha_cli.services.chat import _ensure_runtime_context_env, _refresh_backend_model_env, chat_offset_path
 from aha_cli.store.config import load_config
 from aha_cli.store.filesystem import inbox_path, iter_jsonl_from, read_json, run_dir, update_task_supervision_config
 from aha_cli.store.io import write_json
@@ -210,3 +211,66 @@ class TaskRuntimeTests(unittest.TestCase):
 
         self.assertIsNone(autostart)
         backend_status.assert_not_called()
+
+    def test_ensure_runtime_context_env_rebuilds_missing_context(self) -> None:
+        # WSL watchers lose the service env at the wsl.exe hop; the chat
+        # worker must rebuild the runtime context from its argv so CLI
+        # helpers (aha send / aha commit / runs --current-run) keep working.
+        with mock.patch.dict(os.environ, {}, clear=True):
+            _ensure_runtime_context_env(Path("/mnt/c/Users/x/.aha"), "run-1", "sub-001", "codex", "task-001")
+
+            self.assertEqual(os.environ["AHA_HOME"], "/mnt/c/Users/x/.aha")
+            self.assertEqual(os.environ["AHA_ROOT"], "/mnt/c/Users/x/.aha")
+            self.assertEqual(os.environ["AHA_RUN_ID"], "run-1")
+            self.assertEqual(os.environ["AHA_AGENT_ID"], "sub-001")
+            self.assertEqual(os.environ["AHA_TASK_ID"], "task-001")
+            self.assertEqual(os.environ["AHA_BACKEND"], "codex")
+            # Mirrors the Windows-side locale hardening: the onebin's pipes and
+            # file I/O must stay UTF-8 even on a POSIX-locale distro.
+            self.assertEqual(os.environ["PYTHONUTF8"], "1")
+
+    def test_ensure_runtime_context_env_keeps_host_values_and_skips_empty_task(self) -> None:
+        with mock.patch.dict(os.environ, {"AHA_RUN_ID": "host-run"}, clear=True):
+            _ensure_runtime_context_env(Path("/aha"), "run-1", "main", "claude", None)
+
+            # Windows-hosted watchers already carry the service values; the
+            # rebuild must stay idempotent and never overwrite them.
+            self.assertEqual(os.environ["AHA_RUN_ID"], "host-run")
+            self.assertEqual(os.environ["AHA_BACKEND"], "claude")
+            self.assertNotIn("AHA_TASK_ID", os.environ)
+
+    def test_refresh_backend_model_env_tracks_generated_by(self) -> None:
+        with mock.patch.dict(os.environ, {}, clear=True):
+            _refresh_backend_model_env("claude", "glm-5.3[1m]")
+
+            self.assertEqual(os.environ["AHA_MODEL"], "glm-5.3[1m]")
+            self.assertEqual(os.environ["AHA_GENERATED_BY"], "AHA Claude glm-5.3[1m]")
+
+    def test_chat_worker_exports_runtime_context_for_cli_helpers(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Runtime context env", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                append_message(root, run_id, "main", "你好", sender="browser", task_id="task-001", role="main")
+
+                with (
+                    mock.patch.dict(os.environ, {"PATH": os.environ.get("PATH", ""), "HOME": os.environ.get("HOME", "")}, clear=True),
+                    mock.patch("aha_cli.services.chat.run_codex_exec", return_value=(0, "回复", None)) as run_exec,
+                ):
+                    code, _output = self.run_cli("codex-chat", run_id, "main", "--task-id", "task-001", "--from-start", "--once")
+                    self.assertEqual(code, 0)
+                    # The watcher process env carries the context the spawned
+                    # backend CLI (and its Bash-tool children) inherit.
+                    self.assertEqual(os.environ["AHA_RUN_ID"], run_id)
+                    self.assertEqual(os.environ["AHA_AGENT_ID"], "main")
+                    self.assertEqual(os.environ["AHA_TASK_ID"], "task-001")
+                    self.assertEqual(os.environ["AHA_BACKEND"], "codex")
+                    self.assertEqual(os.environ["AHA_ROOT"], str(root / ".aha"))
+                    # Pins home discovery so agent-shell aha calls never fall
+                    # back to a cwd-walk .aha inside the workspace tree.
+                    self.assertEqual(os.environ["AHA_HOME"], str(root / ".aha"))
+                    self.assertTrue(os.environ["AHA_GENERATED_BY"].startswith("AHA Codex"))
+            run_exec.assert_called_once()

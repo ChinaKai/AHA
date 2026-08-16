@@ -27,7 +27,7 @@ from aha_cli.services.backend_paths import add_user_backend_paths
 from aha_cli.services.commit_policy import generated_by_for_backend_model
 from aha_cli.services.context_pressure import context_pressure
 from aha_cli.services.prompt_templates import render_prompt_template
-from aha_cli.services.proxy import apply_proxy_environment, proxy_env_for_agent
+from aha_cli.services.proxy import PROXY_ENV_KEYS, apply_proxy_environment, proxy_env_for_agent
 from aha_cli.store.filesystem import (
     append_event,
     event_path,
@@ -1096,6 +1096,59 @@ def _backend_process_env(
     return env
 
 
+# Windows basics wsl.exe may rely on. Everything else from the service
+# environment (PATH, provider keys, proxies) must stay on the Windows side.
+_WSL_LAUNCH_ENV_PASS_THROUGH = ("SystemDrive", "WINDIR", "COMSPEC", "TEMP", "TMP")
+
+_WSL_PROXY_ENV_KEY_SET = frozenset(key.upper() for key in PROXY_ENV_KEYS)
+
+
+def _windows_root_fallback() -> str:
+    """Derive the Windows directory without assuming the install drive.
+
+    Real Windows processes always carry SystemRoot (D:\\Windows stays
+    D:\\Windows), so this only matters for scrubbed/test environments.
+    """
+    system_root = os.environ.get("SystemRoot")
+    if system_root:
+        return system_root
+    system_drive = os.environ.get("SystemDrive") or r"C:"
+    return system_drive.rstrip("\\") + "\\Windows"
+
+
+def _wsl_backend_process_env(
+    aha_env: dict[str, str],
+    proxy_env: dict[str, str] | None = None,
+) -> dict[str, str]:
+    """Minimal environment for the wsl.exe backend hop.
+
+    wsl.exe flows the calling process's PATH into the distro PATH *ahead* of
+    the Linux default directories, so handing it a full ``os.environ`` copy
+    puts translated Windows tool dirs (e.g. the AHA install dir with its
+    CRLF python3 shim) in front of /usr/bin — every ``python3``/``node``
+    lookup inside the backend then resolves to a Windows shim and fails.
+    Pass only the Windows basics plus the WSLENV-forwarded AHA variables;
+    with no PATH of its own, the distro keeps its clean default PATH (the
+    registry-appended Windows tail from ``appendWindowsPath`` lands after
+    the Linux dirs and cannot hijack lookups). Task/agent proxy vars are the
+    one non-AHA payload allowed through, so WSL backends honor the same
+    egress config as Windows ones (the caller must also declare them in
+    WSLENV or wsl.exe will not forward them).
+    """
+    env = {"SystemRoot": _windows_root_fallback()}
+    for key in _WSL_LAUNCH_ENV_PASS_THROUGH:
+        value = os.environ.get(key)
+        if value:
+            env[key] = value
+    for key, value in aha_env.items():
+        if value and (key == "WSLENV" or key.startswith("AHA_")):
+            env[key] = value
+    for key, value in (proxy_env or {}).items():
+        if value and key.upper() in _WSL_PROXY_ENV_KEY_SET:
+            env[key] = value
+    return env
+
+
 def _configured_reasoning_effort(cfg: dict, backend: str) -> str | None:
     section = cfg.get(backend) if isinstance(cfg.get(backend), dict) else {}
     return normalize_reasoning_effort(section.get("reasoning_effort"), backend)
@@ -1223,16 +1276,31 @@ def start_backend(
         if wsl_target:
             aha_env["AHA_WSL_DISTRO"] = str(wsl_target.get("distro") or "").strip()
             aha_env["AHA_WSL_AHA_HOME"] = str(wsl_target.get("aha_home") or "").strip()
-            # WSLENV declares which variables pass through wsl.exe into the distro.
-            existing_wslenv = os.environ.get("WSLENV", "")
-            aha_env["WSLENV"] = ":".join(
-                part for part in ("AHA_WSL_DISTRO", "AHA_WSL_AHA_HOME", existing_wslenv) if part
+            # WSLENV declares which variables pass through wsl.exe into the
+            # distro. Task/agent proxy vars must be declared too, or the WSL
+            # watcher and its backend CLI children lose the egress config.
+            wslenv_parts = ["AHA_WSL_DISTRO", "AHA_WSL_AHA_HOME"]
+            wslenv_parts.extend(
+                key for key in (proxy_env or {}) if key.upper() in _WSL_PROXY_ENV_KEY_SET
             )
+            existing_wslenv = os.environ.get("WSLENV", "")
+            wslenv_parts.append(existing_wslenv)
+            aha_env["WSLENV"] = ":".join(part for part in wslenv_parts if part)
         try:
+            # WSL launches get a scrubbed environment: wsl.exe places the
+            # caller's translated PATH ahead of the distro defaults, so the
+            # full service env (AHA install dir, Windows tool dirs) would
+            # hijack PATH lookups inside the backend. Everything the distro
+            # needs crosses via WSLENV-declared AHA_* variables instead.
+            launch_env = (
+                _wsl_backend_process_env(aha_env, proxy_env)
+                if wsl_target
+                else _backend_process_env(proxy_env, claude_config, codex_config, aha_env)
+            )
             process = subprocess.Popen(
                 command,
                 cwd=root,
-                env=_backend_process_env(proxy_env, claude_config, codex_config, aha_env),
+                env=launch_env,
                 stdout=log_file,
                 stderr=subprocess.STDOUT,
                 stdin=subprocess.DEVNULL,

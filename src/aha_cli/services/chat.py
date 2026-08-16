@@ -760,6 +760,45 @@ def claude_chat(root: Path, run_id: str, args) -> int:
     return agent_chat(root, run_id, args, backend_name="claude")
 
 
+def _ensure_runtime_context_env(
+    root: Path,
+    run_id: str,
+    agent_id: str,
+    backend_name: str,
+    task_id: str | None,
+) -> None:
+    """Export the managed-backend runtime context into this process's env.
+
+    Windows-hosted backends inherit ``AHA_ROOT``/``AHA_RUN_ID``/``AHA_AGENT_ID``/
+    ``AHA_TASK_ID``/``AHA_BACKEND`` from ``start_backend``; WSL-hosted watchers
+    lose them at the wsl.exe hop because WSLENV only forwards the ``AHA_WSL_*``
+    pair. CLI defaults depend on them — ``aha send`` task scoping, ``aha commit``
+    attribution, and the ``--current-run`` guards in runs cleanup/retention —
+    so rebuild the identity vars from the watcher argv (set-if-missing keeps
+    the Windows hop idempotent). Model vars are refreshed per turn instead,
+    next to the resolved-model bookkeeping. PYTHONUTF8 mirrors the Windows
+    side's locale hardening (GBK hosts / POSIX-locale distros) so the onebin's
+    pipes and file I/O stay UTF-8 for the Chinese chat payloads. AHA_HOME pins
+    home discovery for agent-shell CLI calls: without it `find_aha_home`
+    walks up from the workspace cwd and can latch onto an unrelated `.aha`
+    directory inside the repo tree instead of the run's real home.
+    """
+    os.environ.setdefault("AHA_HOME", str(root))
+    os.environ.setdefault("AHA_ROOT", str(root))
+    os.environ.setdefault("AHA_RUN_ID", str(run_id))
+    os.environ.setdefault("AHA_AGENT_ID", str(agent_id))
+    if task_id:
+        os.environ.setdefault("AHA_TASK_ID", str(task_id))
+    os.environ.setdefault("AHA_BACKEND", str(backend_name))
+    os.environ.setdefault("PYTHONUTF8", "1")
+
+
+def _refresh_backend_model_env(backend_name: str, model: str | None) -> None:
+    """Keep AHA_MODEL/AHA_GENERATED_BY aligned with the turn's resolved model."""
+    os.environ["AHA_MODEL"] = str(model or "")
+    os.environ["AHA_GENERATED_BY"] = generated_by_for_backend_model(backend_name, model)
+
+
 def _compact_unresumable_session(
     root: Path,
     run_id: str,
@@ -824,6 +863,10 @@ def agent_chat(root: Path, run_id: str, args, *, backend_name: str) -> int:
     require_plan(root, run_id)
     cfg = load_config(root)
     worker_task_id = str(getattr(args, "task_id", "") or "") or None
+    # Rebuild the managed-backend runtime context from argv so CLI helpers
+    # spawned by this watcher (aha send / aha commit / runs guards) behave
+    # identically on both host flavors; the wsl.exe hop drops the service env.
+    _ensure_runtime_context_env(root, run_id, args.target, backend_name, worker_task_id)
     inbox = inbox_path(root, run_id, args.target, worker_task_id)
     run = run_dir(root, run_id)
     events_file = event_path(root, run_id)
@@ -1072,6 +1115,10 @@ def agent_chat(root: Path, run_id: str, args, *, backend_name: str) -> int:
                 session["requested_model"] = requested_model
                 session["resolved_model"] = resolved_model
                 session["model"] = resolved_model or command_model or model
+                # AHA_MODEL/AHA_GENERATED_BY follow the live turn resolution so
+                # `aha commit` inside the backend attributes to the model that
+                # actually served this turn (also covers mid-session switches).
+                _refresh_backend_model_env(backend_name, session["model"])
                 sandbox = codex_sandbox("research", requested_sandbox) if backend_name == "codex" else requested_sandbox
                 workspace_raw = str(task.get("workspace_path") or root)
                 wsl_distro = os.environ.get("AHA_WSL_DISTRO") or ""
