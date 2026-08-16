@@ -36,6 +36,7 @@ from aha_cli.backends.codex import (
 )
 from aha_cli.backends.registry import CODEX_DEFAULT_MODEL
 from aha_cli.cli import append_message, main
+from aha_cli.services.backend_paths import add_user_backend_paths
 from aha_cli.services.chat import chat_offset_path, chat_prompt, save_chat_offset
 from aha_cli.services.session_compact import compact_reset_backend_session
 from aha_cli.store.filesystem import append_event, append_jsonl, inbox_path, iter_jsonl_from, read_json, run_dir
@@ -698,6 +699,44 @@ class BackendRunnerSessionTests(unittest.TestCase):
             parts = popen.call_args.kwargs["env"]["PATH"].split(os.pathsep)
             self.assertLess(parts.index(str(local_bin)), parts.index("/usr/bin"))
             self.assertLess(parts.index(str(nvm_bin)), parts.index("/usr/bin"))
+
+    def test_user_backend_paths_skip_windows_mount_onebin_dir(self) -> None:
+        # A WSL watcher runs the Windows onebin from /mnt/<drive>/...; that
+        # directory's python3 shim targets Windows pythonw (CRLF, unusable in
+        # Linux) and must never shadow /usr/bin/python3 in backend child
+        # shells. `aha` stays resolvable via the user bin dirs.
+        with tempfile.TemporaryDirectory() as tmp:
+            fake_home = Path(tmp) / "home"
+            local_bin = fake_home / ".local" / "bin"
+            local_bin.mkdir(parents=True)
+            env = {"PATH": "/usr/bin"}
+            with mock.patch(
+                "aha_cli.services.backend_paths._running_zipapp",
+                return_value=Path("/mnt/c/Users/toope/AppData/Local/AHA/aha"),
+            ):
+                add_user_backend_paths(env, home=fake_home)
+
+        parts = env["PATH"].split(os.pathsep)
+        self.assertNotIn("/mnt/c/Users/toope/AppData/Local/AHA", parts)
+        self.assertLess(parts.index(str(local_bin)), parts.index("/usr/bin"))
+
+    def test_user_backend_paths_keep_native_onebin_dir(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            fake_home = Path(tmp) / "home"
+            local_bin = fake_home / ".local" / "bin"
+            local_bin.mkdir(parents=True)
+            onebin_dir = Path(tmp) / "opt" / "aha"
+            onebin_dir.mkdir(parents=True)
+            env = {"PATH": "/usr/bin"}
+            with mock.patch(
+                "aha_cli.services.backend_paths._running_zipapp",
+                return_value=onebin_dir / "aha",
+            ):
+                add_user_backend_paths(env, home=fake_home)
+
+        parts = env["PATH"].split(os.pathsep)
+        self.assertLess(parts.index(str(onebin_dir)), parts.index(str(local_bin)))
+        self.assertLess(parts.index(str(local_bin)), parts.index("/usr/bin"))
 
     def test_codex_command_events_are_recorded(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -76,7 +76,12 @@ def add_user_backend_paths(env: dict[str, str], *, home: Path | None = None) -> 
     # system interpreter dir.
     if zipapp_path is not None:
         aha_dir = _aha_cli_dir(zipapp_path)
-        if aha_dir is not None:
+        # A WSL-hosted watcher runs the Windows onebin from /mnt/<drive>/...;
+        # that directory's ``python3`` shim targets Windows pythonw (CRLF,
+        # unusable here) and would shadow /usr/bin/python3 for every backend
+        # child shell. Children still resolve ``aha`` through the user bin
+        # dirs merged below (same principle as the shim guard above).
+        if aha_dir is not None and not str(aha_dir).startswith("/mnt/"):
             candidates.insert(0, aha_dir)
 
     existing = [item for item in env.get("PATH", "").split(os.pathsep) if item]
