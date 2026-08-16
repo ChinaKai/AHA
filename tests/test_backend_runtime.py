@@ -27,6 +27,7 @@ from aha_cli.services.backend_runtime import (
     backend_status,
     detect_runtime_context_compaction,
     start_backend,
+    stop_all_backends,
     stop_task_backends,
 )
 from aha_cli.store.filesystem import add_agent, append_event, read_json, session_path, update_agent_config, write_json
@@ -1440,6 +1441,47 @@ class BackendRuntimeTests(unittest.TestCase):
         self.assertEqual(stopped, [{"target": "sub-001", "stopped": True}])
         stop_backend.assert_called_once()
         self.assertEqual(stop_backend.call_args.args[:3], (root, run_id, "sub-001"))
+
+    def test_stop_all_backends_stops_live_workers_across_runs(self) -> None:
+        root = Path("/tmp/aha-home")
+        plans = {
+            "run-1": {"tasks": [{"id": "task-001", "agents": [{"id": "main"}, {"id": "sub-001"}]}]},
+            "run-2": {"tasks": [{"id": "task-004", "agents": [{"id": "main"}]}]},
+        }
+
+        def fake_state(_root: Path, run_id: str, target: str = "main", task_id: str | None = None) -> dict:
+            status = "stopped" if (run_id, task_id, target) == ("run-1", "task-001", "sub-001") else "running"
+            return {"status": status, "pid": 1234}
+
+        def fake_state_path(_root: Path, _run_id: str, _target: str = "main", task_id: str | None = None):
+            path = mock.Mock()
+            path.exists.return_value = task_id is not None
+            return path
+
+        with (
+            mock.patch("aha_cli.store.runs.list_run_summaries", return_value=[{"id": "run-1"}, {"id": "run-2"}]),
+            mock.patch("aha_cli.services.backend_runtime.require_plan", side_effect=lambda _root, run_id: plans[run_id]),
+            mock.patch("aha_cli.services.backend_runtime.backend_state_path", side_effect=fake_state_path),
+            mock.patch("aha_cli.services.backend_runtime._read_state", side_effect=fake_state),
+            mock.patch(
+                "aha_cli.services.backend_runtime.stop_backend",
+                side_effect=lambda _root, run_id, target, **kwargs: {
+                    "run_id": run_id,
+                    "task_id": kwargs.get("task_id"),
+                    "target": target,
+                    "status": "stopped",
+                },
+            ) as stop_backend,
+        ):
+            result = stop_all_backends(root, timeout=1.5)
+
+        self.assertEqual(result["checked"], 3)
+        self.assertEqual(len(result["stopped"]), 2)
+        self.assertEqual(result["errors"], [])
+        self.assertEqual(
+            [(call.args[1], call.args[2], call.kwargs["task_id"], call.kwargs["timeout"]) for call in stop_backend.call_args_list],
+            [("run-1", "main", "task-001", 1.5), ("run-2", "main", "task-004", 1.5)],
+        )
 
     def test_mark_backend_stopped_accepts_wsl_worker_self_stop(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

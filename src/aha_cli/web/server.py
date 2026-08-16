@@ -7,6 +7,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
 
 from aha_cli.services.agent_watchdog import scan_all_runs
+from aha_cli.services.backend_runtime import stop_all_backends
 from aha_cli.services.hardware_bridge import stop_all_hardware_bridges
 from aha_cli.services.run_archive import RunArchiveError
 from aha_cli.services.run_retention_policy import (
@@ -47,7 +48,11 @@ from aha_cli.web.managed_process_routes import managed_process_route_response
 from aha_cli.web.run_routes import handle_run_workspace_route
 from aha_cli.web.session_debug import backend_session_jsonl_info
 from aha_cli.web.skill_routes import skill_route_response
-from aha_cli.web.status import recover_stale_running_agent, recover_stale_running_agents, web_status_snapshot
+from aha_cli.web.status import (
+    recover_stale_running_agent,
+    recover_stale_running_agents_all_runs,
+    web_status_snapshot,
+)
 from aha_cli.web.system_routes import (
     WEB_RESTART_EXIT_CODE,
     consume_web_restart_requested,
@@ -339,8 +344,7 @@ async def retention_policy_report_loop(root: Path, current_run_id: str) -> None:
 
 
 async def run_ui_server(root: Path, run_id: str, host: str, port: int, _poll_interval_ms: int, auth_token: str = "") -> None:
-    if run_id:
-        recover_stale_running_agents(root, run_id)
+    recover_stale_running_agents_all_runs(root)
     write_service_runtime(root, host=host, port=port, auth_required=bool(auth_token), status="starting")
     server = None
     weixin_keepalive = None
@@ -376,10 +380,12 @@ async def run_ui_server(root: Path, run_id: str, host: str, port: int, _poll_int
             with contextlib.suppress(asyncio.CancelledError):
                 await agent_watchdog
         await asyncio.gather(
+            asyncio.to_thread(stop_all_backends, root, timeout=2.0),
             asyncio.to_thread(stop_all_hardware_bridges, root),
             asyncio.to_thread(stop_all_network_terminals, root),
             asyncio.to_thread(stop_all_managed_processes, root),
         )
+        await asyncio.to_thread(recover_stale_running_agents_all_runs, root)
         write_service_runtime(root, host=host, port=port, auth_required=bool(auth_token), status="stopped")
         if weixin_keepalive is not None:
             weixin_keepalive.cancel()

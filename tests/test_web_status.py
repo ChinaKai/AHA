@@ -33,6 +33,7 @@ from aha_cli.web.server import handle_send_payload, recover_stale_running_agent,
 from aha_cli.web.status import (
     cached_backend_status,
     recover_stale_running_agents,
+    recover_stale_running_agents_all_runs,
     reconcile_plan_with_events,
     web_agents_runtime_snapshot,
     web_tasks_snapshot,
@@ -439,6 +440,30 @@ class WebStatusTests(unittest.TestCase):
         self.assertEqual(persisted["status"], "awaiting_user")
         self.assertEqual(persisted["agents"][0]["status"], "interrupted")
         self.assertIn("agent_status_recovered", event_log)
+
+    def test_startup_recovery_repairs_running_agents_across_all_runs(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                run_ids = []
+                for title in ("First active run", "Second active run"):
+                    code, plan_output = self.run_cli("plan", title, "--agents", "1")
+                    self.assertEqual(code, 0)
+                    run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                    run_ids.append(run_id)
+                    set_task_status(root, run_id, "task-001", "running")
+                    set_agent_status(root, run_id, "task-001", "main", "running")
+
+                with mock.patch("aha_cli.web.status.backend_status", return_value={"status": "stopped", "pid": None}):
+                    recovery = recover_stale_running_agents_all_runs(root)
+
+                persisted = [task_snapshot(root, run_id, "task-001")["task"] for run_id in run_ids]
+
+        self.assertEqual(recovery["recovered_count"], 2)
+        self.assertEqual(recovery["errors"], [])
+        self.assertEqual([task["status"] for task in persisted], ["awaiting_user", "awaiting_user"])
+        self.assertEqual([task["agents"][0]["status"] for task in persisted], ["interrupted", "interrupted"])
 
     def test_explicit_recovery_rechecks_stopped_cache_before_recovery(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

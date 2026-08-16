@@ -21,7 +21,7 @@ from aha_cli.store.filesystem import (
     task_snapshot,
     update_agent_runtime,
 )
-from aha_cli.store.runs import require_plan
+from aha_cli.store.runs import list_run_summaries, require_plan
 from aha_cli.web.public_payload import redact_hardware_credentials
 
 BACKEND_STATUS_CACHE_TTL_SECONDS = 0.75
@@ -700,6 +700,25 @@ def recover_stale_running_agents(
     }
 
 
+def recover_stale_running_agents_all_runs(root: Path) -> dict:
+    results: list[dict] = []
+    errors: list[dict] = []
+    for summary in list_run_summaries(root):
+        run_id = str(summary.get("id") or "")
+        if not run_id or not summary.get("has_running_work"):
+            continue
+        try:
+            results.append(recover_stale_running_agents(root, run_id))
+        except Exception as exc:  # noqa: BLE001 - one damaged run must not block Web startup
+            errors.append({"run_id": run_id, "error": str(exc)})
+    return {
+        "runs": results,
+        "checked": sum(int(result.get("checked") or 0) for result in results),
+        "recovered_count": sum(int(result.get("recovered_count") or 0) for result in results),
+        "errors": errors,
+    }
+
+
 def web_status_snapshot(
     root: Path,
     run_id: str,
@@ -738,6 +757,7 @@ __all__ = [
     "merge_recovery_context_message",
     "recover_stale_running_agent",
     "recover_stale_running_agents",
+    "recover_stale_running_agents_all_runs",
     "recover_inconsistent_task_status",
     "reconcile_plan_with_events",
     "decorate_task_status",

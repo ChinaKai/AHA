@@ -65,6 +65,7 @@ __all__ = [
     "detect_runtime_context_compaction",
     "backend_status",
     "mark_backend_stopped",
+    "stop_all_backends",
     "stop_task_backends",
     "start_backend",
     "stop_backend",
@@ -856,6 +857,53 @@ def stop_task_backends(root: Path, run_id: str, task_id: str, *, exclude_pid: in
             },
         )
     return stopped
+
+
+def stop_all_backends(root: Path, *, timeout: float = 5.0) -> dict:
+    """Stop every live backend worker owned by this AHA home."""
+    from aha_cli.store.runs import list_run_summaries
+
+    stopped: list[dict] = []
+    errors: list[dict] = []
+    checked = 0
+    for summary in list_run_summaries(root):
+        run_id = str(summary.get("id") or "")
+        if not run_id:
+            continue
+        try:
+            plan = require_plan(root, run_id)
+        except (OSError, TimeoutError, ValueError, KeyError, SystemExit) as exc:
+            errors.append({"run_id": run_id, "error": str(exc)})
+            continue
+        refs: list[tuple[str, str | None]] = []
+        if backend_state_path(root, run_id).exists():
+            refs.append(("main", None))
+        for task in plan.get("tasks", []):
+            if task.get("deleted_at"):
+                continue
+            task_id = str(task.get("id") or "")
+            if not task_id:
+                continue
+            refs.extend(
+                (str(agent.get("id") or "main"), task_id)
+                for agent in task.get("agents", [])
+                if backend_state_path(root, run_id, str(agent.get("id") or "main"), task_id).exists()
+            )
+        seen: set[tuple[str, str | None]] = set()
+        for target, task_id in refs:
+            key = (target, task_id)
+            if key in seen:
+                continue
+            seen.add(key)
+            checked += 1
+            try:
+                state = _read_state(root, run_id, target, task_id)
+                if state.get("status") == "stopped" or not state.get("pid"):
+                    continue
+                stopped.append(stop_backend(root, run_id, target, task_id=task_id, timeout=timeout))
+            except Exception as exc:  # noqa: BLE001 - one backend must not block Web shutdown
+                errors.append({"run_id": run_id, "task_id": task_id, "target": target, "error": str(exc)})
+    return {"checked": checked, "stopped": stopped, "errors": errors}
 
 
 def _running_zipapp_path() -> Path | None:
