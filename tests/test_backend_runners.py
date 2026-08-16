@@ -704,21 +704,57 @@ class BackendRunnerSessionTests(unittest.TestCase):
         # A WSL watcher runs the Windows onebin from /mnt/<drive>/...; that
         # directory's python3 shim targets Windows pythonw (CRLF, unusable in
         # Linux) and must never shadow /usr/bin/python3 in backend child
-        # shells. `aha` stays resolvable via the user bin dirs.
+        # shells. A dedicated aha-only bin dir is prepended instead, so the
+        # orchestrating Windows instance wins `aha` lookups even when the
+        # user keeps a separate WSL aha in ~/.local/bin.
         with tempfile.TemporaryDirectory() as tmp:
             fake_home = Path(tmp) / "home"
             local_bin = fake_home / ".local" / "bin"
             local_bin.mkdir(parents=True)
+            (local_bin / "aha").write_text("#!/bin/sh\n# user's own wsl aha\n", encoding="utf-8")
             env = {"PATH": "/usr/bin"}
+            onebin = Path("/mnt/c/Users/toope/AppData/Local/AHA/aha")
+            with mock.patch(
+                "aha_cli.services.backend_paths._running_zipapp",
+                return_value=onebin,
+            ):
+                add_user_backend_paths(env, home=fake_home)
+
+            data_home = Path(os.environ.get("XDG_DATA_HOME") or fake_home / ".local" / "share")
+            backend_bin = data_home / "aha" / "backend-bin"
+            link = backend_bin / "aha"
+            self.assertTrue(link.is_symlink())
+            self.assertEqual(Path(os.readlink(link)), onebin)
+            # The user's own install is untouched, only shadowed.
+            self.assertFalse((local_bin / "aha").is_symlink())
+
+        parts = env["PATH"].split(os.pathsep)
+        self.assertEqual(parts[0], str(backend_bin))
+        self.assertNotIn("/mnt/c/Users/toope/AppData/Local/AHA", parts)
+        self.assertLess(parts.index(str(backend_bin)), parts.index(str(local_bin)))
+        self.assertLess(parts.index(str(local_bin)), parts.index("/usr/bin"))
+
+    def test_user_backend_paths_repoints_stale_backend_bin_link(self) -> None:
+        # The backend-bin symlink is repaired when the onebin moves
+        # (reinstall/upgrade), so agent shells never exec a dangling or
+        # outdated entry.
+        with tempfile.TemporaryDirectory() as tmp:
+            fake_home = Path(tmp) / "home"
+            data_home = Path(os.environ.get("XDG_DATA_HOME") or fake_home / ".local" / "share")
+            backend_bin = data_home / "aha" / "backend-bin"
+            backend_bin.mkdir(parents=True)
+            stale = backend_bin / "aha"
+            stale.symlink_to("/mnt/c/Users/toope/AppData/Local/AHA-old/aha")
             with mock.patch(
                 "aha_cli.services.backend_paths._running_zipapp",
                 return_value=Path("/mnt/c/Users/toope/AppData/Local/AHA/aha"),
             ):
-                add_user_backend_paths(env, home=fake_home)
+                add_user_backend_paths({"PATH": "/usr/bin"}, home=fake_home)
 
-        parts = env["PATH"].split(os.pathsep)
-        self.assertNotIn("/mnt/c/Users/toope/AppData/Local/AHA", parts)
-        self.assertLess(parts.index(str(local_bin)), parts.index("/usr/bin"))
+            self.assertEqual(
+                Path(os.readlink(stale)),
+                Path("/mnt/c/Users/toope/AppData/Local/AHA/aha"),
+            )
 
     def test_user_backend_paths_keep_native_onebin_dir(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
