@@ -1268,12 +1268,12 @@ def _forward_hardware_web(
     Returns 0 on success, 2 on permission/validation error, or re-raises when
     the Web service is unreachable (so the caller can surface the reason).
     """
-    del run_id  # the Web route resolves the run from the task context
     try:
         result = web_forward(
             root,
             "POST",
             f"/api/task/{task_id}/{action}",
+            query={"run_id": run_id},
             payload=payload,
             timeout=15.0,
         )
@@ -1341,6 +1341,7 @@ def cmd_hardware_attach(args: argparse.Namespace) -> int:
                 root,
                 "POST",
                 f"/api/task/{args.task_id}/hardware-attach",
+                query={"run_id": run_id},
                 payload={"channel": args.channel},
                 timeout=15.0,
             )
@@ -1451,11 +1452,19 @@ def _wait_serial_bridge(root: Path, device: str, *, timeout: float = 10.0) -> di
     raise HardwareFileTransferError(str(state.get("error") or f"serial bridge is not ready: {device}"))
 
 
-def _forward_literal_hardware_text(root: Path, task_id: str, channel: str, text: str, timeout: float) -> None:
+def _forward_literal_hardware_text(
+    root: Path,
+    run_id: str,
+    task_id: str,
+    channel: str,
+    text: str,
+    timeout: float,
+) -> None:
     result = web_forward(
         root,
         "POST",
         f"/api/task/{task_id}/hardware-send",
+        query={"run_id": run_id},
         payload={"data": text.replace("\\", "\\\\"), "channel": channel},
         timeout=max(15.0, timeout),
     )
@@ -1465,6 +1474,7 @@ def _forward_literal_hardware_text(root: Path, task_id: str, channel: str, text:
 
 def _wait_forwarded_hardware_bridge(
     root: Path,
+    run_id: str,
     task_id: str,
     channel: str,
     *,
@@ -1477,6 +1487,7 @@ def _wait_forwarded_hardware_bridge(
             root,
             "POST",
             f"/api/task/{task_id}/hardware-attach",
+            query={"run_id": run_id},
             payload={"channel": channel},
             timeout=15.0,
         )
@@ -1539,7 +1550,7 @@ def cmd_hardware_file_send(args: argparse.Namespace) -> int:
     forwarded = should_forward_to_windows_web(root)
     try:
         if forwarded:
-            state = _wait_forwarded_hardware_bridge(root, args.task_id, args.channel)
+            state = _wait_forwarded_hardware_bridge(root, run_id, args.task_id, args.channel)
         elif network_channel:
             ensure_network_terminal(root, host, port, username=username, password=password)
             state = _wait_network_bridge(root, host, port)
@@ -1586,7 +1597,7 @@ def cmd_hardware_file_send(args: argparse.Namespace) -> int:
                     append_bridge_control(root, device, command)
         elif forwarded:
             def send_text(text: str) -> None:
-                _forward_literal_hardware_text(root, args.task_id, args.channel, text, args.timeout)
+                _forward_literal_hardware_text(root, run_id, args.task_id, args.channel, text, args.timeout)
         elif network_channel:
             def send_text(text: str) -> None:
                 append_network_control(root, host, port, {"cmd": "send_raw", "data": text, "source": "hardware-file-send"})

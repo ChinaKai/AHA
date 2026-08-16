@@ -28,6 +28,21 @@ _RAW_RECEIVER_PATH = "/tmp/.aha-recv-v3"
 _RAW_RECEIVER_READY_PATH = "/tmp/.aha-recv-v3.ready"
 _RAW_RECEIVER_DELIMITER = "__AHA_RECV_V3__"
 _RAW_TRAILER_PAD = "A" * 128
+_RAW_RECEIVER_CRC32C_MARKER = "crc32c-v1"
+_RAW_RECEIVER_SHELL_MARKER = "shell-sha256-v3"
+
+
+def _crc32c_table() -> tuple[int, ...]:
+    values = []
+    for index in range(256):
+        value = index
+        for _bit in range(8):
+            value = (value >> 1) ^ (0x82F63B78 if value & 1 else 0)
+        values.append(value & 0xFFFFFFFF)
+    return tuple(values)
+
+
+_CRC32C_TABLE = _crc32c_table()
 
 _RECEIVER_SCRIPT = r'''#!/bin/sh
 dest=$1
@@ -340,6 +355,13 @@ def _sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _crc32c(data: bytes) -> int:
+    value = 0xFFFFFFFF
+    for byte in data:
+        value = _CRC32C_TABLE[(value ^ byte) & 0xFF] ^ (value >> 8)
+    return value ^ 0xFFFFFFFF
+
+
 def _bootstrap_command(token: str) -> str:
     return (
         f"\ncat > {_RECEIVER_PATH} <<'{_RECEIVER_DELIMITER}'\n"
@@ -363,7 +385,7 @@ def _raw_bootstrap_command(token: str) -> str:
         f"\ncat > {_RAW_RECEIVER_PATH} <<'{_RAW_RECEIVER_DELIMITER}'\n"
         f"{_RAW_RECEIVER_SCRIPT}"
         f"{_RAW_RECEIVER_DELIMITER}\n"
-        f"chmod 700 {_RAW_RECEIVER_PATH} && : > {_RAW_RECEIVER_READY_PATH} "
+        f"chmod 700 {_RAW_RECEIVER_PATH} && printf '%s\\n' {_RAW_RECEIVER_SHELL_MARKER} > {_RAW_RECEIVER_READY_PATH} "
         f"&& printf 'AHA-%s %s\\n' RAWBOOT {shlex.quote(token)}\n"
     )
 
@@ -371,7 +393,8 @@ def _raw_bootstrap_command(token: str) -> str:
 def _raw_cache_probe_command(token: str) -> str:
     return (
         f"if [ -x {_RAW_RECEIVER_PATH} ] && [ -f {_RAW_RECEIVER_READY_PATH} ]; then "
-        f"printf 'AHA-%s %s\\n' RAWCACHE {shlex.quote(token)}; else "
+        f"cap=; IFS= read -r cap < {_RAW_RECEIVER_READY_PATH} || :; "
+        f"printf 'AHA-RAWCACHE %s %s\\n' {shlex.quote(token)} \"$cap\"; else "
         f"printf 'AHA-%s %s\\n' RAWMISS {shlex.quote(token)}; fi\n"
     )
 
@@ -415,7 +438,12 @@ def send_file_via_raw_shell(
 
     send_text(_raw_cache_probe_command(token))
     cache_marker = reader.wait_for_any(
-        [f"AHA-RAWCACHE {token}", f"AHA-RAWMISS {token}"],
+        [
+            f"AHA-RAWCACHE {token} {_RAW_RECEIVER_CRC32C_MARKER}",
+            f"AHA-RAWCACHE {token} {_RAW_RECEIVER_SHELL_MARKER}",
+            f"AHA-RAWCACHE {token}",
+            f"AHA-RAWMISS {token}",
+        ],
         f"AHA-RAW ERR {token} ",
         timeout=max(timeout, 10.0),
     )
@@ -427,8 +455,8 @@ def send_file_via_raw_shell(
             f"AHA-RAW ERR {token} ",
             timeout=max(timeout, len(bootstrap.encode("utf-8")) / 50.0 + 5.0),
         )
+    use_crc32c = cache_marker == f"AHA-RAWCACHE {token} {_RAW_RECEIVER_CRC32C_MARKER}"
     command = " ".join([
-        "sh",
         _RAW_RECEIVER_PATH,
         shlex.quote(remote),
         str(size),
@@ -443,8 +471,9 @@ def send_file_via_raw_shell(
     try:
         with source.open("rb") as handle:
             while data := handle.read(safe_chunk_size):
-                block_sha256 = hashlib.sha256(data).hexdigest()
-                header = f"F {chunks} {len(data)} {block_sha256}\n"
+                frame_check = f"{_crc32c(data):08x}" if use_crc32c else hashlib.sha256(data).hexdigest()
+                frame_kind = "C" if use_crc32c else "F"
+                header = f"{frame_kind} {chunks} {len(data)} {frame_check}\n"
                 for attempt in range(safe_retries + 1):
                     send_text(header)
                     try:

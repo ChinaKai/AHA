@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import re
 import shlex
 import subprocess
 import tempfile
@@ -12,6 +13,9 @@ from aha_cli.services.hardware_file_transfer import (
     HardwareFileTransferError,
     _RAW_RECEIVER_SCRIPT,
     _RECEIVER_SCRIPT,
+    _crc32c,
+    _raw_bootstrap_command,
+    _raw_cache_probe_command,
     _raw_frame_trailer,
     encode_octal_block,
     raw_receiver_script_bytes,
@@ -23,6 +27,17 @@ from aha_cli.store.io import append_jsonl
 
 
 class HardwareFileTransferTests(unittest.TestCase):
+    def test_crc32c_matches_castagnoli_reference_vector(self) -> None:
+        self.assertEqual(_crc32c(b"123456789"), 0xE3069283)
+
+    def test_compiled_receiver_cache_markers_preserve_shell_fallback(self) -> None:
+        bootstrap = _raw_bootstrap_command("test-token")
+        probe = _raw_cache_probe_command("test-token")
+
+        self.assertIn("shell-sha256-v3", bootstrap)
+        self.assertIn("IFS= read -r cap", probe)
+        self.assertNotIn("cat ", probe)
+
     def test_raw_receiver_retries_corruption_and_round_trips_all_bytes(self) -> None:
         payload = bytes(range(256)) * 4 + b"aha\x00raw\n"
         corrupted = bytearray(payload)
@@ -235,16 +250,18 @@ class HardwareFileTransferTests(unittest.TestCase):
             def send_text(text: str) -> None:
                 nonlocal pending, token
                 if text.startswith("if [ -x /tmp/.aha-recv-v3 ]"):
-                    token = text.rsplit(" RAWCACHE ", 1)[1].split(";", 1)[0].strip("' ")
-                    emit(f"AHA-RAWCACHE {token}\n")
+                    token_match = re.search(r"[0-9a-f]{16}", text)
+                    self.assertIsNotNone(token_match)
+                    token = str(token_match.group(0))
+                    emit(f"AHA-RAWCACHE {token} crc32c-v1\n")
                     return
-                if text.startswith("sh /tmp/.aha-recv-v3"):
+                if text.startswith("/tmp/.aha-recv-v3"):
                     token = shlex.split(text)[-1]
                     emit(f"AHA-RAW READY {token}\n")
                     return
-                if text.startswith("F "):
-                    _kind, sequence_text, size_text, digest = text.split()
-                    pending = (int(sequence_text), int(size_text), digest)
+                if text.startswith("C "):
+                    _kind, sequence_text, size_text, checksum = text.split()
+                    pending = (int(sequence_text), int(size_text), checksum)
                     emit(f"AHA-RAW DATA {token} {sequence_text}\n")
                     return
                 if text == "E\n":
@@ -254,13 +271,13 @@ class HardwareFileTransferTests(unittest.TestCase):
             def send_bytes(data: bytes) -> None:
                 nonlocal pending
                 self.assertIsNotNone(pending)
-                sequence, frame_size, digest = pending
+                sequence, frame_size, checksum = pending
                 frame = data[:frame_size]
                 self.assertEqual(data[frame_size:], _raw_frame_trailer(token, sequence))
-                self.assertEqual(hashlib.sha256(frame).hexdigest(), digest)
+                self.assertEqual(f"{_crc32c(frame):08x}", checksum)
                 sends_by_sequence[sequence] = sends_by_sequence.get(sequence, 0) + 1
                 if sequence == 0 and sends_by_sequence[sequence] == 1:
-                    emit(f"AHA-RAW NAK {token} {sequence} sha256\n")
+                    emit(f"AHA-RAW NAK {token} {sequence} crc32c\n")
                     return
                 received.extend(frame)
                 emit(f"AHA-RAW ACK {token} {sequence} {len(received)}\n")
@@ -283,6 +300,58 @@ class HardwareFileTransferTests(unittest.TestCase):
             self.assertEqual(result.chunks, 3)
             self.assertEqual(result.retries, 1)
             self.assertEqual(result.sha256, hashlib.sha256(payload).hexdigest())
+
+    def test_send_file_via_raw_shell_keeps_sha256_shell_receiver_compatibility(self) -> None:
+        payload = b"legacy-shell-receiver"
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "source.bin"
+            source.write_bytes(payload)
+            stream_path = root / "raw-stream.jsonl"
+            token = ""
+            pending: tuple[int, int, str] | None = None
+
+            def emit(data: str) -> None:
+                append_jsonl(stream_path, {"direction": "rx", "data": data})
+
+            def send_text(text: str) -> None:
+                nonlocal token, pending
+                if text.startswith("if [ -x /tmp/.aha-recv-v3 ]"):
+                    token_match = re.search(r"[0-9a-f]{16}", text)
+                    self.assertIsNotNone(token_match)
+                    token = str(token_match.group(0))
+                    emit(f"AHA-RAWCACHE {token} shell-sha256-v3\n")
+                elif text.startswith("/tmp/.aha-recv-v3"):
+                    emit(f"AHA-RAW READY {token}\n")
+                elif text.startswith("F "):
+                    _kind, sequence, size, digest = text.split()
+                    pending = (int(sequence), int(size), digest)
+                    emit(f"AHA-RAW DATA {token} {sequence}\n")
+                elif text == "E\n":
+                    emit(f"AHA-RAW DONE {token} {len(payload)} {hashlib.sha256(payload).hexdigest()}\n")
+
+            def send_bytes(data: bytes) -> None:
+                self.assertIsNotNone(pending)
+                sequence, size, digest = pending
+                frame = data[:size]
+                self.assertEqual(hashlib.sha256(frame).hexdigest(), digest)
+                self.assertEqual(data[size:], _raw_frame_trailer(token, sequence))
+                emit(f"AHA-RAW ACK {token} {sequence} {len(frame)}\n")
+
+            result = send_file_via_raw_shell(
+                root,
+                "/dev/ttyTEST0",
+                source,
+                "/tmp/received.bin",
+                send_text=send_text,
+                send_bytes=send_bytes,
+                stream_path=stream_path,
+                chunk_size=256,
+                timeout=0.05,
+            )
+
+        self.assertEqual(result.size, len(payload))
+        self.assertEqual(result.retries, 0)
 
     def test_rejects_oversized_chunk(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

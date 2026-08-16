@@ -98,6 +98,7 @@ class AhaWebForwardCliTests(unittest.TestCase):
             def fake_forward(_root, method, path, *, query=None, payload=None, web_token=None, timeout=15.0):
                 self.assertEqual(method, "POST")
                 self.assertEqual(path, "/api/task/task-001/hardware-send")
+                self.assertEqual(query, {"run_id": run_id})
                 self.assertEqual(payload["data"], "printenv\\r")
                 return {"ok": True, "device": "COM3", "record": {"id": 1}}
 
@@ -128,6 +129,7 @@ class AhaWebForwardCliTests(unittest.TestCase):
 
             def fake_forward(_root, method, path, *, query=None, payload=None, web_token=None, timeout=15.0):
                 self.assertEqual(path, "/api/task/task-001/hardware-stop")
+                self.assertEqual(query, {"run_id": run_id})
                 return {"ok": True, "command": "stop"}
 
             with (
@@ -152,6 +154,7 @@ class AhaWebForwardCliTests(unittest.TestCase):
             def fake_forward(_root, method, path, *, query=None, payload=None, web_token=None, timeout=15.0):
                 self.assertEqual(method, "POST")
                 self.assertEqual(path, "/api/task/task-001/hardware-attach")
+                self.assertEqual(query, {"run_id": run_id})
                 self.assertEqual(payload["channel"], "serial")
                 return {"ok": True, "transport": "serial", "endpoint": "COM6", "bridge": {"status": "running"}}
 
@@ -204,11 +207,11 @@ class AhaWebForwardCliTests(unittest.TestCase):
             root, run_id = self._init_run(tmp)
             source = Path(tmp) / "payload.bin"
             source.write_bytes(b"payload")
-            requests: list[tuple[str, dict]] = []
+            requests: list[tuple[str, dict | None, dict]] = []
 
             def fake_forward(_root, method, path, *, query=None, payload=None, web_token=None, timeout=30.0):
                 self.assertEqual(method, "POST")
-                requests.append((path, payload or {}))
+                requests.append((path, query, payload or {}))
                 if path.endswith("/hardware-attach"):
                     return {"ok": True, "bridge": {"status": "running"}}
                 return {"ok": True}
@@ -246,19 +249,21 @@ class AhaWebForwardCliTests(unittest.TestCase):
             self.assertEqual(code, 0)
             self.assertTrue(json.loads(output)["ok"])
             self.assertEqual(requests[0][0], "/api/task/task-001/hardware-attach")
+            self.assertEqual(requests[0][1], {"run_id": run_id})
             self.assertEqual(requests[1][0], "/api/task/task-001/hardware-send")
-            self.assertEqual(requests[1][1]["data"], "D0:\\\\0000\n")
+            self.assertEqual(requests[1][1], {"run_id": run_id})
+            self.assertEqual(requests[1][2]["data"], "D0:\\\\0000\n")
 
     def test_cmd_hardware_file_send_supports_network_web_fallback(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root, run_id = self._init_run(tmp)
             source = Path(tmp) / "payload.bin"
             source.write_bytes(b"payload")
-            requests: list[tuple[str, dict]] = []
+            requests: list[tuple[str, dict | None, dict]] = []
 
             def fake_forward(_root, method, path, *, query=None, payload=None, web_token=None, timeout=30.0):
                 self.assertEqual(method, "POST")
-                requests.append((path, payload or {}))
+                requests.append((path, query, payload or {}))
                 if path.endswith("/hardware-attach"):
                     return {"ok": True, "bridge": {"status": "running"}}
                 return {"ok": True}
@@ -302,10 +307,12 @@ class AhaWebForwardCliTests(unittest.TestCase):
             self.assertEqual(result["channel"], "network")
             self.assertEqual(result["endpoint"], "192.168.1.20:23")
             self.assertEqual(requests[0][0], "/api/task/task-001/hardware-attach")
-            self.assertEqual(requests[0][1]["channel"], "network")
+            self.assertEqual(requests[0][1], {"run_id": run_id})
+            self.assertEqual(requests[0][2]["channel"], "network")
             self.assertEqual(requests[1][0], "/api/task/task-001/hardware-send")
-            self.assertEqual(requests[1][1]["channel"], "network")
-            self.assertEqual(requests[1][1]["data"], "D0:\\\\0000\n")
+            self.assertEqual(requests[1][1], {"run_id": run_id})
+            self.assertEqual(requests[1][2]["channel"], "network")
+            self.assertEqual(requests[1][2]["data"], "D0:\\\\0000\n")
 
     def test_cmd_hardware_file_send_uses_raw_v3_for_capable_forwarded_serial_bridge(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -317,6 +324,7 @@ class AhaWebForwardCliTests(unittest.TestCase):
             def fake_forward(_root, method, path, *, query=None, payload=None, web_token=None, timeout=30.0):
                 self.assertEqual(method, "POST")
                 self.assertTrue(path.endswith("/hardware-attach"))
+                self.assertEqual(query, {"run_id": run_id})
                 return {
                     "ok": True,
                     "bridge": {"status": "running", "capabilities": ["serial-transfer-v1", "serial-transfer-v2"]},
