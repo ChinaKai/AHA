@@ -43,7 +43,7 @@ import time
 from pathlib import Path
 
 from aha_cli import platform, process_control
-from aha_cli.constants import PLAN_FILE, RUNS_DIR
+from aha_cli.constants import AHA_WEB_INSTANCE_ENV, PLAN_FILE, RUNS_DIR
 from aha_cli.services.onebin import aha_cli_invocation
 from aha_cli.domain.models import normalize_task_hardware_debug, utc_now
 from aha_cli.services.hardware_session import (
@@ -219,6 +219,77 @@ def append_bridge_control(root: Path, device: str, command: dict) -> dict:
     return record
 
 
+def stop_all_hardware_bridges(root: Path, *, timeout: float = 3.0) -> dict:
+    """Stop every Serial bridge recorded under this AHA home.
+
+    Parent-death binding is the normal lifecycle mechanism, but a bridge from an
+    older Web process may not belong to the current Windows Job Object. Web
+    shutdown therefore also performs an explicit, bounded sweep so an upgrade
+    never reuses a live bridge running stale code.
+    """
+
+    states: list[tuple[Path, dict, int]] = []
+    owner_instance = str(os.environ.get(AHA_WEB_INSTANCE_ENV) or "")
+    devices_dir = hardware_devices_dir(root)
+    if devices_dir.is_dir():
+        for state_path in devices_dir.glob("*/bridge.json"):
+            try:
+                state = json.loads(state_path.read_text(encoding="utf-8"))
+                pid = int(state.get("pid") or 0)
+            except (OSError, ValueError, TypeError, json.JSONDecodeError):
+                continue
+            device = str(state.get("device") or "").strip()
+            if not device or pid <= 0:
+                continue
+            states.append((state_path, state, pid))
+            if pid_alive(pid):
+                append_jsonl(state_path.parent / "control.jsonl", {"cmd": "stop", "ts": utc_now()})
+
+    deadline = time.monotonic() + max(0.0, float(timeout))
+    while any(pid_alive(pid) for _path, _state, pid in states) and time.monotonic() < deadline:
+        time.sleep(0.02)
+
+    forced = 0
+    for _state_path, state, pid in states:
+        if not pid_alive(pid):
+            continue
+        if not owner_instance or str(state.get("owner_instance") or "") != owner_instance:
+            continue
+        forced += 1
+        try:
+            if not process_control.terminate_process(pid, timeout=1.0):
+                process_control.send_signal(pid, signal.SIGKILL)
+        except (OSError, ProcessLookupError, PermissionError):
+            pass
+
+    force_deadline = time.monotonic() + 1.0
+    while any(pid_alive(pid) for _path, _state, pid in states) and time.monotonic() < force_deadline:
+        time.sleep(0.02)
+
+    stopped = 0
+    remaining: list[int] = []
+    for state_path, state, pid in states:
+        if pid_alive(pid):
+            remaining.append(pid)
+            continue
+        stopped += 1
+        state.pop("transfer", None)
+        state.update(
+            {
+                "status": "stopped",
+                "paused": False,
+                "updated_at": utc_now(),
+                "stop_reason": "web-shutdown",
+            }
+        )
+        try:
+            state_path.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
+            (state_path.parent / "terminal.sock").unlink(missing_ok=True)
+        except OSError:
+            pass
+    return {"found": len(states), "stopped": stopped, "forced": forced, "remaining": remaining}
+
+
 def set_parent_death_signal() -> None:
     # Backward-compatible alias; the canonical cross-platform helper is
     # ``aha_cli.process_control.parent_death_preexec``.
@@ -292,7 +363,15 @@ def ensure_bridge(root: Path, device: str, baudrate: int = 115200, *, launcher: 
         # provisional pid so concurrent callers see it immediately.
         device_bridge_state_path(root, device).write_text(
             json.dumps(
-                {"device": device, "baudrate": int(baudrate), "pid": proc.pid, "status": "starting", "updated_at": utc_now()},
+                {
+                    "device": device,
+                    "baudrate": int(baudrate),
+                    "pid": proc.pid,
+                    "status": "starting",
+                    "owner_pid": os.getpid(),
+                    "owner_instance": str(child_env.get(AHA_WEB_INSTANCE_ENV) or ""),
+                    "updated_at": utc_now(),
+                },
                 ensure_ascii=False,
             ),
             encoding="utf-8",
@@ -387,6 +466,8 @@ class DeviceBridgeDaemon:
             "baudrate": self.baudrate,
             "pid": os.getpid(),
             "status": status,
+            "owner_pid": os.getppid(),
+            "owner_instance": str(os.environ.get(AHA_WEB_INSTANCE_ENV) or ""),
             "paused": self._paused,
             "updated_at": utc_now(),
             "rules": self.engine.snapshot(),
@@ -820,4 +901,5 @@ __all__ = [
     "pid_alive",
     "read_bridge_state",
     "set_parent_death_signal",
+    "stop_all_hardware_bridges",
 ]

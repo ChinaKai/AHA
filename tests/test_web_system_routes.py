@@ -367,7 +367,9 @@ class WebSystemRoutesTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / ".aha"
             root.mkdir()
-            with mock.patch("aha_cli.web.system_routes.aha_version", return_value="20260531.abcdef0"):
+            with mock.patch.dict(os.environ, {"AHA_WEB_INSTANCE_ID": "instance-123"}), mock.patch(
+                "aha_cli.web.system_routes.aha_version", return_value="20260531.abcdef0"
+            ):
                 response = system_route_response(root, "", "GET", "/api/health", {})
                 head_response = system_route_response(root, "", "HEAD", "/api/health", {})
 
@@ -375,6 +377,8 @@ class WebSystemRoutesTests(unittest.TestCase):
         body = json_response_body(response)
         self.assertTrue(body["ok"])
         self.assertEqual(body["service"], "aha-web")
+        self.assertEqual(body["pid"], os.getpid())
+        self.assertEqual(body["instance_id"], "instance-123")
         self.assertEqual(body["aha_home"], str(root))
         self.assertEqual(body["aha_version"], "20260531.abcdef0")
         self.assertEqual(body["bind_port"], "")

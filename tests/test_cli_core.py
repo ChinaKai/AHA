@@ -903,6 +903,30 @@ class CliCoreTests(unittest.TestCase):
                 ["/usr/bin/python3", "-m", "aha_cli", *argv],
             )
 
+    def test_ui_web_restart_exits_for_tray_supervisor(self) -> None:
+        from aha_cli.constants import AHA_WEB_SUPERVISED_ENV
+
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp) / "aha-home"
+            with (
+                mock.patch.dict(os.environ, {AHA_WEB_SUPERVISED_ENV: "1"}),
+                mock.patch("aha_cli.cli.run_ui_server", side_effect=SystemExit(75)),
+                mock.patch("aha_cli.cli.terminate_parent_death_children") as terminate_children,
+                mock.patch("aha_cli.cli.os.execv") as execv,
+            ):
+                code, _ = self.run_cli(
+                    "--home",
+                    str(home),
+                    "ui",
+                    "--port",
+                    "0",
+                    allow_aha_keys={AHA_WEB_SUPERVISED_ENV},
+                )
+
+        self.assertEqual(code, 75)
+        terminate_children.assert_called_once_with()
+        execv.assert_not_called()
+
     def test_ui_non_restart_system_exit_is_not_replaced(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             home = Path(tmp) / "aha-home"
@@ -1754,6 +1778,7 @@ class CliCoreTests(unittest.TestCase):
         calls: list[str] = []
 
         def fake_asyncio_run(coro):
+            coro.close()
             raise SystemExit(WEB_RESTART_EXIT_CODE)
 
         def fake_execv(command, argv):

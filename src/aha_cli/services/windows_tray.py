@@ -6,17 +6,22 @@ from ctypes import wintypes
 from dataclasses import dataclass
 import hashlib
 from importlib import resources
+import json
 import os
 from pathlib import Path
 import signal
 import subprocess
 import sys
+import threading
 import time
+from typing import Callable
 from urllib.parse import quote
 from urllib.request import urlopen
+import uuid
 import webbrowser
 
 from aha_cli import platform, process_control
+from aha_cli.constants import AHA_WEB_INSTANCE_ENV, AHA_WEB_SUPERVISED_ENV
 from aha_cli.services.onebin import aha_cli_invocation, running_zipapp_path
 from aha_cli.store.io import read_json, write_json
 from aha_cli.web.auth import bind_host_exposes_network, normalize_auth_token
@@ -275,35 +280,92 @@ def web_ui_command(
 
 
 class WebUiProcess:
-    def __init__(self, command: list[str]) -> None:
+    def __init__(
+        self,
+        command: list[str],
+        *,
+        supervise: bool = False,
+        readiness_probe: Callable[[str], bool] | None = None,
+    ) -> None:
         self.command = command
         self.process: subprocess.Popen | None = None
+        self.instance_id = ""
+        self._supervise = bool(supervise)
+        self._readiness_probe = readiness_probe
+        self._lock = threading.RLock()
+        self._stop_requested = False
 
-    def start(self) -> None:
-        if self.process is not None and self.process.poll() is None:
-            return
+    def _spawn_locked(self) -> tuple[subprocess.Popen, str]:
         creationflags = int(getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        instance_id = uuid.uuid4().hex
+        env = dict(os.environ)
+        if self._supervise:
+            env[AHA_WEB_SUPERVISED_ENV] = "1"
+            env[AHA_WEB_INSTANCE_ENV] = instance_id
         try:
-            self.process = subprocess.Popen(
+            process = subprocess.Popen(
                 self.command,
                 stdin=subprocess.DEVNULL,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
                 creationflags=creationflags,
+                env=env,
             )
-            process_control.assign_parent_death(self.process)
+            process_control.assign_parent_death(process)
         except OSError as exc:
             raise WindowsTrayError(f"failed to start AHA Web UI: {exc}") from exc
+        self.process = process
+        self.instance_id = instance_id
+        if self._supervise:
+            threading.Thread(
+                target=self._watch,
+                args=(process,),
+                name="aha-web-supervisor",
+                daemon=True,
+            ).start()
+        return process, instance_id
 
-    def stop(self) -> None:
-        process = self.process
-        self.process = None
-        if process is None:
+    def start(self) -> None:
+        with self._lock:
+            if self.process is not None and self.process.poll() is None:
+                return
+            self._stop_requested = False
+            process, instance_id = self._spawn_locked()
+        if self._readiness_probe is not None and not self._readiness_probe(instance_id):
+            self._stop_process(process)
+            with self._lock:
+                if self.process is process:
+                    self.process = None
+                    self.instance_id = ""
+            raise WindowsTrayError("AHA Web UI started but did not become ready")
+        if process.poll() is not None:
+            raise WindowsTrayError(f"AHA Web UI exited during startup with code {process.returncode}")
+
+    def _watch(self, process: subprocess.Popen) -> None:
+        return_code = process.wait()
+        with self._lock:
+            if self.process is not process:
+                return
+            self.process = None
+            self.instance_id = ""
+            restart = not self._stop_requested and return_code == 75
+        if not restart:
             return
+        process_control.terminate_parent_death_children()
+        for attempt in range(3):
+            time.sleep(0.25 * (attempt + 1))
+            with self._lock:
+                if self._stop_requested or self.process is not None:
+                    return
+            try:
+                self.start()
+                return
+            except WindowsTrayError:
+                continue
+
+    @staticmethod
+    def _stop_process(process: subprocess.Popen) -> None:
         if platform.WIN:
-            # A venv pythonw.exe is a redirector that launches the base Python
-            # interpreter. Kill the Job Object first so a Web self-restart via
-            # os.execv and any redirector descendants cannot outlive the tray.
             process_control.terminate_parent_death_children()
             if process.poll() is None:
                 process_control.signal_process_group(process.pid, signal.SIGTERM)
@@ -316,6 +378,16 @@ class WebUiProcess:
         except subprocess.TimeoutExpired:
             process.kill()
             process.wait(timeout=5)
+
+    def stop(self) -> None:
+        with self._lock:
+            self._stop_requested = True
+            process = self.process
+            self.process = None
+            self.instance_id = ""
+        if process is None:
+            return
+        self._stop_process(process)
 
     def restart(self) -> None:
         self.stop()
@@ -336,7 +408,16 @@ class TrayRuntime:
         self.poll_interval = poll_interval
         self.config_path = config_path or default_tray_config_path()
         save_tray_settings(self.settings, self.config_path)
-        self.web = WebUiProcess(self.web_command())
+        self.web = WebUiProcess(
+            self.web_command(),
+            supervise=True,
+            readiness_probe=lambda instance_id: wait_for_dashboard(
+                self.settings.bind,
+                self.settings.port,
+                timeout_seconds=10.0,
+                expected_instance_id=instance_id,
+            ),
+        )
 
     def auth_token_file(self) -> str:
         return str(tray_token_file(self.settings)) if self.settings.web_token else ""
@@ -369,7 +450,14 @@ class TrayRuntime:
         self.web.start()
 
     def restart(self) -> None:
+        old_instance_id = self.web.instance_id
         self.web.stop()
+        if old_instance_id and not wait_for_dashboard_shutdown(
+            self.settings.bind,
+            self.settings.port,
+            old_instance_id,
+        ):
+            raise WindowsTrayError("旧 AHA Web 实例未完全退出，拒绝启动重叠进程")
         self.start()
 
     def apply_settings(self, settings: TraySettings) -> None:
@@ -378,14 +466,20 @@ class TrayRuntime:
         previous_run_id = self.run_id
         previous_startup = self.startup_command()
         startup_was_enabled = startup_enabled(previous_startup)
+        old_instance_id = self.web.instance_id
+        self.web.stop()
+        if old_instance_id and not wait_for_dashboard_shutdown(
+            previous.bind,
+            previous.port,
+            old_instance_id,
+        ):
+            raise WindowsTrayError("旧 AHA Web 实例未完全退出，设置未应用")
         if updated.aha_home != previous.aha_home:
             self.run_id = ""
-        self.web.stop()
         self.settings = updated
         try:
             save_tray_settings(updated, self.config_path)
             self.start()
-            wait_for_dashboard(updated.bind, updated.port)
             if self.web.process is not None and self.web.process.poll() is not None:
                 raise WindowsTrayError("新设置下的 AHA Web 服务启动失败，请检查 bind 和端口")
             if startup_was_enabled:
@@ -846,15 +940,46 @@ def _run_native_tray(
             user32.DestroyIcon(custom_icon)
 
 
-def wait_for_dashboard(host: str, port: int, timeout_seconds: float = 5.0) -> bool:
+def wait_for_dashboard(
+    host: str,
+    port: int,
+    timeout_seconds: float = 5.0,
+    *,
+    expected_instance_id: str = "",
+) -> bool:
     health_url = f"{dashboard_url(host, port).rstrip('/')}/api/health"
     deadline = time.monotonic() + max(0.0, timeout_seconds)
     while time.monotonic() < deadline:
         try:
             with urlopen(health_url, timeout=0.25) as response:
-                if int(getattr(response, "status", 0)) == 200:
+                payload = json.loads(response.read().decode("utf-8"))
+                if int(getattr(response, "status", 0)) == 200 and (
+                    not expected_instance_id or payload.get("instance_id") == expected_instance_id
+                ):
+                    return True
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+            pass
+        time.sleep(0.1)
+    return False
+
+
+def wait_for_dashboard_shutdown(
+    host: str,
+    port: int,
+    instance_id: str,
+    timeout_seconds: float = 5.0,
+) -> bool:
+    health_url = f"{dashboard_url(host, port).rstrip('/')}/api/health"
+    deadline = time.monotonic() + max(0.0, timeout_seconds)
+    while time.monotonic() < deadline:
+        try:
+            with urlopen(health_url, timeout=0.25) as response:
+                payload = json.loads(response.read().decode("utf-8"))
+                if payload.get("instance_id") != instance_id:
                     return True
         except OSError:
+            return True
+        except (UnicodeDecodeError, json.JSONDecodeError):
             pass
         time.sleep(0.1)
     return False

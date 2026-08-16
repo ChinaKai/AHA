@@ -7,6 +7,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
 
 from aha_cli.services.agent_watchdog import scan_all_runs
+from aha_cli.services.hardware_bridge import stop_all_hardware_bridges
 from aha_cli.services.run_archive import RunArchiveError
 from aha_cli.services.run_retention_policy import (
     retention_policy_report_due,
@@ -16,6 +17,7 @@ from aha_cli.services.run_retention_policy import (
 from aha_cli.services.feishu_runtime import run_feishu_channel
 from aha_cli.services.service_runtime import write_service_runtime
 from aha_cli.services.managed_processes import reconcile_managed_processes, stop_all_managed_processes
+from aha_cli.services.network_terminal import stop_all_network_terminals
 from aha_cli.services.weixin import WeixinError, fetch_updates, load_account, notify_channel_start, notify_channel_stop
 from aha_cli.store.config import load_config
 from aha_cli.store.paths import config_path
@@ -373,7 +375,11 @@ async def run_ui_server(root: Path, run_id: str, host: str, port: int, _poll_int
             agent_watchdog.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await agent_watchdog
-        await asyncio.to_thread(stop_all_managed_processes, root)
+        await asyncio.gather(
+            asyncio.to_thread(stop_all_hardware_bridges, root),
+            asyncio.to_thread(stop_all_network_terminals, root),
+            asyncio.to_thread(stop_all_managed_processes, root),
+        )
         write_service_runtime(root, host=host, port=port, auth_required=bool(auth_token), status="stopped")
         if weixin_keepalive is not None:
             weixin_keepalive.cancel()

@@ -8,6 +8,8 @@ import signal
 import subprocess
 import struct
 import tempfile
+import threading
+import time
 import unittest
 from unittest import mock
 
@@ -155,7 +157,9 @@ class WindowsTrayTests(unittest.TestCase):
         first.poll.return_value = None
         second = mock.Mock()
         second.poll.return_value = None
-        with mock.patch.object(subprocess, "Popen", side_effect=[first, second]) as popen:
+        with mock.patch.object(subprocess, "Popen", side_effect=[first, second]) as popen, mock.patch.object(
+            windows_tray.process_control, "terminate_parent_death_children"
+        ) as terminate_children:
             process = windows_tray.WebUiProcess(["python", "aha", "ui"])
             process.start()
             process.restart()
@@ -189,6 +193,125 @@ class WindowsTrayTests(unittest.TestCase):
         terminate_children.assert_called_once_with()
         signal_tree.assert_called_once_with(1234, signal.SIGTERM)
         child.terminate.assert_not_called()
+
+    def test_supervised_web_process_restarts_exit_code_75_with_fresh_instance(self) -> None:
+        class FakeProcess:
+            def __init__(self, pid: int) -> None:
+                self.pid = pid
+                self.returncode = None
+                self._done = threading.Event()
+
+            def poll(self):
+                return self.returncode
+
+            def wait(self, timeout=None):
+                if not self._done.wait(timeout):
+                    raise subprocess.TimeoutExpired("aha", timeout)
+                return self.returncode
+
+            def finish(self, code: int) -> None:
+                self.returncode = code
+                self._done.set()
+
+            def terminate(self) -> None:
+                self.finish(-15)
+
+            def kill(self) -> None:
+                self.finish(-9)
+
+        first = FakeProcess(1001)
+        second = FakeProcess(1002)
+        ready_instances: list[str] = []
+        with mock.patch.object(subprocess, "Popen", side_effect=[first, second]) as popen, mock.patch.object(
+            windows_tray.process_control, "terminate_parent_death_children"
+        ) as terminate_children:
+            process = windows_tray.WebUiProcess(
+                ["pythonw", "aha", "ui"],
+                supervise=True,
+                readiness_probe=lambda instance_id: ready_instances.append(instance_id) is None,
+            )
+            process.start()
+            first.finish(75)
+            deadline = time.monotonic() + 2.0
+            while popen.call_count < 2 and time.monotonic() < deadline:
+                time.sleep(0.02)
+            self.assertEqual(popen.call_count, 2)
+            process.stop()
+
+        first_env = popen.call_args_list[0].kwargs["env"]
+        second_env = popen.call_args_list[1].kwargs["env"]
+        self.assertEqual(first_env["AHA_WEB_SUPERVISED"], "1")
+        self.assertEqual(second_env["AHA_WEB_SUPERVISED"], "1")
+        self.assertNotEqual(first_env["AHA_WEB_INSTANCE_ID"], second_env["AHA_WEB_INSTANCE_ID"])
+        self.assertEqual(ready_instances, [first_env["AHA_WEB_INSTANCE_ID"], second_env["AHA_WEB_INSTANCE_ID"]])
+        self.assertGreaterEqual(terminate_children.call_count, 1)
+
+    def test_wait_for_dashboard_requires_expected_instance(self) -> None:
+        class Response:
+            status = 200
+
+            def __init__(self, instance_id: str) -> None:
+                self.instance_id = instance_id
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, _type, _value, _traceback):
+                return False
+
+            def read(self) -> bytes:
+                return json.dumps({"ok": True, "instance_id": self.instance_id}).encode("utf-8")
+
+        with mock.patch.object(
+            windows_tray,
+            "urlopen",
+            side_effect=[Response("old-instance"), Response("new-instance")],
+        ):
+            ready = windows_tray.wait_for_dashboard(
+                "127.0.0.1",
+                8788,
+                timeout_seconds=1.0,
+                expected_instance_id="new-instance",
+            )
+
+        self.assertTrue(ready)
+
+    def test_supervised_web_start_failure_cleans_process_state(self) -> None:
+        child = mock.Mock(pid=2001)
+        child.poll.return_value = None
+        with mock.patch.object(subprocess, "Popen", return_value=child), mock.patch.object(
+            windows_tray.WebUiProcess, "_stop_process"
+        ) as stop_process:
+            process = windows_tray.WebUiProcess(
+                ["pythonw", "aha", "ui"],
+                readiness_probe=lambda _instance_id: False,
+            )
+            with self.assertRaisesRegex(windows_tray.WindowsTrayError, "did not become ready"):
+                process.start()
+
+        stop_process.assert_called_once_with(child)
+        self.assertIsNone(process.process)
+        self.assertEqual(process.instance_id, "")
+
+    def test_tray_restart_waits_for_old_instance_shutdown(self) -> None:
+        web_process = mock.Mock()
+        web_process.instance_id = "old-instance"
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.object(
+            windows_tray, "WebUiProcess", return_value=web_process
+        ), mock.patch.object(
+            windows_tray, "wait_for_dashboard_shutdown", return_value=True
+        ) as wait_shutdown:
+            runtime = windows_tray.TrayRuntime(
+                windows_tray.TraySettings(Path(tmp) / "home", "127.0.0.1", 8766),
+                "run-001",
+                1000,
+                config_path=Path(tmp) / "tray.json",
+            )
+            runtime.restart()
+
+        wait_shutdown.assert_called_once_with("127.0.0.1", 8766, "old-instance")
+        web_process.stop.assert_called_once_with()
+        web_process.start.assert_called_once_with()
 
     def test_duplicate_tray_opens_existing_dashboard_without_second_web_process(self) -> None:
         mutex = mock.Mock()

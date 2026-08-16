@@ -17,6 +17,7 @@ from aha_cli.backends.claude import claude_runner_command
 from aha_cli.backends.codex import codex_runner_command
 from aha_cli.backends.registry import agent_backend_or_default
 from aha_cli.cli_parser import MAX_WATCH_EVENTS_LIMIT, build_parser as build_cli_parser, normalize_run_subcommand, with_default_command
+from aha_cli.constants import AHA_WEB_SUPERVISED_ENV
 from aha_cli.domain.models import default_config, task_hardware_debug_can_write, utc_now
 from aha_cli.services.chat import auto_reply, claude_chat, codex_chat
 from aha_cli.services.claude_runner import run_claude_task
@@ -38,6 +39,7 @@ from aha_cli.services.hardware_bridge import (
     device_stream_page,
     device_transfer_lock_path,
     ensure_bridge,
+    stop_all_hardware_bridges,
     task_devices,
 )
 from aha_cli.services.hardware_file_transfer import (
@@ -56,6 +58,7 @@ from aha_cli.services.network_terminal import (
     network_stream_page,
     network_stream_path,
     network_transfer_lock_path,
+    stop_all_network_terminals,
     task_network_target,
 )
 from aha_cli.services.messages import format_event
@@ -2124,6 +2127,15 @@ def cmd_ui(args: argparse.Namespace) -> int:
         # no longer reap those children once the image is replaced; terminate the
         # Job tree here so they do not leak as orphans holding stale sessions.
         terminate_parent_death_children()
+        # Forced Job teardown cannot let a bridge persist its final stopped
+        # state, so reconcile dead PIDs before the replacement process starts.
+        stop_all_hardware_bridges(root, timeout=0.0)
+        stop_all_network_terminals(root, timeout=0.0)
+        if os.environ.get(AHA_WEB_SUPERVISED_ENV) == "1":
+            # The tray supervisor must observe a complete process exit before it
+            # starts the replacement, otherwise the old listener or bridge tree
+            # can survive an in-process exec on Windows.
+            return WEB_RESTART_EXIT_CODE
         # Replace the whole process image so updated source modules or a newly
         # installed onebin are loaded. os.execv preserves the PID and parent
         # relationship, while closing non-inheritable server sockets.

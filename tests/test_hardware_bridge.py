@@ -26,6 +26,7 @@ from aha_cli.services.hardware_bridge import (
     ensure_bridge,
     pid_alive,
     read_bridge_state,
+    stop_all_hardware_bridges,
 )
 from aha_cli.store.io import append_jsonl, iter_jsonl_from
 from aha_cli.services.serial_lock import SerialDeviceBusyError
@@ -542,6 +543,80 @@ class EnsureBridgeTests(unittest.TestCase):
                     except OSError:
                         pass
                 os.close(master)
+
+
+class BridgeShutdownTests(unittest.TestCase):
+    def test_stop_all_hardware_bridges_forces_stale_process_and_normalizes_state(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            device = "COM6"
+            state_path = device_bridge_state_path(root, device)
+            state_path.parent.mkdir(parents=True)
+            state_path.write_text(
+                json.dumps(
+                    {
+                        "device": device,
+                        "pid": 4242,
+                        "status": "running",
+                        "paused": False,
+                        "owner_instance": "web-instance",
+                        "transfer": {"id": "transfer-1"},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            socket_path = device_terminal_socket_path(root, device)
+            socket_path.touch()
+            alive = {"value": True}
+
+            def terminate(_pid: int, *, timeout: float) -> bool:
+                alive["value"] = False
+                return True
+
+            with mock.patch.dict(os.environ, {"AHA_WEB_INSTANCE_ID": "web-instance"}), mock.patch(
+                "aha_cli.services.hardware_bridge.pid_alive", side_effect=lambda _pid: alive["value"]
+            ), mock.patch(
+                "aha_cli.services.hardware_bridge.process_control.terminate_process", side_effect=terminate
+            ) as terminate_process:
+                result = stop_all_hardware_bridges(root, timeout=0.0)
+
+            state = json.loads(state_path.read_text(encoding="utf-8"))
+            controls, _ = iter_jsonl_from(state_path.parent / "control.jsonl", 0)
+
+            self.assertEqual(result, {"found": 1, "stopped": 1, "forced": 1, "remaining": []})
+            self.assertEqual(controls[-1]["cmd"], "stop")
+            self.assertEqual(state["status"], "stopped")
+            self.assertEqual(state["stop_reason"], "web-shutdown")
+            self.assertNotIn("transfer", state)
+            self.assertFalse(socket_path.exists())
+            terminate_process.assert_called_once_with(4242, timeout=1.0)
+
+    def test_stop_all_hardware_bridges_does_not_force_unowned_pid(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state_path = device_bridge_state_path(root, "COM6")
+            state_path.parent.mkdir(parents=True)
+            state_path.write_text(
+                json.dumps(
+                    {
+                        "device": "COM6",
+                        "pid": 5252,
+                        "status": "running",
+                        "owner_instance": "old-instance",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            with mock.patch.dict(os.environ, {"AHA_WEB_INSTANCE_ID": "new-instance"}), mock.patch(
+                "aha_cli.services.hardware_bridge.pid_alive", return_value=True
+            ), mock.patch(
+                "aha_cli.services.hardware_bridge.process_control.terminate_process"
+            ) as terminate_process:
+                result = stop_all_hardware_bridges(root, timeout=0.0)
+
+        self.assertEqual(result["forced"], 0)
+        self.assertEqual(result["remaining"], [5252])
+        terminate_process.assert_not_called()
 
 
 if __name__ == "__main__":

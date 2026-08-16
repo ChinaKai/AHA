@@ -9,6 +9,7 @@ import subprocess
 
 from aha_cli import platform
 from aha_cli.backends.registry import agent_backend_names, agent_backends, model_options
+from aha_cli.constants import AHA_WEB_INSTANCE_ENV
 from aha_cli.services.agents import (
     group_digital_human_permissions,
     read_path_candidates,
@@ -160,6 +161,8 @@ def service_health_payload(
     return {
         "ok": True,
         "service": "aha-web",
+        "pid": os.getpid(),
+        "instance_id": str(os.environ.get(AHA_WEB_INSTANCE_ENV) or ""),
         "aha_home": str(root),
         "aha_version": aha_version(root),
         "auth_required": auth_required,

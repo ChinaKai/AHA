@@ -10,6 +10,7 @@ import json
 import os
 import re
 import select
+import signal
 import socket
 import subprocess
 import sys
@@ -17,7 +18,7 @@ import time
 from pathlib import Path
 
 from aha_cli import platform, process_control
-from aha_cli.constants import PLAN_FILE, RUNS_DIR
+from aha_cli.constants import AHA_WEB_INSTANCE_ENV, PLAN_FILE, RUNS_DIR
 from aha_cli.domain.models import normalize_task_hardware_debug, utc_now
 from aha_cli.services.hardware_bridge import pid_alive
 from aha_cli.services.onebin import aha_cli_invocation
@@ -156,6 +157,72 @@ def network_status(root: Path, host: str, port: int = 23) -> dict:
     return result
 
 
+def stop_all_network_terminals(root: Path, *, timeout: float = 3.0) -> dict:
+    """Stop every Telnet bridge recorded under this AHA home."""
+
+    states: list[tuple[Path, dict, int]] = []
+    owner_instance = str(os.environ.get(AHA_WEB_INSTANCE_ENV) or "")
+    network_dir = aha_home_path(root) / "hardware" / "network"
+    if network_dir.is_dir():
+        for state_path in network_dir.glob("*/bridge.json"):
+            try:
+                state = json.loads(state_path.read_text(encoding="utf-8"))
+                pid = int(state.get("pid") or 0)
+                port = int(state.get("port") or 23)
+            except (OSError, ValueError, TypeError, json.JSONDecodeError):
+                continue
+            host = str(state.get("host") or "").strip()
+            if not host or pid <= 0:
+                continue
+            states.append((state_path, state, pid))
+            if pid_alive(pid):
+                append_jsonl(state_path.parent / "control.jsonl", {"cmd": "stop", "ts": utc_now()})
+
+    deadline = time.monotonic() + max(0.0, float(timeout))
+    while any(pid_alive(pid) for _path, _state, pid in states) and time.monotonic() < deadline:
+        time.sleep(0.02)
+
+    forced = 0
+    for _state_path, state, pid in states:
+        if not pid_alive(pid):
+            continue
+        if not owner_instance or str(state.get("owner_instance") or "") != owner_instance:
+            continue
+        forced += 1
+        try:
+            if not process_control.terminate_process(pid, timeout=1.0):
+                process_control.send_signal(pid, signal.SIGKILL)
+        except (OSError, ProcessLookupError, PermissionError):
+            pass
+
+    force_deadline = time.monotonic() + 1.0
+    while any(pid_alive(pid) for _path, _state, pid in states) and time.monotonic() < force_deadline:
+        time.sleep(0.02)
+
+    stopped = 0
+    remaining: list[int] = []
+    for state_path, state, pid in states:
+        if pid_alive(pid):
+            remaining.append(pid)
+            continue
+        stopped += 1
+        state.pop("transfer", None)
+        state.update(
+            {
+                "status": "stopped",
+                "paused": False,
+                "updated_at": utc_now(),
+                "stop_reason": "web-shutdown",
+            }
+        )
+        try:
+            state_path.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
+            (state_path.parent / "terminal.sock").unlink(missing_ok=True)
+        except OSError:
+            pass
+    return {"found": len(states), "stopped": stopped, "forced": forced, "remaining": remaining}
+
+
 def append_network_control(root: Path, host: str, port: int, command: dict) -> dict:
     cmd = str(command.get("cmd") or "").strip().lower()
     if cmd not in NETWORK_CONTROL_COMMANDS:
@@ -218,7 +285,15 @@ def ensure_network_terminal(
         process_control.assign_parent_death(proc)
         network_state_path(root, host, port).write_text(
             json.dumps(
-                {"host": host, "port": int(port), "pid": proc.pid, "status": "starting", "updated_at": utc_now()},
+                {
+                    "host": host,
+                    "port": int(port),
+                    "pid": proc.pid,
+                    "status": "starting",
+                    "owner_pid": os.getpid(),
+                    "owner_instance": str(child_env.get(AHA_WEB_INSTANCE_ENV) or ""),
+                    "updated_at": utc_now(),
+                },
                 ensure_ascii=False,
             ),
             encoding="utf-8",
@@ -409,6 +484,8 @@ class NetworkTerminalDaemon:
             "port": self.port,
             "pid": os.getpid(),
             "status": status,
+            "owner_pid": os.getppid(),
+            "owner_instance": str(os.environ.get(AHA_WEB_INSTANCE_ENV) or ""),
             "updated_at": utc_now(),
             "rules": self.engine.snapshot(),
             "capabilities": ["network-transfer-v1"] + (["network-transfer-v2"] if self._codec.binary_ready else []),
@@ -790,5 +867,6 @@ __all__ = [
     "network_terminal_socket_path",
     "network_transfer_lock_path",
     "network_target_referenced_by_active_task",
+    "stop_all_network_terminals",
     "task_network_target",
 ]

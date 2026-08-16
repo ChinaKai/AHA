@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import base64
 import json
+import os
 from pathlib import Path
 import socket
 import tempfile
 import threading
 import time
 import unittest
+from unittest import mock
 
 from aha_cli.services.network_terminal import (
     NetworkTerminalDaemon,
@@ -15,10 +17,13 @@ from aha_cli.services.network_terminal import (
     append_network_control,
     network_credentials_path,
     network_status,
+    network_state_path,
     network_stream_page,
     network_terminal_socket_path,
+    stop_all_network_terminals,
     task_network_target,
 )
+from aha_cli.store.io import iter_jsonl_from
 
 
 def wait_until(predicate, timeout: float = 3.0) -> bool:
@@ -31,6 +36,51 @@ def wait_until(predicate, timeout: float = 3.0) -> bool:
 
 
 class NetworkTerminalTests(unittest.TestCase):
+    def test_stop_all_network_terminals_forces_stale_process_and_normalizes_state(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            host, port = "192.0.2.10", 23
+            state_path = network_state_path(root, host, port)
+            state_path.parent.mkdir(parents=True)
+            state_path.write_text(
+                json.dumps(
+                    {
+                        "host": host,
+                        "port": port,
+                        "pid": 4343,
+                        "status": "running",
+                        "owner_instance": "web-instance",
+                        "transfer": {"id": "transfer-2"},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            socket_path = network_terminal_socket_path(root, host, port)
+            socket_path.touch()
+            alive = {"value": True}
+
+            def terminate(_pid: int, *, timeout: float) -> bool:
+                alive["value"] = False
+                return True
+
+            with mock.patch.dict(os.environ, {"AHA_WEB_INSTANCE_ID": "web-instance"}), mock.patch(
+                "aha_cli.services.network_terminal.pid_alive", side_effect=lambda _pid: alive["value"]
+            ), mock.patch(
+                "aha_cli.services.network_terminal.process_control.terminate_process", side_effect=terminate
+            ) as terminate_process:
+                result = stop_all_network_terminals(root, timeout=0.0)
+
+            state = json.loads(state_path.read_text(encoding="utf-8"))
+            controls, _ = iter_jsonl_from(state_path.parent / "control.jsonl", 0)
+
+        self.assertEqual(result, {"found": 1, "stopped": 1, "forced": 1, "remaining": []})
+        self.assertEqual(controls[-1]["cmd"], "stop")
+        self.assertEqual(state["status"], "stopped")
+        self.assertEqual(state["stop_reason"], "web-shutdown")
+        self.assertNotIn("transfer", state)
+        self.assertFalse(socket_path.exists())
+        terminate_process.assert_called_once_with(4343, timeout=1.0)
+
     def test_task_network_target_uses_v2_network_and_credentials(self) -> None:
         target = task_network_target(
             {
