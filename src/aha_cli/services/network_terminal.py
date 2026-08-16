@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import base64
+import binascii
 import codecs
+from collections import deque
 import json
 import os
 import re
@@ -34,9 +37,11 @@ NETWORK_CONTROL_COMMANDS = {
     "stop",
     "transfer_begin",
     "transfer_send",
+    "transfer_send_bytes",
     "transfer_end",
 }
 _STREAM_INLINE_LIMIT = 12000
+_MAX_NETWORK_TX_PENDING_BYTES = 512 * 1024
 _TERMINAL_TASK_STATUSES = {"completed", "failed", "blocked"}
 
 
@@ -144,6 +149,7 @@ def network_status(root: Path, host: str, port: int = 23) -> dict:
         "pid": state.get("pid"),
         "rules": state.get("rules") or [],
         "capabilities": state.get("capabilities") or [],
+        "telnet_binary": bool(state.get("telnet_binary")),
     }
     if isinstance(state.get("transfer"), dict):
         result["transfer"] = state["transfer"]
@@ -239,11 +245,21 @@ class TelnetCodec:
     NAWS = 31
     IS = 0
     SEND = 1
+    BINARY = 0
 
     def __init__(self, cols: int = 100, rows: int = 28) -> None:
         self._pending = b""
         self.cols = max(20, min(int(cols), 240))
         self.rows = max(8, min(int(rows), 80))
+        self.local_binary = False
+        self.remote_binary = False
+
+    @property
+    def binary_ready(self) -> bool:
+        return self.local_binary and self.remote_binary
+
+    def initial_negotiation(self) -> bytes:
+        return bytes((self.IAC, self.WILL, self.BINARY, self.IAC, self.DO, self.BINARY))
 
     @classmethod
     def _escape_iac(cls, data: bytes) -> bytes:
@@ -299,13 +315,21 @@ class TelnetCodec:
                     break
                 option = data[index + 2]
                 if command == self.WILL:
-                    response = self.DO if option in {self.ECHO, self.SGA} else self.DONT
+                    response = self.DO if option in {self.BINARY, self.ECHO, self.SGA} else self.DONT
+                    if option == self.BINARY:
+                        self.remote_binary = True
                     reply.extend((self.IAC, response, option))
                 elif command == self.DO:
-                    response = self.WILL if option in {self.SGA, self.TTYPE, self.NAWS} else self.WONT
+                    response = self.WILL if option in {self.BINARY, self.SGA, self.TTYPE, self.NAWS} else self.WONT
+                    if option == self.BINARY:
+                        self.local_binary = True
                     reply.extend((self.IAC, response, option))
                     if option == self.NAWS:
                         reply.extend(self.window_size())
+                elif command == self.WONT and option == self.BINARY:
+                    self.remote_binary = False
+                elif command == self.DONT and option == self.BINARY:
+                    self.local_binary = False
                 index += 3
                 continue
             index += 2
@@ -346,6 +370,8 @@ class NetworkTerminalDaemon:
         self._username_sent = False
         self._password_sent = False
         self._transfer: dict[str, str] | None = None
+        self._tx_queue: deque[dict[str, object]] = deque()
+        self._tx_pending_bytes = 0
         self.engine = ArmedRuleEngine(clock=clock)
         self._terminal_ipc = BridgeTerminalIpc(
             network_terminal_socket_path(root, host, port),
@@ -385,7 +411,8 @@ class NetworkTerminalDaemon:
             "status": status,
             "updated_at": utc_now(),
             "rules": self.engine.snapshot(),
-            "capabilities": ["network-transfer-v1"],
+            "capabilities": ["network-transfer-v1"] + (["network-transfer-v2"] if self._codec.binary_ready else []),
+            "telnet_binary": self._codec.binary_ready,
         }
         if self._transfer is not None:
             state["transfer"] = dict(self._transfer)
@@ -410,6 +437,11 @@ class NetworkTerminalDaemon:
             return False
         self._socket = sock
         self._codec = TelnetCodec(self._cols, self._rows)
+        try:
+            self._socket.sendall(self._codec.initial_negotiation())
+        except OSError:
+            self._disconnect()
+            return False
         self._decoder = codecs.getincrementaldecoder("utf-8")("replace")
         self._login_buffer = ""
         self._username_sent = False
@@ -419,6 +451,7 @@ class NetworkTerminalDaemon:
         return True
 
     def _disconnect(self) -> None:
+        self._discard_tx("network disconnected")
         if self._socket is not None:
             try:
                 self._socket.close()
@@ -426,18 +459,65 @@ class NetworkTerminalDaemon:
                 pass
         self._socket = None
 
+    def _discard_tx(self, reason: str) -> None:
+        if not self._tx_pending_bytes:
+            return
+        dropped = self._tx_pending_bytes
+        self._tx_queue.clear()
+        self._tx_pending_bytes = 0
+        self._log("system", f"discarded {dropped} pending TX bytes ({reason})", source="network")
+
     def _send(self, text: str, *, source: str, secret: bool = False, audit_text: str | None = None) -> None:
-        if not text or self._socket is None:
+        if not text:
             return
-        try:
-            self._socket.sendall(TelnetCodec.encode(text.encode("utf-8", "replace")))
-        except OSError:
-            self._disconnect()
+        self._send_bytes(
+            text.encode("utf-8", "replace"),
+            source=source,
+            secret=secret,
+            audit_text=audit_text if audit_text is not None else text,
+        )
+
+    def _send_bytes(self, payload: bytes, *, source: str, secret: bool = False, audit_text: str) -> None:
+        if not payload or self._socket is None:
             return
-        if secret:
-            self._log("system", "password submitted", source=source)
-        else:
-            self._log("tx", audit_text if audit_text is not None else text, source=source)
+        wire_payload = TelnetCodec.encode(payload)
+        if self._tx_pending_bytes + len(wire_payload) > _MAX_NETWORK_TX_PENDING_BYTES:
+            self._log("system", f"TX queue full; rejected {len(payload)} bytes", source=source)
+            return
+        self._tx_queue.append({
+            "data": wire_payload,
+            "offset": 0,
+            "source": source,
+            "secret": secret,
+            "audit_text": audit_text,
+        })
+        self._tx_pending_bytes += len(wire_payload)
+        self._flush_tx()
+
+    def _flush_tx(self) -> None:
+        while self._socket is not None and self._tx_queue:
+            pending = self._tx_queue[0]
+            payload = pending["data"]
+            offset = int(pending["offset"])
+            try:
+                written = int(self._socket.send(payload[offset:]) or 0)
+            except (BlockingIOError, InterruptedError):
+                return
+            except OSError:
+                self._disconnect()
+                return
+            if written <= 0:
+                return
+            written = min(written, len(payload) - offset)
+            pending["offset"] = offset + written
+            self._tx_pending_bytes -= written
+            if int(pending["offset"]) < len(payload):
+                return
+            self._tx_queue.popleft()
+            if bool(pending["secret"]):
+                self._log("system", "password submitted", source=str(pending["source"]))
+            else:
+                self._log("tx", str(pending["audit_text"]), source=str(pending["source"]))
 
     def _auto_login(self, text: str) -> None:
         self._login_buffer = (self._login_buffer + text)[-2048:]
@@ -478,6 +558,7 @@ class NetworkTerminalDaemon:
                 else:
                     if self._transfer is not None and self._transfer.get("id") != transfer_id:
                         self._log("system", "replacing stale file transfer lease", source="file-transfer")
+                    self._discard_tx("file transfer lease acquired")
                     self._transfer = {
                         "id": transfer_id,
                         "source": str(record.get("source") or "file-transfer"),
@@ -495,6 +576,24 @@ class NetworkTerminalDaemon:
                     data,
                     source="file-transfer",
                     audit_text=f"[file transfer {len(data.encode('utf-8'))} wire bytes]",
+                )
+            elif cmd == "transfer_send_bytes":
+                transfer_id = str(record.get("transfer_id") or "").strip()
+                if self._transfer is None or self._transfer.get("id") != transfer_id:
+                    self._log("system", "file transfer data rejected: lease mismatch", source="file-transfer")
+                    continue
+                if not self._codec.binary_ready:
+                    self._log("system", "file transfer bytes rejected: Telnet BINARY is not active", source="file-transfer")
+                    continue
+                try:
+                    payload = base64.b64decode(str(record.get("data") or ""), validate=True)
+                except (binascii.Error, ValueError):
+                    self._log("system", "file transfer bytes rejected: invalid base64", source="file-transfer")
+                    continue
+                self._send_bytes(
+                    payload,
+                    source="file-transfer",
+                    audit_text=f"[file transfer {len(payload)} binary bytes]",
                 )
             elif cmd == "transfer_end":
                 transfer_id = str(record.get("transfer_id") or "").strip()
@@ -588,10 +687,13 @@ class NetworkTerminalDaemon:
                 readers: list[object] = self._terminal_ipc.readables()
                 if remote_socket is not None:
                     readers.append(remote_socket)
+                writers: list[object] = self._terminal_ipc.writables()
+                if remote_socket is not None and self._tx_queue:
+                    writers.append(remote_socket)
                 try:
                     readable, writable, _ = select.select(
                         readers,
-                        self._terminal_ipc.writables(),
+                        writers,
                         [],
                         self._poll_interval,
                     )
@@ -599,6 +701,8 @@ class NetworkTerminalDaemon:
                     self._disconnect()
                     continue
                 self._apply_ipc_commands(self._terminal_ipc.process(readable, writable))
+                if remote_socket is not None and remote_socket in writable:
+                    self._flush_tx()
                 if remote_socket is None or remote_socket not in readable:
                     continue
                 try:
@@ -613,12 +717,15 @@ class NetworkTerminalDaemon:
                     self._write_state("connecting")
                     retry_at = self._clock() + 1.0
                     continue
+                binary_before = self._codec.binary_ready
                 payload, reply = self._codec.feed(chunk)
                 if reply and self._socket is not None:
                     try:
                         self._socket.sendall(reply)
                     except OSError:
                         self._disconnect()
+                if self._codec.binary_ready != binary_before:
+                    self._write_state("running" if self._socket else "connecting")
                 text = self._decoder.decode(payload)
                 if not text:
                     continue

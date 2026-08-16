@@ -27,6 +27,8 @@ transport are reused from ``hardware_session``.
 
 from __future__ import annotations
 
+import base64
+import binascii
 import codecs
 from collections import deque
 import ctypes
@@ -59,6 +61,7 @@ HARDWARE_BRIDGE_CONTROL_COMMANDS = {
     "send_raw",
     "transfer_begin",
     "transfer_send",
+    "transfer_send_bytes",
     "transfer_end",
     "arm",
     "disarm",
@@ -72,7 +75,7 @@ _MAX_SERIAL_TX_PENDING_BYTES = 256 * 1024
 # key-repeat is handed to the tty driver as one host-side burst.  Keep the first
 # byte immediate, then pace the remaining bytes without blocking the bridge loop.
 _SERIAL_TX_BYTE_INTERVAL = 0.001
-_SERIAL_TRANSFER_CHUNK_BYTES = 16
+_SERIAL_TRANSFER_TEXT_CHUNK_BYTES = 16
 _PR_SET_PDEATHSIG = 1
 _TERMINAL_TASK_STATUSES = {"completed", "failed", "blocked"}
 
@@ -387,7 +390,7 @@ class DeviceBridgeDaemon:
             "paused": self._paused,
             "updated_at": utc_now(),
             "rules": self.engine.snapshot(),
-            "capabilities": ["serial-transfer-v1"],
+            "capabilities": ["serial-transfer-v1", "serial-transfer-v2"],
         }
         if self._transfer is not None:
             state["transfer"] = dict(self._transfer)
@@ -445,16 +448,34 @@ class DeviceBridgeDaemon:
         chunk_size: int = 1,
         audit_text: str | None = None,
     ) -> None:
-        if not data_text or self.transport is None:
+        if not data_text:
             return
-        payload = data_text.encode("utf-8", "replace")
+        self._send_bytes(
+            data_text.encode("utf-8", "replace"),
+            source=source,
+            byte_interval=byte_interval,
+            chunk_size=chunk_size,
+            audit_text=data_text if audit_text is None else audit_text,
+        )
+
+    def _send_bytes(
+        self,
+        payload: bytes,
+        *,
+        source: str,
+        byte_interval: float | None = None,
+        chunk_size: int = 1,
+        audit_text: str,
+    ) -> None:
+        if not payload or self.transport is None:
+            return
         if self._tx_pending_bytes + len(payload) > _MAX_SERIAL_TX_PENDING_BYTES:
             self._log("system", f"TX queue full; rejected {len(payload)} bytes", source=source)
             return
         self._tx_queue.append({
             "data": payload,
             "offset": 0,
-            "text": data_text if audit_text is None else audit_text,
+            "text": audit_text,
             "source": source,
             "byte_interval": self._tx_byte_interval if byte_interval is None else max(0.0, float(byte_interval)),
             "chunk_size": max(1, int(chunk_size)),
@@ -549,13 +570,36 @@ class DeviceBridgeDaemon:
                     self._log("system", "file transfer data rejected: lease mismatch", source="file-transfer")
                     continue
                 data = str(record.get("data") or "")
-                wire_seconds = (10.0 * _SERIAL_TRANSFER_CHUNK_BYTES) / max(1, self.baudrate)
+                wire_seconds = (10.0 * _SERIAL_TRANSFER_TEXT_CHUNK_BYTES) / max(1, self.baudrate)
                 self._send(
                     data,
                     source="file-transfer",
                     byte_interval=max(0.0005, wire_seconds),
-                    chunk_size=_SERIAL_TRANSFER_CHUNK_BYTES,
+                    chunk_size=_SERIAL_TRANSFER_TEXT_CHUNK_BYTES,
                     audit_text=f"[file transfer {len(data.encode('utf-8'))} wire bytes]",
+                )
+            elif cmd == "transfer_send_bytes":
+                transfer_id = str(record.get("transfer_id") or "").strip()
+                if self._transfer is None or self._transfer.get("id") != transfer_id:
+                    self._log("system", "file transfer data rejected: lease mismatch", source="file-transfer")
+                    continue
+                try:
+                    payload = base64.b64decode(str(record.get("data") or ""), validate=True)
+                except (binascii.Error, ValueError):
+                    self._log("system", "file transfer bytes rejected: invalid base64", source="file-transfer")
+                    continue
+                # The OS UART driver already drains its TX buffer at the configured
+                # baudrate.  Extra userspace pacing doubles the delay on Windows,
+                # where pyserial.write() blocks until the bytes are accepted/sent.
+                # Raw receiver mode is designed for a continuous binary stream, so
+                # hand the whole frame to the driver and retain conservative pacing
+                # only for the legacy Shell text receiver above.
+                self._send_bytes(
+                    payload,
+                    source="file-transfer",
+                    byte_interval=0.0,
+                    chunk_size=len(payload),
+                    audit_text=f"[file transfer {len(payload)} binary bytes]",
                 )
             elif cmd == "transfer_end":
                 transfer_id = str(record.get("transfer_id") or "").strip()

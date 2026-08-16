@@ -69,6 +69,8 @@ aha hardware-file-send <run-id> <task-id> ./local.bin /tmp/remote.bin --channel 
 ~/.venvs/aha/bin/python -m pip install 'lark-channel-sdk>=1.2,<2'
 ```
 
+新版 bridge 会自动使用无需板端预装工具或目标架构二进制的 raw Shell receiver；旧 bridge 自动回退到可靠的 octal + SHA-256 传输。
+
 启用飞书助手后，按[飞书助手接入说明](docs/feishu-assistant.md)配置企业自建应用、
 `Allowed open IDs`、长连接事件和 task 状态推送。
 
@@ -171,6 +173,8 @@ aha hardware-file-send <run-id> <task-id> .\local.bin /tmp/remote.bin --channel 
 # 飞书助手
 & $AhaPython -m pip install "lark-channel-sdk>=1.2,<2"
 ```
+
+新版 bridge 会自动使用无需板端预装工具或目标架构二进制的 raw Shell receiver；旧 bridge 自动回退到可靠的 octal + SHA-256 传输。
 
 启用飞书助手后，按[飞书助手接入说明](docs/feishu-assistant.md)配置企业自建应用、
 `Allowed open IDs`、长连接事件和 task 状态推送。

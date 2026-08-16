@@ -26,6 +26,10 @@ Hardware debug operating rules:
   reads the file itself and forwards only protocol data to the Windows-owned hardware bridge, so do not rewrite a
   valid `/home/...` path as a Windows drive path. In a Windows backend, use a Windows path or WSL UNC path;
   a raw `/home/...` path is not a Windows filesystem path.
+  A v2 bridge automatically uses the cached raw Shell receiver for high-speed binary frames; older bridges
+  fall back to the safe octal receiver. The receiver verifies every block SHA-256 before ACK and also verifies
+  the final whole-file SHA-256; framing loss or corrupted blocks are NAKed and retried, and a failed transfer
+  never replaces the destination. Telnet raw transfer requires negotiated BINARY mode and otherwise falls back.
 - A network task stores only the target IP. Before opening it, use the enabled hardware-debug skill's
   bounded probe tool to discover SSH or Telnet. The current shared Network bridge is Telnet-only;
   use its persistent helpers only for a Telnet result, and use the recommended system `ssh` command

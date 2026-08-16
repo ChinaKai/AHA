@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import json
 from pathlib import Path
 import socket
@@ -60,6 +61,20 @@ class NetworkTerminalTests(unittest.TestCase):
         self.assertEqual(payload, b"login: ")
         self.assertEqual(reply, bytes((255, 253, 1)))
 
+    def test_telnet_codec_negotiates_binary_both_directions(self) -> None:
+        codec = TelnetCodec()
+        self.assertEqual(
+            codec.initial_negotiation(),
+            bytes((255, 251, TelnetCodec.BINARY, 255, 253, TelnetCodec.BINARY)),
+        )
+        payload, reply = codec.feed(
+            bytes((255, 253, TelnetCodec.BINARY, 255, 251, TelnetCodec.BINARY))
+        )
+        self.assertEqual(payload, b"")
+        self.assertTrue(codec.binary_ready)
+        self.assertIn(bytes((255, 251, TelnetCodec.BINARY)), reply)
+        self.assertIn(bytes((255, 253, TelnetCodec.BINARY)), reply)
+
     def test_telnet_codec_negotiates_xterm_type_and_window_size(self) -> None:
         codec = TelnetCodec(cols=120, rows=40)
         payload, reply = codec.feed(
@@ -98,6 +113,13 @@ class NetworkTerminalTests(unittest.TestCase):
             def serve() -> None:
                 conn, _address = listener.accept()
                 with conn:
+                    initial = bytearray()
+                    while len(initial) < 6:
+                        initial.extend(conn.recv(6 - len(initial)))
+                    conn.sendall(bytes((255, 253, TelnetCodec.BINARY, 255, 251, TelnetCodec.BINARY)))
+                    reply = bytearray()
+                    while len(reply) < 6:
+                        reply.extend(conn.recv(6 - len(reply)))
                     conn.sendall(b"board login: ")
                     received.append(read_line(conn))
                     conn.sendall(b"Password: ")
@@ -151,6 +173,13 @@ class NetworkTerminalTests(unittest.TestCase):
             def serve() -> None:
                 conn, _address = listener.accept()
                 with conn:
+                    initial = bytearray()
+                    while len(initial) < 6:
+                        initial.extend(conn.recv(6 - len(initial)))
+                    conn.sendall(bytes((255, 253, TelnetCodec.BINARY, 255, 251, TelnetCodec.BINARY)))
+                    reply = bytearray()
+                    while len(reply) < 6:
+                        reply.extend(conn.recv(6 - len(reply)))
                     conn.settimeout(0.05)
                     while not server_done.is_set():
                         try:
@@ -177,7 +206,8 @@ class NetworkTerminalTests(unittest.TestCase):
                 self.assertTrue(
                     wait_until(lambda: (network_status(root, host, port).get("transfer") or {}).get("id") == "transfer-1")
                 )
-                self.assertIn("network-transfer-v1", network_status(root, host, port).get("capabilities") or [])
+                self.assertTrue(wait_until(lambda: network_status(root, host, port).get("telnet_binary") is True))
+                self.assertIn("network-transfer-v2", network_status(root, host, port).get("capabilities") or [])
                 append_network_control(root, host, port, {"cmd": "send_raw", "data": "interactive-control"})
                 append_network_control(
                     root,
@@ -185,8 +215,19 @@ class NetworkTerminalTests(unittest.TestCase):
                     port,
                     {"cmd": "transfer_send", "transfer_id": "transfer-1", "data": "file-data"},
                 )
+                binary_payload = b"\x00\xffaha-binary\n"
+                append_network_control(
+                    root,
+                    host,
+                    port,
+                    {
+                        "cmd": "transfer_send_bytes",
+                        "transfer_id": "transfer-1",
+                        "data": base64.b64encode(binary_payload).decode("ascii"),
+                    },
+                )
                 ipc_client.sendall(b'{"type":"input","data":"interactive-web"}\n')
-                self.assertTrue(wait_until(lambda: b"file-data" in received))
+                self.assertTrue(wait_until(lambda: TelnetCodec.encode(binary_payload) in received))
 
                 append_network_control(root, host, port, {"cmd": "transfer_end", "transfer_id": "transfer-1"})
                 self.assertTrue(wait_until(lambda: not network_status(root, host, port).get("transfer")))
@@ -201,6 +242,8 @@ class NetworkTerminalTests(unittest.TestCase):
 
             self.assertNotIn(b"interactive-control", received)
             self.assertNotIn(b"interactive-web", received)
+            self.assertIn(b"file-data", received)
+            self.assertIn(TelnetCodec.encode(binary_payload), received)
 
 
 if __name__ == "__main__":

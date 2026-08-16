@@ -489,7 +489,12 @@ def build_parser(handlers: Mapping[str, Callable[[argparse.Namespace], int]]) ->
     hardware_file_send_p.add_argument("path", help="Local source file")
     hardware_file_send_p.add_argument("destination", help="Destination path on the board")
     hardware_file_send_p.add_argument("--channel", default="serial", help="Hardware channel: serial or network")
-    hardware_file_send_p.add_argument("--chunk-size", type=int, default=256)
+    hardware_file_send_p.add_argument(
+        "--chunk-size",
+        type=int,
+        default=None,
+        help="Frame size override; defaults to 256 for fallback, 16 KiB for Serial raw, 64 KiB for Network raw",
+    )
     hardware_file_send_p.add_argument("--timeout", type=float, default=20.0)
     hardware_file_send_p.add_argument("--retries", type=int, default=3)
     hardware_file_send_p.add_argument("--quiet", action="store_true")

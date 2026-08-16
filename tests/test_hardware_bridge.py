@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import json
 import os
 import select
@@ -141,10 +142,22 @@ class DeviceBridgeDaemonTests(unittest.TestCase):
                     device,
                     {"cmd": "transfer_send", "transfer_id": "transfer-1", "data": "file-data"},
                 )
-                injected = _await_bytes(master, b"file-data", timeout=2.0)
+                binary_payload = b"\x00\xffaha-binary\n"
+                append_bridge_control(
+                    root,
+                    device,
+                    {
+                        "cmd": "transfer_send_bytes",
+                        "transfer_id": "transfer-1",
+                        "data": base64.b64encode(binary_payload).decode("ascii"),
+                    },
+                )
+                injected = _await_bytes(master, binary_payload, timeout=2.0)
                 self.assertIn(b"file-data", injected)
+                self.assertIn(binary_payload, injected)
                 self.assertNotIn(b"blocked", injected)
                 self.assertEqual(read_bridge_state(root, device)["transfer"]["id"], "transfer-1")
+                self.assertIn("serial-transfer-v2", read_bridge_state(root, device)["capabilities"])
 
                 append_bridge_control(root, device, {"cmd": "transfer_end", "transfer_id": "transfer-1"})
                 append_bridge_control(root, device, {"cmd": "send_raw", "data": "allowed", "source": "interactive"})
@@ -154,6 +167,29 @@ class DeviceBridgeDaemonTests(unittest.TestCase):
                 append_bridge_control(root, device, {"cmd": "stop"})
                 thread.join(timeout=2.0)
                 os.close(master)
+
+    def test_binary_file_transfer_relies_on_uart_driver_pacing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            device = "/dev/ttyTEST0"
+            daemon = DeviceBridgeDaemon(root, device, 115200, self_reap=False)
+            append_bridge_control(root, device, {"cmd": "transfer_begin", "transfer_id": "transfer-1"})
+            append_bridge_control(
+                root,
+                device,
+                {
+                    "cmd": "transfer_send_bytes",
+                    "transfer_id": "transfer-1",
+                    "data": base64.b64encode(b"binary-data").decode("ascii"),
+                },
+            )
+
+            with mock.patch.object(daemon, "_send_bytes") as send_bytes:
+                daemon._apply_control()
+
+            self.assertEqual(send_bytes.call_args.args[0], b"binary-data")
+            self.assertEqual(send_bytes.call_args.kwargs["chunk_size"], len(b"binary-data"))
+            self.assertEqual(send_bytes.call_args.kwargs["byte_interval"], 0.0)
 
     def test_archive_previous_stream_moves_old_device_data(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

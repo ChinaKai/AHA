@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import base64
 from importlib import resources
 import json
 import os
@@ -40,7 +41,11 @@ from aha_cli.services.hardware_bridge import (
     task_devices,
 )
 from aha_cli.services.hardware_file_transfer import (
+    DEFAULT_CHUNK_SIZE,
+    DEFAULT_RAW_NETWORK_CHUNK_SIZE,
+    DEFAULT_RAW_SERIAL_CHUNK_SIZE,
     HardwareFileTransferError,
+    send_file_via_raw_shell,
     send_file_via_shell,
 )
 from aha_cli.services.network_terminal import (
@@ -1515,6 +1520,7 @@ def cmd_hardware_file_send(args: argparse.Namespace) -> int:
         stream_path = network_stream_path(root, host, port)
         transfer_lock_path = network_transfer_lock_path(root, host, port)
         transfer_capability = "network-transfer-v1"
+        fast_transfer_capability = "network-transfer-v2"
     else:
         device, baudrate = _bridge_target(root, run_id, args.task_id)
         if not device:
@@ -1524,6 +1530,7 @@ def cmd_hardware_file_send(args: argparse.Namespace) -> int:
         stream_path = None
         transfer_lock_path = device_transfer_lock_path(root, device)
         transfer_capability = "serial-transfer-v1"
+        fast_transfer_capability = "serial-transfer-v2"
 
     source = Path(host_native_path(str(args.path or ""), aha_home=str(root)))
     forwarded = should_forward_to_windows_web(root)
@@ -1536,7 +1543,9 @@ def cmd_hardware_file_send(args: argparse.Namespace) -> int:
         else:
             ensure_bridge(root, device, baudrate)
             state = _wait_serial_bridge(root, device)
-        native_transfer = transfer_capability in (state.get("capabilities") or [])
+        capabilities = state.get("capabilities") or []
+        native_fast_transfer = fast_transfer_capability in capabilities
+        native_transfer = native_fast_transfer or transfer_capability in capabilities
         transfer_id = uuid.uuid4().hex
         last_percent = -1
 
@@ -1554,6 +1563,18 @@ def cmd_hardware_file_send(args: argparse.Namespace) -> int:
                     "cmd": "transfer_send",
                     "transfer_id": transfer_id,
                     "data": text,
+                    "source": "hardware-file-send",
+                }
+                if network_channel:
+                    append_network_control(root, host, port, command)
+                else:
+                    append_bridge_control(root, device, command)
+
+            def send_bytes(data: bytes) -> None:
+                command = {
+                    "cmd": "transfer_send_bytes",
+                    "transfer_id": transfer_id,
+                    "data": base64.b64encode(data).decode("ascii"),
                     "source": "hardware-file-send",
                 }
                 if network_channel:
@@ -1578,18 +1599,38 @@ def cmd_hardware_file_send(args: argparse.Namespace) -> int:
                 else:
                     append_bridge_control(root, device, begin)
             try:
-                transfer = send_file_via_shell(
-                    root,
-                    endpoint,
-                    source,
-                    args.destination,
-                    send_text=send_text,
-                    stream_path=stream_path,
-                    chunk_size=args.chunk_size,
-                    timeout=args.timeout,
-                    retries=args.retries,
-                    progress=report_progress,
-                )
+                if native_fast_transfer:
+                    raw_chunk_size = args.chunk_size or (
+                        DEFAULT_RAW_NETWORK_CHUNK_SIZE if network_channel else DEFAULT_RAW_SERIAL_CHUNK_SIZE
+                    )
+                    transfer = send_file_via_raw_shell(
+                        root,
+                        endpoint,
+                        source,
+                        args.destination,
+                        send_text=send_text,
+                        send_bytes=send_bytes,
+                        stream_path=stream_path,
+                        chunk_size=raw_chunk_size,
+                        timeout=args.timeout,
+                        retries=args.retries,
+                        progress=report_progress,
+                    )
+                    receiver = "shell-raw-v3"
+                else:
+                    transfer = send_file_via_shell(
+                        root,
+                        endpoint,
+                        source,
+                        args.destination,
+                        send_text=send_text,
+                        stream_path=stream_path,
+                        chunk_size=args.chunk_size or DEFAULT_CHUNK_SIZE,
+                        timeout=args.timeout,
+                        retries=args.retries,
+                        progress=report_progress,
+                    )
+                    receiver = "shell-v2"
             finally:
                 if native_transfer:
                     end = {"cmd": "transfer_end", "transfer_id": transfer_id}
@@ -1626,7 +1667,7 @@ def cmd_hardware_file_send(args: argparse.Namespace) -> int:
             "chunks": transfer.chunks,
             "retries": transfer.retries,
             "elapsed_seconds": round(transfer.elapsed_seconds, 3),
-            "receiver": "shell-v1",
+            "receiver": receiver,
         }
         if args.json:
             print(json.dumps(payload, ensure_ascii=False))

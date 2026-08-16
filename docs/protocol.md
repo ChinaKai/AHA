@@ -342,13 +342,19 @@ aha hardware-file-send <run-id> <task-id> ./local.bin /tmp/remote.bin \
 ```
 
 The Network form uses the shared Telnet bridge; an SSH discovery result continues
-to use the system `ssh` command rather than the Telnet bridge. The sender bootstraps
-a cached `/tmp/.aha-recv-v1` shell receiver, sends numbered
-octal blocks with ACK and timeout retry, writes to a temporary destination, checks
-the final byte count and SHA-256, then atomically renames the file. A device-level
+to use the system `ssh` command rather than the Telnet bridge. A v2-capable bridge
+bootstraps a cached `/tmp/.aha-recv-v3` architecture-independent shell receiver and
+sends raw binary frames (16 KiB by default on Serial, 64 KiB on Network). Each frame
+has a recovery trailer and SHA-256: byte loss/duplication is detected by the trailer,
+content corruption is detected by the hash, and either condition returns NAK for
+immediate retry. Telnet advertises the v2 capability only after both directions
+complete BINARY negotiation, with IAC bytes escaped on the wire. Older bridges fall
+back to `/tmp/.aha-recv-v2` numbered octal blocks with per-block SHA-256. Both paths
+check the final byte count and whole-file SHA-256 before an atomic rename. A device-level
 transfer lease blocks terminal and armed-rule TX from interleaving with protocol
-data. The receiver requires an interactive shell, writable destination, `printf`,
-and `sha256sum` (directly or through BusyBox), but no dedicated transfer utility.
+data. The fast receiver requires an interactive shell, writable destination, `stty`,
+`dd`, and `sha256sum` (directly or through BusyBox), but no dedicated transfer utility,
+compiler, Python runtime, or target-architecture binary.
 The source path is resolved and opened by the backend process that runs the CLI,
 not by the Windows Web service that may own the Serial or Network bridge. A WSL
 backend should use an absolute WSL-visible path such as `/home/...` or `/mnt/c/...`;

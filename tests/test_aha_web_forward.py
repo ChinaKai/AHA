@@ -307,6 +307,74 @@ class AhaWebForwardCliTests(unittest.TestCase):
             self.assertEqual(requests[1][1]["channel"], "network")
             self.assertEqual(requests[1][1]["data"], "D0:\\\\0000\n")
 
+    def test_cmd_hardware_file_send_uses_raw_v3_for_capable_forwarded_serial_bridge(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root, run_id = self._init_run(tmp)
+            source = Path(tmp) / "payload.bin"
+            source.write_bytes(b"payload")
+            controls: list[dict] = []
+
+            def fake_forward(_root, method, path, *, query=None, payload=None, web_token=None, timeout=30.0):
+                self.assertEqual(method, "POST")
+                self.assertTrue(path.endswith("/hardware-attach"))
+                return {
+                    "ok": True,
+                    "bridge": {"status": "running", "capabilities": ["serial-transfer-v1", "serial-transfer-v2"]},
+                }
+
+            def fake_raw_transfer(
+                _root,
+                _device,
+                source_path,
+                destination,
+                *,
+                send_text,
+                send_bytes,
+                chunk_size,
+                **_kwargs,
+            ):
+                self.assertEqual(chunk_size, 16 * 1024)
+                send_text("F 0 1 deadbeef\n")
+                send_bytes(b"\x00\xff")
+                return HardwareFileTransferResult(
+                    source=str(source_path),
+                    destination=destination,
+                    size=7,
+                    sha256="239f59ed55e737c77147cf55ad0c1b030b6d7ee748a7426952f9b852d5a935e5",
+                    chunks=1,
+                    retries=0,
+                    elapsed_seconds=0.1,
+                )
+
+            with (
+                mock.patch("aha_cli.cli.should_forward_to_windows_web", return_value=True),
+                mock.patch("aha_cli.cli.web_forward", side_effect=fake_forward),
+                mock.patch("aha_cli.cli._task_hardware_write_allowed", return_value=True),
+                mock.patch("aha_cli.cli._bridge_target", return_value=("COM6", 115200)),
+                mock.patch("aha_cli.cli.append_bridge_control", side_effect=lambda _root, _device, command: controls.append(command)),
+                mock.patch("aha_cli.cli.send_file_via_raw_shell", side_effect=fake_raw_transfer),
+            ):
+                code, output = self.run_cli(
+                    "hardware-file-send",
+                    run_id,
+                    "task-001",
+                    str(source),
+                    "/tmp/payload.bin",
+                    "--quiet",
+                    "--json",
+                    aha_home=root,
+                )
+
+            self.assertEqual(code, 0)
+            self.assertEqual(json.loads(output)["receiver"], "shell-raw-v3")
+            self.assertEqual([item["cmd"] for item in controls], [
+                "transfer_begin",
+                "transfer_send",
+                "transfer_send_bytes",
+                "transfer_end",
+            ])
+            self.assertEqual(controls[2]["data"], "AP8=")
+
 
 if __name__ == "__main__":
     unittest.main()
