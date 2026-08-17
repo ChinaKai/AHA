@@ -111,6 +111,30 @@ class ControlHygieneTests(unittest.TestCase):
                 self.assertEqual(records[0][0]["cmd"], "pause")
                 self.assertEqual(read.call_count, 3)
 
+    def test_read_control_records_resets_offset_after_rotation(self) -> None:
+        """After the control inbox is rotated (archived + reset), the consumer's
+        offset into the old large file must not pin reads to the new file's end;
+        the read restarts from 0 so records appended after rotation are consumed."""
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "control.jsonl"
+            # Simulate the old large file: the consumer offset points deep inside.
+            old_size = 6 * 1024 * 1024
+            with path.open("ab") as f:
+                f.write(b"\n" * old_size)  # sparse-ish old file
+            records, offset = read_control_records(path, old_size - 100, limit=200)
+            # Old file was the same size -> no reset, offset stays at end.
+            self.assertEqual(offset, old_size)
+
+            # Now the file is rotated: replaced by a small new file.
+            with path.open("wb") as f:
+                f.write((json.dumps({"cmd": "pause", "ts": "t1"}) + "\n").encode("utf-8"))
+            records, offset = read_control_records(path, old_size, limit=200)
+            # The consumer had a large offset; the file shrank -> restart from 0
+            # and read the freshly-appended record.
+            self.assertEqual(len(records), 1)
+            self.assertEqual(records[0][0]["cmd"], "pause")
+            self.assertGreater(offset, 0)
+
     def test_rotate_control_file_archives_oversized_inbox_and_clears_offset(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "control.jsonl"

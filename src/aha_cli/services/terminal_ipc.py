@@ -34,8 +34,20 @@ def read_control_records(path: Path, start: int = 0, limit: int = 200) -> tuple[
     """
     last_error: OSError | None = None
     for attempt in range(_CONTROL_RETRY_ATTEMPTS):
+        # The control inbox may be rotated (archived + reset) while we hold a
+        # large offset into the old file. When the file has shrunk below our
+        # offset, restart from 0 on the new file so records appended after the
+        # rotation are still consumed; the archived records live in archive/.
         try:
-            return iter_jsonl_records_from(path, start=start, limit=limit)
+            file_size = path.stat().st_size if path.exists() else 0
+        except OSError as exc:
+            last_error = exc
+            if attempt + 1 < _CONTROL_RETRY_ATTEMPTS:
+                time.sleep(_CONTROL_RETRY_DELAY * (attempt + 1))
+            continue
+        effective_start = 0 if start > file_size else start
+        try:
+            return iter_jsonl_records_from(path, start=effective_start, limit=limit)
         except OSError as exc:
             last_error = exc
             if attempt + 1 < _CONTROL_RETRY_ATTEMPTS:
