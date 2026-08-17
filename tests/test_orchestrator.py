@@ -1379,6 +1379,81 @@ class OrchestratorTests(unittest.TestCase):
                 self.assertEqual(sub_agent["assignment"], expected_assignment)
                 self.assertTrue(detail["task"]["coordination"]["followup_started_at"])
 
+    def test_spawn_sub_reuse_respects_task_preferred_sub_backend(self) -> None:
+        """Reusing an old sub-agent whose backend differs from the task's preferred
+        sub-backend must switch to the task preference, not silently keep the stale
+        backend (which was the cause of the 'sub-agent did not flow' reports)."""
+        from aha_cli.services.orchestrator import dispatch_spawn_to_existing_sub_agent
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Sub reuse backend", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                detail = task_snapshot(root, run_id, "task-001")["task"]
+                # Add a sub-agent whose current backend is codex (a stale backend
+                # from a prior scope) so reuse must switch to the task preference.
+                add_agent(
+                    root,
+                    run_id,
+                    "task-001",
+                    backend="codex",
+                    role="sub",
+                    model="env:gpt-5.5",
+                    created_by="main",
+                )
+                detail = task_snapshot(root, run_id, "task-001")["task"]
+                sub = next(agent for agent in detail["agents"] if agent["role"] == "sub")
+                # The task prefers claude for sub-agents.
+                task_for_dispatch = {**detail, "preferred_sub_backend": "claude", "preferred_sub_model": "env:kimi-k2.6"}
+
+                with mock.patch("aha_cli.services.orchestrator.start_backend", return_value={"status": "running"}) as start_backend:
+                    dispatch_spawn_to_existing_sub_agent(
+                        root,
+                        run_id,
+                        "task-001",
+                        task_for_dispatch,
+                        {"type": "spawn_sub", "title": "Reuse", "agent_id": "sub-001"},
+                        sub,
+                        "Reuse for test",
+                        reason="test",
+                    )
+
+        self.assertEqual(start_backend.call_args.kwargs["backend"], "claude")
+        self.assertEqual(start_backend.call_args.kwargs["model"], "env:kimi-k2.6")
+
+    def test_spawn_sub_start_failure_records_concrete_error_event(self) -> None:
+        """A backend start exception must be recorded so failures are diagnosable
+        (previously swallowed). The sub-agent must also be marked failed, not left
+        in a stale running state."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Sub error event", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                reply = json.dumps({"actions": [{"type": "spawn_sub", "title": "Inspect", "backend": "codex"}], "response": "delegating"})
+
+                def raise_for_sub(*args, **kwargs):
+                    target = kwargs.get("target") or (args[2] if len(args) > 2 else "")
+                    if target == "sub-001":
+                        raise OSError("wsl.exe not found")
+                    return {"status": "running"}
+
+                with mock.patch("aha_cli.services.orchestrator.start_backend", side_effect=raise_for_sub):
+                    executed = execute_actions(root, run_id, "task-001", reply)
+
+                detail = task_snapshot(root, run_id, "task-001")["task"]
+                sub = next(agent for agent in detail["agents"] if agent["role"] == "sub")
+                events, _ = iter_jsonl_from(event_path(root, run_id), 0)
+        # The failure is surfaced (sub_agent_backend_failed) and the agent is failed
+        # rather than left stale.
+        self.assertTrue(any(event.get("type") == "sub_agent_backend_failed" for event in events))
+        self.assertEqual(sub["status"], "failed")
+
     def test_spawn_sub_action_model_normalizes_selected_sub_agent_model(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

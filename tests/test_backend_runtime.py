@@ -239,6 +239,57 @@ class BackendRuntimeTests(unittest.TestCase):
         for part in ("AHA_WSL_DISTRO", "HTTP_PROXY", "NO_PROXY"):
             self.assertIn(part, env["WSLENV"].split(":"))
 
+    def test_start_backend_wsl_launch_failure_falls_back_to_windows_backend(self) -> None:
+        """A failed WSL launch must fall back to the Windows-side backend instead
+        of leaving the sub-agent dead with a swallowed exception."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "WSL fallback", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+
+            class FakeProcess:
+                pid = 4242
+
+            calls: list[list[str]] = []
+
+            def fake_popen(command, **kwargs):
+                calls.append(command)
+                # The first call is the WSL launch; it fails. The second (fallback)
+                # is the local launch and succeeds.
+                if command[0] == "wsl.exe":
+                    raise OSError("wsl.exe not found")
+                return FakeProcess()
+
+            with (
+                mock.patch.dict(os.environ, {"SystemRoot": r"C:\Windows"}, clear=True),
+                mock.patch(
+                    "aha_cli.services.backend_runtime._resolve_wsl_target",
+                    return_value={
+                        "distro": "Ubuntu-24.04",
+                        "aha_home": "/mnt/c/Users/toope/.aha",
+                        "aha_bin": "/mnt/c/Users/toope/AppData/Local/AHA/aha",
+                        "backend_bin": "/home/kaikai/.nvm/versions/node/v24.18.0/bin/codex",
+                        "python": "/usr/bin/python3",
+                    },
+                ),
+                mock.patch(
+                    "aha_cli.services.backend_runtime.subprocess.Popen",
+                    side_effect=fake_popen,
+                ) as popen,
+                mock.patch("aha_cli.services.backend_runtime.pid_is_running", side_effect=lambda pid: bool(pid)),
+            ):
+                result = start_backend(root / ".aha", run_id, "main", task_id="task-001")
+
+            # Two launch attempts: the failed WSL one, then the local fallback.
+            self.assertEqual(len(calls), 2)
+            self.assertEqual(calls[0][0], "wsl.exe")
+            self.assertNotEqual(calls[1][0], "wsl.exe")
+            self.assertEqual(popen.call_count, 2)
+            self.assertTrue(result.get("started"))
+
     def test_resolve_wsl_target_requires_wsl_workspace(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

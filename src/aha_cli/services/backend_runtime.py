@@ -1284,7 +1284,148 @@ def start_backend(
             current["already_running"] = True
             return current
         wsl_target = _resolve_wsl_target(root, workspace, backend)
-        command = _agent_chat_command(
+        log_path = backend_log_path(root, run_id, target, task_id)
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        proxy_env = _backend_proxy_env(root, run_id, target, task_id)
+        aha_env = {
+            "AHA_ROOT": str(root),
+            "AHA_RUN_ID": run_id,
+            "AHA_AGENT_ID": target,
+            "AHA_BACKEND": backend,
+            "AHA_MODEL": resolved_model or "",
+            "AHA_GENERATED_BY": generated_by_for_backend_model(backend, resolved_model),
+            # Force UTF-8 mode so subprocess pipes and default file I/O inside the
+            # backend use UTF-8 regardless of the host locale (e.g. GBK on Chinese
+            # Windows), matching the UTF-8 stream-json the CLIs emit.
+            "PYTHONUTF8": "1",
+        }
+        if task_id:
+            aha_env["AHA_TASK_ID"] = task_id
+
+        # The actual spawn+state-write+event, parameterized by the launch target.
+        # Kept as a closure so a failed WSL launch can fall back to the Windows
+        # backend (a WSL workspace should prefer the distro's native backend, but
+        # if wsl.exe or the distro probe fails we must not leave the sub-agent dead).
+        def launch(launch_command: list[str], launch_wsl: dict | None) -> dict:
+            launch_aha_env = dict(aha_env)
+            if launch_wsl:
+                launch_aha_env["AHA_WSL_DISTRO"] = str(launch_wsl.get("distro") or "").strip()
+                launch_aha_env["AHA_WSL_AHA_HOME"] = str(launch_wsl.get("aha_home") or "").strip()
+                # WSLENV declares which variables pass through wsl.exe into the
+                # distro. Task/agent proxy vars must be declared too, or the WSL
+                # watcher and its backend CLI children lose the egress config.
+                wslenv_parts = ["AHA_WSL_DISTRO", "AHA_WSL_AHA_HOME"]
+                wslenv_parts.extend(
+                    key for key in (proxy_env or {}) if key.upper() in _WSL_PROXY_ENV_KEY_SET
+                )
+                existing_wslenv = os.environ.get("WSLENV", "")
+                wslenv_parts.append(existing_wslenv)
+                launch_aha_env["WSLENV"] = ":".join(part for part in wslenv_parts if part)
+            log_file = log_path.open("ab")
+            try:
+                # WSL launches get a scrubbed environment: wsl.exe places the
+                # caller's translated PATH ahead of the distro defaults, so the
+                # full service env (AHA install dir, Windows tool dirs) would
+                # hijack PATH lookups inside the backend. Everything the distro
+                # needs crosses via WSLENV-declared AHA_* variables instead.
+                launch_env = (
+                    _wsl_backend_process_env(launch_aha_env, proxy_env)
+                    if launch_wsl
+                    else _backend_process_env(proxy_env, claude_config, codex_config, launch_aha_env)
+                )
+                proc = subprocess.Popen(
+                    launch_command,
+                    cwd=root,
+                    env=launch_env,
+                    stdout=log_file,
+                    stderr=subprocess.STDOUT,
+                    stdin=subprocess.DEVNULL,
+                    start_new_session=True,
+                    **platform.hidden_subprocess_kwargs(),
+                )
+            finally:
+                log_file.close()
+            state = {
+                "target": target,
+                "task_id": task_id,
+                "backend": f"{backend}-chat",
+                "status": "running",
+                "pid": proc.pid,
+                "managed": True,
+                "started_at": utc_now(),
+                "stopped_at": None,
+                "log_path": str(log_path),
+                "command": launch_command,
+                "sandbox": sandbox,
+                "approval": approval,
+                "reasoning_effort": reasoning_effort,
+                "model": resolved_model,
+                "requested_model": requested_model,
+                "resolved_model": resolved_model,
+                "from_start": from_start,
+                "proxy_enabled": proxy_env is not None and bool(proxy_env),
+            }
+            if launch_wsl:
+                state["wsl_distro"] = str(launch_wsl.get("distro") or "").strip() or None
+                state["wsl_native_home"] = str(launch_wsl.get("native_home") or "").strip() or None
+            _write_state(root, run_id, target, state, task_id)
+            append_event(
+                root,
+                run_id,
+                "backend_started",
+                {
+                    "target": target,
+                    "task_id": task_id,
+                    "pid": proc.pid,
+                    "log_path": str(log_path),
+                    "requested_model": requested_model,
+                    "resolved_model": resolved_model,
+                },
+            )
+            return backend_status(root, run_id, target, task_id) | {"started": True}
+
+        if wsl_target:
+            # Prefer the WSL backend for a WSL workspace: run the whole watcher in
+            # the distro so codex/claude operate on native Linux paths. If the
+            # launch itself fails (wsl.exe missing, distro not running, no native
+            # backend), fall back to the Windows-side backend instead of leaving
+            # the sub-agent dead with a swallowed exception.
+            wsl_command = _agent_chat_command(
+                run_id,
+                target,
+                backend=backend,
+                aha_home=root,
+                codex_bin=codex_bin,
+                claude_bin=claude_bin,
+                model=model,
+                reasoning_effort=reasoning_effort,
+                sandbox=sandbox,
+                approval=approval,
+                interval=interval,
+                from_start=from_start,
+                no_json=no_json,
+                extra_args=extra_args,
+                prompt_prefix=prompt_prefix,
+                task_id=task_id,
+                wsl_target=wsl_target,
+            )
+            try:
+                return launch(wsl_command, wsl_target)
+            except OSError as exc:
+                # Record the WSL attempt then fall through to the Windows backend.
+                append_event(
+                    root,
+                    run_id,
+                    "backend_start_failed",
+                    {
+                        "target": target,
+                        "task_id": task_id,
+                        "backend": f"{backend}-chat",
+                        "message": f"WSL backend launch failed ({exc}); falling back to Windows backend",
+                        "fallback": True,
+                    },
+                )
+        local_command = _agent_chat_command(
             run_id,
             target,
             backend=backend,
@@ -1301,100 +1442,9 @@ def start_backend(
             extra_args=extra_args,
             prompt_prefix=prompt_prefix,
             task_id=task_id,
-            wsl_target=wsl_target,
+            wsl_target=None,
         )
-        log_path = backend_log_path(root, run_id, target, task_id)
-        log_path.parent.mkdir(parents=True, exist_ok=True)
-        log_file = log_path.open("ab")
-        proxy_env = _backend_proxy_env(root, run_id, target, task_id)
-        aha_env = {
-            "AHA_ROOT": str(root),
-            "AHA_RUN_ID": run_id,
-            "AHA_AGENT_ID": target,
-            "AHA_BACKEND": backend,
-            "AHA_MODEL": resolved_model or "",
-            "AHA_GENERATED_BY": generated_by_for_backend_model(backend, resolved_model),
-            # Force UTF-8 mode so subprocess pipes and default file I/O inside the
-            # backend use UTF-8 regardless of the host locale (e.g. GBK on Chinese
-            # Windows), matching the UTF-8 stream-json the CLIs emit.
-            "PYTHONUTF8": "1",
-        }
-        if task_id:
-            aha_env["AHA_TASK_ID"] = task_id
-        if wsl_target:
-            aha_env["AHA_WSL_DISTRO"] = str(wsl_target.get("distro") or "").strip()
-            aha_env["AHA_WSL_AHA_HOME"] = str(wsl_target.get("aha_home") or "").strip()
-            # WSLENV declares which variables pass through wsl.exe into the
-            # distro. Task/agent proxy vars must be declared too, or the WSL
-            # watcher and its backend CLI children lose the egress config.
-            wslenv_parts = ["AHA_WSL_DISTRO", "AHA_WSL_AHA_HOME"]
-            wslenv_parts.extend(
-                key for key in (proxy_env or {}) if key.upper() in _WSL_PROXY_ENV_KEY_SET
-            )
-            existing_wslenv = os.environ.get("WSLENV", "")
-            wslenv_parts.append(existing_wslenv)
-            aha_env["WSLENV"] = ":".join(part for part in wslenv_parts if part)
-        try:
-            # WSL launches get a scrubbed environment: wsl.exe places the
-            # caller's translated PATH ahead of the distro defaults, so the
-            # full service env (AHA install dir, Windows tool dirs) would
-            # hijack PATH lookups inside the backend. Everything the distro
-            # needs crosses via WSLENV-declared AHA_* variables instead.
-            launch_env = (
-                _wsl_backend_process_env(aha_env, proxy_env)
-                if wsl_target
-                else _backend_process_env(proxy_env, claude_config, codex_config, aha_env)
-            )
-            process = subprocess.Popen(
-                command,
-                cwd=root,
-                env=launch_env,
-                stdout=log_file,
-                stderr=subprocess.STDOUT,
-                stdin=subprocess.DEVNULL,
-                start_new_session=True,
-                **platform.hidden_subprocess_kwargs(),
-            )
-        finally:
-            log_file.close()
-        state = {
-            "target": target,
-            "task_id": task_id,
-            "backend": f"{backend}-chat",
-            "status": "running",
-            "pid": process.pid,
-            "managed": True,
-            "started_at": utc_now(),
-            "stopped_at": None,
-            "log_path": str(log_path),
-            "command": command,
-            "sandbox": sandbox,
-            "approval": approval,
-            "reasoning_effort": reasoning_effort,
-            "model": resolved_model,
-            "requested_model": requested_model,
-            "resolved_model": resolved_model,
-            "from_start": from_start,
-            "proxy_enabled": proxy_env is not None and bool(proxy_env),
-        }
-        if wsl_target:
-            state["wsl_distro"] = str(wsl_target.get("distro") or "").strip() or None
-            state["wsl_native_home"] = str(wsl_target.get("native_home") or "").strip() or None
-        _write_state(root, run_id, target, state, task_id)
-        append_event(
-            root,
-            run_id,
-            "backend_started",
-            {
-                "target": target,
-                "task_id": task_id,
-                "pid": process.pid,
-                "log_path": str(log_path),
-                "requested_model": requested_model,
-                "resolved_model": resolved_model,
-            },
-        )
-        return backend_status(root, run_id, target, task_id) | {"started": True}
+        return launch(local_command, None)
 
 
 def _stop_wsl_backend_process(

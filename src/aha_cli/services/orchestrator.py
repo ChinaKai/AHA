@@ -527,7 +527,17 @@ def dispatch_spawn_to_existing_sub_agent(
     scope_id, scope_explicit = scope_id_for(action, assignment_id)
     same_scope = scope_explicit and scope_id == previous_scope_id
     set_agent_status(root, run_id, task_id, agent_id, "pending")
-    backend = str(action.get("backend") or agent.get("backend") or task.get("preferred_sub_backend") or task.get("preferred_backend") or "codex")
+    # Backend selection order: an explicit spawn override wins, then the task's
+    # preferred sub-backend (so reusing an old sub-agent with a different backend
+    # does not silently keep the stale backend), then the reused agent's backend
+    # only for a same-scope continuation, then run/task defaults.
+    backend = str(
+        action.get("backend")
+        or task.get("preferred_sub_backend")
+        or (agent.get("backend") if same_scope else None)
+        or task.get("preferred_backend")
+        or "codex"
+    )
     model = action.get("model") if action.get("model") is not None else agent.get("model")
     if not same_scope and action.get("model") is None and task.get("preferred_sub_model") is not None:
         model = task.get("preferred_sub_model")
@@ -628,7 +638,22 @@ def dispatch_spawn_to_existing_sub_agent(
                 from_start=False,
                 task_id=task_id,
             )
-        except Exception:
+        except Exception as exc:  # noqa: BLE001 - surface the real failure instead of swallowing it
+            # Record the concrete error so a backend start failure is diagnosable
+            # (previously the exception was dropped and the sub-agent was left in a
+            # stale "running" state with no trace of why).
+            append_event(
+                root,
+                run_id,
+                "agent_error",
+                {
+                    "source": "main",
+                    "task_id": task_id,
+                    "target": agent_id,
+                    "message": f"failed to start {backend} backend for sub-agent: {exc}",
+                    "reason": "backend_start_failed",
+                },
+            )
             handle_sub_agent_start_failure(root, run_id, task_id, agent_id, request_summary=False)
         else:
             if backend_start_result_failed(start_result):
@@ -1049,7 +1074,19 @@ def execute_actions(
                     from_start=True,
                     task_id=task_id,
                 )
-            except Exception:
+            except Exception as exc:  # noqa: BLE001 - surface the concrete failure
+                append_event(
+                    root,
+                    run_id,
+                    "agent_error",
+                    {
+                        "source": "main",
+                        "task_id": task_id,
+                        "target": agent["id"],
+                        "message": f"failed to start {backend} backend for sub-agent: {exc}",
+                        "reason": "backend_start_failed",
+                    },
+                )
                 handle_sub_agent_start_failure(root, run_id, task_id, agent["id"], request_summary=False)
             else:
                 if backend_start_result_failed(start_result):
