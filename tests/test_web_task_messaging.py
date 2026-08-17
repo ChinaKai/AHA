@@ -68,6 +68,46 @@ class WebTaskMessagingTests(unittest.TestCase):
         self.assertFalse(start_backend.call_args.kwargs["from_start"])
         self.assertEqual([item["message"] for item in messages], ["continue"])
 
+    def test_send_to_waiting_main_with_stopped_backend_autostarts(self) -> None:
+        """When main is waiting for subagents and its backend has stopped, a user
+        message must immediately restart the backend instead of queueing until the
+        sub-agents complete."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Waiting main autostart", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                # main is waiting for sub-agents (backend therefore stopped).
+                set_agent_status(root, run_id, "task-001", "main", "waiting", waiting_reason="subagents")
+                set_task_status(root, run_id, "task-001", "running")
+
+                with (
+                    mock.patch("aha_cli.web.task_messaging.backend_status", return_value={"status": "stopped"}),
+                    mock.patch("aha_cli.web.task_messaging.start_backend", return_value={"status": "running"}) as start_backend,
+                ):
+                    result = handle_send_payload(
+                        root,
+                        run_id,
+                        {
+                            "target": "main",
+                            "task_id": "task-001",
+                            "role": "main",
+                            "sender": "browser",
+                            "message": "interrupt while waiting",
+                        },
+                        command_handler=lambda *_args: (False, None, {}),
+                        debug_logger=lambda *_args, **_kwargs: None,
+                    )
+
+                messages, _ = iter_jsonl_from(inbox_path(root, run_id, "main", "task-001"), 0)
+
+        self.assertEqual(result["backend"]["status"], "running")
+        start_backend.assert_called_once()
+        self.assertFalse(start_backend.call_args.kwargs["from_start"])
+        self.assertTrue(any("interrupt while waiting" in str(item.get("message") or "") for item in messages))
+
     def test_send_can_suppress_backend_start_and_advance_offset(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
