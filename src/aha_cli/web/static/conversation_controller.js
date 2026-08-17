@@ -18,7 +18,6 @@
     const conversationFiltersEl = state.conversationFiltersEl;
     const logPageLimit = Number(state.logPageLimit || 200);
     const conversationPageLimit = Number(state.conversationPageLimit || 30);
-    const initialChatEventId = String(state.initialChatEventId || "");
     const realtimeEventCacheLimit = Math.max(200, Number(state.realtimeEventCacheLimit || 2000));
     const realtimeSeenEventCacheLimit = Math.max(realtimeEventCacheLimit, Number(state.realtimeSeenEventCacheLimit || realtimeEventCacheLimit * 2));
     const sessionRefreshFallbackMs = Number(state.sessionRefreshFallbackMs || 5000);
@@ -35,13 +34,6 @@
     const getOpenPromptMetricsKey = state.openPromptMetricsKey || (() => "");
     const documentRef = state.documentRef || deps.documentRef || document;
     let conversationFiltersOpen = false;
-    let initialChatLoadPending = Boolean(initialChatEventId);
-
-    function conversationContainsInitialChat(stateValue) {
-      return Boolean(stateValue?.events?.some(event => (
-        String(event?._cursor ?? event?.cursor ?? "") === initialChatEventId
-      )));
-    }
 
     function promptMetricsKey(taskId, target = backendTarget()) {
       return `${taskId || ""}:${target || ""}`;
@@ -728,29 +720,12 @@
       if (getActiveTab() !== "conversation" || !getSelectedTaskId()) return;
       const taskId = getSelectedTaskId();
       const target = backendTarget();
-      let stateValue = await loadConversationPage(
-        taskId,
-        target,
-        false,
-        false,
-        initialChatLoadPending ? { limit: 200 } : {}
-      );
-      if (!initialChatLoadPending || target !== "main") return;
-      // Bound the deep-link walk-back. Landing on one deep-linked message must not
-      // load the entire chat history (thousands of events, many page requests), which
-      // keeps the panel in a "Loading..." state for a long time on big conversations.
-      // If the target cursor is not reached within the cap, render the newest events
-      // and let the user scroll up / Load older to reach it.
-      const MAX_DEEP_LINK_WALK_PAGES = 2;
-      let walked = 0;
-      let previousBeforeOffset = stateValue?.beforeOffset;
-      while (stateValue?.hasMore && !conversationContainsInitialChat(stateValue) && walked < MAX_DEEP_LINK_WALK_PAGES) {
-        stateValue = await loadConversationPage(taskId, target, true, false, { limit: 200 });
-        walked += 1;
-        if (stateValue?.beforeOffset === previousBeforeOffset) break;
-        previousBeforeOffset = stateValue?.beforeOffset;
-      }
-      initialChatLoadPending = false;
+      // Lazy load: the initial page is always a single page of the newest events.
+      // A deep-link (chat_event_id) does NOT walk the whole history back to the
+      // target — that loaded hundreds/thousands of events on big conversations and
+      // kept the panel in a long Loading state. If the deep-linked message is within
+      // the newest page it is focused; otherwise the user reaches it via Load older.
+      await loadConversationPage(taskId, target, false, false);
     }
 
     function isCurrentConversationTarget(taskId, target) {
@@ -1211,6 +1186,7 @@
         estimatedItemHeight: 48,
         anchorBottom: options.anchorBottom !== false,
         initialScrollTop: Number(options.initialScrollTop) || 0,
+        onScrollAway: typeof options.onScrollAway === "function" ? options.onScrollAway : null,
         overscan: 6
       });
       if (!list) return null;

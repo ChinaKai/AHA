@@ -8,7 +8,8 @@
       estimatedItemHeight: 40,
       anchorBottom: false,   // when true, keep pinned to the newest (bottom) item
       initialScrollTop: 0,   // scroll offset to restore on mount when not anchoring
-      bufferPx: 80           // how far from the bottom still counts as "near bottom"
+      bufferPx: 80,          // how far from the bottom still counts as "near bottom"
+      onScrollAway: null     // called when the user scrolls away from the anchored bottom
     };
     const cfg = { ...defaults, ...options };
     let itemCount = 0;
@@ -182,6 +183,10 @@
         // keep anchored; no-op here, scroll position is already at bottom
       } else if (anchorBottom) {
         anchorBottom = false;
+        // The user scrolled away from the bottom. Let the host disable realtime
+        // auto-follow so subsequent re-renders keep the user's scroll position
+        // instead of yanking them back to the newest message.
+        cfg.onScrollAway?.();
       }
       requestRender();
     }

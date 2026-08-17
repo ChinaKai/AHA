@@ -87,9 +87,12 @@ class FrontendStaticTests(unittest.TestCase):
         self.assertIn('url.searchParams.set("search_query", options.matchQuery)', search_controller)
         self.assertIn("AHASearchHighlight", memo_controller)
         self.assertIn("function highlightFirst", search_highlight)
-        self.assertIn("conversationContainsInitialChat", conversation_controller)
-        self.assertIn("{ limit: 200 }", conversation_controller)
-        self.assertIn("while (stateValue?.hasMore", conversation_controller)
+        # Deep-link (chat_event_id) is lazy: the initial page is a single newest
+        # page; the conversation no longer walks the whole history back to the
+        # target (which loaded hundreds/thousands of events on big conversations).
+        self.assertIn("Lazy load", conversation_controller)
+        self.assertIn("await loadConversationPage(taskId, target, false, false);", conversation_controller)
+        self.assertNotIn("while (stateValue?.hasMore", conversation_controller)
         self.assertIn('querySelectorAll?.("[data-chat-event-cursor]")', panel_controller)
         self.assertIn('message.classList?.add("global-search-chat-hit")', panel_controller)
         self.assertIn("message.scrollIntoView?.", panel_controller)

@@ -101,6 +101,16 @@
       return panelEl.scrollHeight - panelEl.scrollTop - panelEl.clientHeight < 80;
     }
 
+    // Scrolling the panel away from the bottom (non-virtualized conversation) must
+    // disable realtime auto-follow so re-renders keep the user's position instead of
+    // yanking them back to the newest message. Scrolling back to the bottom
+    // re-engages follow via isPanelNearBottom().
+    if (panelEl && typeof panelEl.addEventListener === "function") {
+      panelEl.addEventListener("scroll", () => {
+        if (panelEl && !isPanelNearBottom()) setConversationAutoFollow(false);
+      }, { passive: true });
+    }
+
     function renderPanel(options = {}) {
       renderConversationFilters();
       if (!currentRunId()) {
@@ -167,7 +177,12 @@
         if (vlHost) {
           deps.mountVirtualConversation?.(vlHost, vlHost.dataset.vlTask || task.id, vlHost.dataset.vlTarget || "", {
             anchorBottom: shouldFollow,
-            initialScrollTop: previousVlScrollTop
+            initialScrollTop: previousVlScrollTop,
+            // When the user scrolls away from the anchored bottom, disable realtime
+            // auto-follow so subsequent re-renders keep their scroll position instead
+            // of yanking them back to the newest message. Scrolling back to the bottom
+            // re-engages follow via isPanelNearBottom().
+            onScrollAway: () => deps.setConversationAutoFollow?.(false)
           });
           if (shouldFollow) vlHost.scrollTop = vlHost.scrollHeight;
         } else if (options.preserveScroll) {
