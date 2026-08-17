@@ -122,6 +122,8 @@ def network_alive(root: Path, host: str, port: int = 23) -> bool:
         state = json.loads(network_state_path(root, host, port).read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return False
+    if str(state.get("status") or "").strip().lower() == "stopped":
+        return False
     if pid_alive(state.get("pid")):
         return True
     return state_has_fresh_heartbeat(state)

@@ -65,6 +65,15 @@ class HeartbeatLivenessTests(unittest.TestCase):
             _write_state(root, "COM6")  # no heartbeat_at, dead pid
             self.assertFalse(bridge_alive(root, "COM6"))
 
+    def test_bridge_alive_false_when_stopped_even_with_fresh_heartbeat(self) -> None:
+        # The stop path writes a fresh heartbeat in its final state write; a
+        # stopped bridge must never be reported alive or `attach` would refuse to
+        # spawn a replacement.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _write_state(root, "COM6", status="stopped", heartbeat_at=time.time())
+            self.assertFalse(bridge_alive(root, "COM6"))
+
     def test_network_alive_uses_heartbeat(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -75,6 +84,17 @@ class HeartbeatLivenessTests(unittest.TestCase):
                 encoding="utf-8",
             )
             self.assertTrue(network_alive(root, "10.0.0.5", 23))
+
+    def test_network_alive_false_when_stopped_even_with_fresh_heartbeat(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            path = network_state_path(root, "10.0.0.5", 23)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(
+                json.dumps({"host": "10.0.0.5", "port": 23, "pid": 2_000_000_000, "status": "stopped", "heartbeat_at": time.time()}),
+                encoding="utf-8",
+            )
+            self.assertFalse(network_alive(root, "10.0.0.5", 23))
 
 
 class ControlHygieneTests(unittest.TestCase):

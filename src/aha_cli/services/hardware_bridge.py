@@ -198,12 +198,17 @@ def bridge_alive(root: Path, device: str) -> bool:
     """Liveness for a serial bridge that works across WSL/Windows.
 
     A bridge is alive while its PID resolves *or* its state carries a heartbeat
-    fresh within the TTL. Windows-owned bridges observed from WSL have an
-    unresolvable PID, so the heartbeat is the authoritative signal; without a
-    fresh heartbeat a dead PID reports stopped (never a false "alive").
+    fresh within the TTL (a Windows-owned bridge observed from WSL has an
+    unresolvable PID, so the heartbeat is the authoritative signal). A bridge
+    whose state is explicitly ``stopped`` is never alive, even with a fresh
+    heartbeat: the stop path writes a heartbeat in its final state write, and
+    without this guard a dead bridge would be mistaken for live and `attach`
+    would never spawn a replacement.
     """
     state = read_bridge_state(root, device)
     if not state:
+        return False
+    if str(state.get("status") or "").strip().lower() == "stopped":
         return False
     if pid_alive(state.get("pid")):
         return True
