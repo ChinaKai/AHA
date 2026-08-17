@@ -656,6 +656,8 @@ def backend_status(root: Path, run_id: str, target: str = "main", task_id: str |
     state_pid = int(state.get("pid") or 0) or None
     pid = None if state.get("status") == "stopped" else state_pid
     managed = bool(state.get("managed")) if state else False
+    event_runtime = _backend_event_runtime(root, run_id, target, task_id)
+    activity = event_runtime["activity"]
     running = pid_is_running(pid)
     discovered_backend = None
     discovered = None if running else _discover_backend_process(root, run_id, target, task_id)
@@ -663,8 +665,12 @@ def backend_status(root: Path, run_id: str, target: str = "main", task_id: str |
         pid, discovered_backend = discovered
         running = True
         managed = bool(state.get("managed")) if state and state.get("pid") == pid else False
-    event_runtime = _backend_event_runtime(root, run_id, target, task_id)
-    activity = event_runtime["activity"]
+    # Cross-OS fallback: a WSL-hosted backend (workspace is a WSL path) has a
+    # Linux pid that a Windows-side Web service cannot resolve with OpenProcess.
+    # When the state is not explicitly stopped and a turn is in flight, the
+    # backend is alive even though the pid is not checkable from this OS.
+    if not running and pid and str(state.get("status") or "").strip().lower() != "stopped" and activity.get("busy"):
+        running = True
     status = "busy" if running and activity["busy"] else "running" if running else "stopped"
     backend_name = _backend_name_from_state(state, discovered_backend or "unknown")
     resolved_model = state.get("resolved_model") or state.get("model")

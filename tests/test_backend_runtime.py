@@ -1096,6 +1096,78 @@ class BackendRuntimeTests(unittest.TestCase):
         self.assertEqual(status["context_pressure"]["pressure_source"], "runtime.last_token_usage.effective_input_tokens")
         self.assertEqual(status["context_pressure"]["percent"], 2.0)
 
+    def test_backend_status_cross_os_fallback_when_pid_unresolvable_but_turn_active(self) -> None:
+        """A WSL-hosted backend has a Linux pid that a Windows-side Web service
+        cannot resolve; when a turn is in flight the backend must still be reported
+        busy/running instead of stopped (cross-OS liveness fallback)."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Cross OS liveness", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                aha_root = root / ".aha"
+                # Backend state: running, pid set, but that pid is NOT resolvable
+                # from this OS (mimics a WSL pid seen from Windows).
+                write_json(
+                    backend_runtime_module.backend_state_path(aha_root, run_id, "main", "task-001"),
+                    {
+                        "target": "main",
+                        "task_id": "task-001",
+                        "backend": "codex-chat",
+                        "status": "running",
+                        "pid": 9_999_999,
+                        "managed": True,
+                        "started_at": "2026-08-17T00:00:00+00:00",
+                        "stopped_at": None,
+                    },
+                )
+                # A turn is in flight: agent_started without agent_finished.
+                append_event(aha_root, run_id, "agent_started", {"task_id": "task-001", "target": "main"})
+                append_event(aha_root, run_id, "agent_usage", {"task_id": "task-001", "target": "main", "usage": {"input_tokens": 10}})
+
+                with (
+                    mock.patch("aha_cli.services.backend_runtime.pid_is_running", return_value=False),
+                    mock.patch("aha_cli.services.backend_runtime._discover_backend_process", return_value=None),
+                ):
+                    status = backend_status(aha_root, run_id, "main", task_id="task-001")
+
+        # Cross-OS fallback keeps the backend alive while a turn is running.
+        self.assertEqual(status["status"], "busy")
+        self.assertEqual(status.get("last_pid"), None)  # treated as live, not stale
+
+    def test_backend_status_cross_os_fallback_not_applied_when_explicitly_stopped(self) -> None:
+        """The cross-OS fallback must not resurrect an explicitly-stopped backend
+        even if stale activity events remain."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Cross OS stopped", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                aha_root = root / ".aha"
+                write_json(
+                    backend_runtime_module.backend_state_path(aha_root, run_id, "main", "task-001"),
+                    {
+                        "target": "main",
+                        "task_id": "task-001",
+                        "backend": "codex-chat",
+                        "status": "stopped",
+                        "pid": 9_999_999,
+                        "managed": True,
+                        "stopped_at": "2026-08-17T00:01:00+00:00",
+                    },
+                )
+                append_event(aha_root, run_id, "agent_started", {"task_id": "task-001", "target": "main"})
+                with (
+                    mock.patch("aha_cli.services.backend_runtime.pid_is_running", return_value=False),
+                    mock.patch("aha_cli.services.backend_runtime._discover_backend_process", return_value=None),
+                ):
+                    status = backend_status(aha_root, run_id, "main", task_id="task-001")
+        self.assertEqual(status["status"], "stopped")
+
     def test_backend_status_scans_event_log_once_for_activity_and_metrics(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
