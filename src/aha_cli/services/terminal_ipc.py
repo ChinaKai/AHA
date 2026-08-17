@@ -8,12 +8,115 @@ import os
 from pathlib import Path
 import socket
 import stat
+import time
 from typing import Iterable
 
+from aha_cli.store.io import iter_jsonl_records_from
 
 _MAX_CLIENTS = 8
 _MAX_FRAME_BYTES = 256 * 1024
 _MAX_PENDING_BYTES = 1024 * 1024
+
+# Control inbox hygiene (shared by the serial and network bridges).
+_CONTROL_MAX_BYTES = 2 * 1024 * 1024          # rotate the control inbox above this size
+_CONTROL_RETRY_ATTEMPTS = 6                   # transient WSL/Windows share errors are retried
+_CONTROL_RETRY_DELAY = 0.05
+_BRIDGE_HEARTBEAT_TTL = 15.0                  # a bridge with a fresh heartbeat is alive even when
+                                              # its PID is not checkable from this OS (WSL vs Windows)
+
+
+def read_control_records(path: Path, start: int = 0, limit: int = 200) -> tuple[list[tuple[dict, int]], int]:
+    """Read ``control.jsonl`` records with bounded retries.
+
+    On Windows the control file lives on the shared WSL/Windows filesystem and a
+    transient ``OSError`` (Errno 22) while the peer holds the file was observed to
+    crash the bridge. Retry with backoff instead of terminating the daemon.
+    """
+    last_error: OSError | None = None
+    for attempt in range(_CONTROL_RETRY_ATTEMPTS):
+        try:
+            return iter_jsonl_records_from(path, start=start, limit=limit)
+        except OSError as exc:
+            last_error = exc
+            if attempt + 1 < _CONTROL_RETRY_ATTEMPTS:
+                time.sleep(_CONTROL_RETRY_DELAY * (attempt + 1))
+    raise last_error or OSError(f"cannot read {path}")
+
+
+def rotate_control_file(path: Path) -> None:
+    """Archive ``control.jsonl`` once it grows beyond a size threshold.
+
+    Large file transfers / many arm records were observed to grow the inbox to
+    megabytes; archives keep a forensic copy and reset the live file. The consumer
+    offset is cleared because the archived records are no longer consumed.
+    """
+    if not path.exists():
+        return
+    try:
+        size = path.stat().st_size
+    except OSError:
+        return
+    if size < _CONTROL_MAX_BYTES:
+        return
+    stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
+    archive_dir = path.parent / "archive"
+    try:
+        archive_dir.mkdir(parents=True, exist_ok=True)
+        target = archive_dir / f"control.{stamp}.jsonl"
+        path.rename(target)
+    except OSError:
+        # Renaming must never break the caller (append/read); truncate as fallback.
+        try:
+            path.write_text("", encoding="utf-8")
+        except OSError:
+            pass
+    offset_path = Path(str(path) + ".offset")
+    try:
+        offset_path.unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
+def state_has_fresh_heartbeat(state: dict | None, *, ttl: float = _BRIDGE_HEARTBEAT_TTL) -> bool:
+    """True when ``state`` carries a heartbeat updated within ``ttl`` seconds.
+
+    Used together with PID checks: a bridge whose PID cannot be resolved from this
+    OS (a Windows-owned process observed from WSL) is still alive while its
+    heartbeat is fresh, so callers do not tear it down / respawn it.
+    """
+    if not isinstance(state, dict):
+        return False
+    raw = state.get("heartbeat_at")
+    if raw is None:
+        return False
+    try:
+        # Heartbeats are written as Unix epoch floats by the daemons; tolerate ISO
+        # timestamps from older state files too.
+        value = float(raw)
+    except (TypeError, ValueError):
+        text = str(raw)
+        try:
+            from datetime import datetime
+
+            value = datetime.fromisoformat(text.replace("Z", "+00:00")).timestamp()
+        except (ValueError, TypeError):
+            return False
+    return (time.time() - value) <= ttl
+
+
+def stamp_control_generation(record: dict, state: dict | None) -> dict:
+    """Stamp a control record (e.g. ``stop``) with the target bridge's generation.
+
+    A freshly spawned bridge ignores stop records whose generation predates it, so
+    ``hardware-stop`` immediately followed by ``hardware-attach`` cannot kill the
+    new bridge with the previous instance's stop.
+    """
+    record = dict(record)
+    if state:
+        generation = int(state.get("generation") or 0)
+        if generation > 0:
+            record["generation"] = generation
+    return record
 
 
 @dataclass
@@ -215,4 +318,10 @@ class BridgeTerminalIpc:
         return (json.dumps(payload, ensure_ascii=False, separators=(",", ":")) + "\n").encode("utf-8")
 
 
-__all__ = ["BridgeTerminalIpc"]
+__all__ = [
+    "BridgeTerminalIpc",
+    "read_control_records",
+    "rotate_control_file",
+    "stamp_control_generation",
+    "state_has_fresh_heartbeat",
+]

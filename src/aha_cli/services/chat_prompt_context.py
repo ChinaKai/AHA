@@ -662,7 +662,25 @@ def _claude_public_update_context(backend: str | None) -> str:
     return render_prompt_template("backend_claude_public_updates.md").rstrip()
 
 
+def _cli_command_available(command: str) -> bool:
+    """True when the *running* CLI actually dispatches ``command``.
+
+    Guidance that references an ``aha`` subcommand must not be injected when the
+    installed CLI predates it: an agent that follows the guidance would hit
+    ``invalid choice``. The live dispatch table is the ground truth (newer/older
+    than the installed onebin share this module only when the handler exists).
+    """
+    try:
+        from aha_cli.cli import command_handlers
+
+        return command in command_handlers()
+    except (ImportError, Exception):  # noqa: BLE001 - a broken import must not break prompts
+        return False
+
+
 def _managed_process_context() -> str:
+    if not _cli_command_available("managed-process"):
+        return ""
     return render_prompt_template("backend_managed_processes.md").rstrip()
 
 

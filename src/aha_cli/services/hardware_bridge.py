@@ -40,6 +40,7 @@ import signal
 import subprocess
 import sys
 import time
+import uuid
 from pathlib import Path
 
 from aha_cli import platform, process_control
@@ -52,7 +53,13 @@ from aha_cli.services.hardware_session import (
     open_uart_transport,
 )
 from aha_cli.services.serial_lock import SerialDeviceBusyError, process_alive
-from aha_cli.services.terminal_ipc import BridgeTerminalIpc
+from aha_cli.services.terminal_ipc import (
+    BridgeTerminalIpc,
+    read_control_records,
+    rotate_control_file,
+    stamp_control_generation,
+    state_has_fresh_heartbeat,
+)
 from aha_cli.store.io import append_jsonl, iter_jsonl_records_from, iter_jsonl_reverse
 from aha_cli.store.paths import aha_home_path
 
@@ -78,6 +85,8 @@ _SERIAL_TX_BYTE_INTERVAL = 0.001
 _SERIAL_TRANSFER_TEXT_CHUNK_BYTES = 16
 _PR_SET_PDEATHSIG = 1
 _TERMINAL_TASK_STATUSES = {"completed", "failed", "blocked"}
+_BRIDGE_HEARTBEAT_INTERVAL = 2.0
+_CONTROL_OFFSET_PERSIST_INTERVAL = 1.0
 
 
 def task_devices(task: dict) -> list[tuple[str, int]]:
@@ -148,6 +157,10 @@ def device_control_path(root: Path, device: str) -> Path:
     return device_bridge_dir(root, device) / "control.jsonl"
 
 
+def device_control_offset_path(root: Path, device: str) -> Path:
+    return device_bridge_dir(root, device) / "control.jsonl.offset"
+
+
 def device_lock_path(root: Path, device: str) -> Path:
     return device_bridge_dir(root, device) / "bridge.lock"
 
@@ -181,11 +194,27 @@ def read_bridge_state(root: Path, device: str) -> dict | None:
         return None
 
 
+def bridge_alive(root: Path, device: str) -> bool:
+    """Liveness for a serial bridge that works across WSL/Windows.
+
+    A bridge is alive while its PID resolves *or* its state carries a heartbeat
+    fresh within the TTL. Windows-owned bridges observed from WSL have an
+    unresolvable PID, so the heartbeat is the authoritative signal; without a
+    fresh heartbeat a dead PID reports stopped (never a false "alive").
+    """
+    state = read_bridge_state(root, device)
+    if not state:
+        return False
+    if pid_alive(state.get("pid")):
+        return True
+    return state_has_fresh_heartbeat(state)
+
+
 def bridge_status(root: Path, device: str) -> dict:
     """Liveness-checked view of a device bridge for callers (web / CLI)."""
 
     state = read_bridge_state(root, device)
-    if not state or not pid_alive(state.get("pid")):
+    if not state or not bridge_alive(root, device):
         result = {"device": device, "status": "stopped", "alive": False, "paused": False}
         if state and state.get("error"):
             result["error"] = state["error"]
@@ -214,8 +243,18 @@ def append_bridge_control(root: Path, device: str, command: dict) -> dict:
     cmd = str(command.get("cmd") or "").strip().lower()
     if cmd not in HARDWARE_BRIDGE_CONTROL_COMMANDS:
         raise ValueError(f"Unknown hardware bridge command: {cmd or '(empty)'}")
+    path = device_control_path(root, device)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    # Rotate a bloated inbox so a long-lived bridge never accumulates megabytes of
+    # control history; consumers keep a persisted offset that rotation clears.
+    rotate_control_file(path)
     record = {**command, "cmd": cmd, "ts": str(command.get("ts") or utc_now())}
-    append_jsonl(device_control_path(root, device), record)
+    # A `stop` is aimed at the bridge generation currently recorded: a freshly
+    # spawned bridge ignores stops stamped for an earlier generation, closing the
+    # hardware-stop -> hardware-attach race that killed the new bridge.
+    if cmd == "stop":
+        record = stamp_control_generation(record, read_bridge_state(root, device))
+    append_jsonl(path, record)
     return record
 
 
@@ -243,7 +282,8 @@ def stop_all_hardware_bridges(root: Path, *, timeout: float = 3.0) -> dict:
                 continue
             states.append((state_path, state, pid))
             if pid_alive(pid):
-                append_jsonl(state_path.parent / "control.jsonl", {"cmd": "stop", "ts": utc_now()})
+                stop_record = stamp_control_generation({"cmd": "stop", "ts": utc_now()}, state)
+                append_jsonl(state_path.parent / "control.jsonl", stop_record)
 
     deadline = time.monotonic() + max(0.0, float(timeout))
     while any(pid_alive(pid) for _path, _state, pid in states) and time.monotonic() < deadline:
@@ -308,12 +348,24 @@ def bridge_launcher() -> list[str]:
     return aha_cli_invocation()
 
 
-def ensure_bridge(root: Path, device: str, baudrate: int = 115200, *, launcher: list[str] | None = None) -> dict:
+def ensure_bridge(
+    root: Path,
+    device: str,
+    baudrate: int = 115200,
+    *,
+    launcher: list[str] | None = None,
+    detach: bool = False,
+) -> dict:
     """Idempotently make sure a live bridge owns ``device``; spawn one if absent.
 
     Concurrency-safe via a per-device file lock. Returns the (liveness-checked)
-    bridge status. The spawned child is a managed runtime child (PDEATHSIG), not a
-    detached daemon.
+    bridge status.
+
+    ``detach=False`` (the web-server path): the child is a managed runtime child
+    (PDEATHSIG) so the long-lived server owns its lifecycle. ``detach=True`` (the
+    transient CLI ``hardware-attach`` path): the child is NOT parent-death bound,
+    so interrupting the agent does not tear the bridge down; it lives until no
+    active task references the device (self-reap) or it is explicitly stopped.
     """
 
     from aha_cli import locking
@@ -324,7 +376,7 @@ def ensure_bridge(root: Path, device: str, baudrate: int = 115200, *, launcher: 
     try:
         locking.acquire(lock_fd)
         state = read_bridge_state(root, device)
-        if state and pid_alive(state.get("pid")):
+        if state and bridge_alive(root, device):
             return bridge_status(root, device)
         # No live bridge: spawn one bound to this runtime process.
         cmd = [
@@ -351,16 +403,20 @@ def ensure_bridge(root: Path, device: str, baudrate: int = 115200, *, launcher: 
                 stdin=subprocess.DEVNULL,
                 stdout=log_handle,
                 stderr=subprocess.STDOUT,
-                preexec_fn=process_control.parent_death_preexec(),
+                preexec_fn=None if detach else process_control.parent_death_preexec(),
                 start_new_session=False,
                 env=child_env,
                 **platform.hidden_subprocess_kwargs(),
             )
         finally:
             log_handle.close()
-        process_control.assign_parent_death(proc)
+        if not detach:
+            process_control.assign_parent_death(proc)
+        previous_generation = int((state or {}).get("generation") or 0)
+        now = time.time()
         # The child writes its own authoritative bridge.json on boot; record a
-        # provisional pid so concurrent callers see it immediately.
+        # provisional pid so concurrent callers see it immediately. The generation
+        # is bumped per spawn so stale stop records never apply to this instance.
         device_bridge_state_path(root, device).write_text(
             json.dumps(
                 {
@@ -370,6 +426,11 @@ def ensure_bridge(root: Path, device: str, baudrate: int = 115200, *, launcher: 
                     "status": "starting",
                     "owner_pid": os.getpid(),
                     "owner_instance": str(child_env.get(AHA_WEB_INSTANCE_ENV) or ""),
+                    "spawn_source": "cli" if detach else "web",
+                    "generation": previous_generation + 1,
+                    "instance_uuid": str(uuid.uuid4()),
+                    "heartbeat_at": now,
+                    "started_at": now,
                     "updated_at": utc_now(),
                 },
                 ensure_ascii=False,
@@ -426,6 +487,14 @@ class DeviceBridgeDaemon:
             device_terminal_socket_path(root, device),
             device_stream_path(root, device),
         )
+        # Instance identity + lifecycle fields: the UUID and heartbeat let callers on
+        # a different OS (WSL vs Windows) decide liveness without trusting the PID,
+        # and the generation makes `stop` records apply only to their target bridge.
+        self._instance_uuid = str(uuid.uuid4())
+        self._generation = 1
+        self._started_at = time.time()
+        self._last_heartbeat_at = 0.0
+        self._last_offset_persist_at = 0.0
 
     def _maybe_self_reap(self) -> None:
         # Death condition: no non-terminal task references this device any more.
@@ -472,6 +541,10 @@ class DeviceBridgeDaemon:
             "updated_at": utc_now(),
             "rules": self.engine.snapshot(),
             "capabilities": ["serial-transfer-v1", "serial-transfer-v2"],
+            "instance_uuid": self._instance_uuid,
+            "generation": self._generation,
+            "started_at": self._started_at,
+            "heartbeat_at": time.time(),
         }
         if self._transfer is not None:
             state["transfer"] = dict(self._transfer)
@@ -483,6 +556,47 @@ class DeviceBridgeDaemon:
             "status",
             bridge={**state, "alive": status != "stopped"},
         )
+
+    def _maybe_heartbeat(self) -> None:
+        """Throttled freshness write so cross-OS liveness checks stay accurate.
+
+        A Windows-owned bridge observed from WSL has an unresolvable PID; the
+        heartbeat timestamp is the authoritative "still alive" signal. Writes are
+        bounded to once per interval and do not touch the port.
+        """
+        now = time.time()
+        if now - self._last_heartbeat_at < _BRIDGE_HEARTBEAT_INTERVAL:
+            return
+        self._last_heartbeat_at = now
+        path = device_bridge_state_path(self.root, self.device)
+        try:
+            state = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+        except (json.JSONDecodeError, OSError):
+            state = {}
+        state.update(
+            {
+                "pid": os.getpid(),
+                "status": "paused" if self._paused else "running" if self.transport is not None else str(state.get("status") or "connecting"),
+                "instance_uuid": self._instance_uuid,
+                "generation": self._generation,
+                "heartbeat_at": now,
+                "updated_at": utc_now(),
+            }
+        )
+        try:
+            path.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
+        except OSError:
+            pass
+
+    def _persist_control_offset(self) -> None:
+        now = time.time()
+        if now - self._last_offset_persist_at < _CONTROL_OFFSET_PERSIST_INTERVAL:
+            return
+        self._last_offset_persist_at = now
+        try:
+            device_control_offset_path(self.root, self.device).write_text(str(self._control_offset), encoding="utf-8")
+        except OSError:
+            pass
 
     # -- port -----------------------------------------------------------
     def _open_port(self) -> bool:
@@ -602,13 +716,34 @@ class DeviceBridgeDaemon:
         for rule, reason in expired:
             self._log("system", f"rule {rule['id']} disarmed ({reason})", source=f"rule:{rule['id']}")
 
+    def _rule_unchanged(self, previous: dict | None, rule: dict) -> bool:
+        if previous is None:
+            return False
+        return (
+            previous["trigger"] == rule["trigger"]
+            and previous["pattern"] == rule["pattern"]
+            and previous["regex"] == rule["regex"]
+            and previous["send"] == rule["send"]
+            and previous["max_fires"] == rule["max_fires"]
+            and previous["delay_seconds"] == rule["delay_seconds"]
+            and previous["interval_seconds"] == rule["interval_seconds"]
+            and previous["duration_seconds"] == rule["duration_seconds"]
+        )
+
     # -- control --------------------------------------------------------
     def _apply_control(self) -> None:
         path = device_control_path(self.root, self.device)
-        records, self._control_offset = iter_jsonl_records_from(path, self._control_offset, limit=200)
+        records, self._control_offset = read_control_records(path, self._control_offset, limit=200)
         for record, _line_end in records:
             cmd = str(record.get("cmd") or "").strip().lower()
             if cmd == "stop":
+                # Ignore a stop aimed at an earlier bridge generation: this closes the
+                # hardware-stop -> hardware-attach race where a fresh bridge consumed
+                # the previous instance's stop and exited immediately.
+                record_generation = int(record.get("generation") or 0)
+                if record_generation > 0 and record_generation != self._generation:
+                    self._log("system", f"ignored stale stop for generation {record_generation}", source="control")
+                    continue
                 self._log("system", "stop requested", source="control")
                 self._transfer = None
                 self._running = False
@@ -696,10 +831,17 @@ class DeviceBridgeDaemon:
                 data = str(raw or "") if cmd == "send_raw" else decode_escapes(raw)
                 self._send(data, source=str(record.get("source") or "interactive"))
             elif cmd == "arm":
+                rule_id = str(record.get("id") or "").strip()
+                previous = next((item for item in self.engine.rules if item["id"] == rule_id), None)
                 try:
                     rule = self.engine.arm(record)
                 except re.error as exc:
                     self._log("system", f"arm rejected: invalid regex ({exc})", source="control")
+                    continue
+                # Re-arming an identical rule (e.g. auto-login on every terminal open)
+                # is idempotent in the engine; only log/refresh state when it changed,
+                # so the bridge log is not flooded with duplicate "armed" entries.
+                if self._rule_unchanged(previous, rule):
                     continue
                 self._log("system", f"rule {rule['id']} armed (trigger={rule['trigger']}, send={rule['send_display']!r})", source=f"rule:{rule['id']}")
                 self._write_state("running")
@@ -748,9 +890,25 @@ class DeviceBridgeDaemon:
                 pass
 
     def run(self) -> None:
-        # Skip any control backlog so a fresh bridge never replays stale commands.
+        # Adopt the spawner's generation and UUID so this instance only consumes
+        # control commands aimed at it (and stale stops for older instances are
+        # ignored). Persisted control offsets let a restarted bridge resume where
+        # it left off instead of re-applying the whole backlog.
+        state = read_bridge_state(self.root, self.device)
+        if isinstance(state, dict):
+            self._generation = max(1, int(state.get("generation") or 1))
+            self._instance_uuid = str(state.get("instance_uuid") or self._instance_uuid)
         path = device_control_path(self.root, self.device)
-        self._control_offset = path.stat().st_size if path.exists() else 0
+        offset_file = device_control_offset_path(self.root, self.device)
+        try:
+            persisted = int(offset_file.read_text(encoding="utf-8").strip() or "0") if offset_file.exists() else 0
+        except (OSError, ValueError):
+            persisted = 0
+        file_size = path.stat().st_size if path.exists() else 0
+        # Skip any control backlog so a fresh bridge never replays stale commands.
+        # Resume a persisted offset when the live file still spans it (i.e. it was
+        # not rotated out from under us since we last consumed).
+        self._control_offset = persisted if 0 < persisted <= file_size else file_size
         self._archive_previous_stream()
         self._terminal_ipc.start()
         try:
@@ -766,6 +924,8 @@ class DeviceBridgeDaemon:
                 self._apply_control()
                 if not self._running:
                     break
+                self._maybe_heartbeat()
+                self._persist_control_offset()
                 self._maybe_self_reap()
                 if not self._running:
                     break

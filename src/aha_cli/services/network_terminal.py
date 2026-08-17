@@ -15,6 +15,7 @@ import socket
 import subprocess
 import sys
 import time
+import uuid
 from pathlib import Path
 
 from aha_cli import platform, process_control
@@ -23,8 +24,14 @@ from aha_cli.domain.models import normalize_task_hardware_debug, utc_now
 from aha_cli.services.hardware_bridge import pid_alive
 from aha_cli.services.onebin import aha_cli_invocation
 from aha_cli.services.hardware_session import ArmedRuleEngine, decode_escapes
-from aha_cli.services.terminal_ipc import BridgeTerminalIpc
-from aha_cli.store.io import append_jsonl, iter_jsonl_records_from, iter_jsonl_reverse
+from aha_cli.services.terminal_ipc import (
+    BridgeTerminalIpc,
+    read_control_records,
+    rotate_control_file,
+    stamp_control_generation,
+    state_has_fresh_heartbeat,
+)
+from aha_cli.store.io import append_jsonl, iter_jsonl_reverse
 from aha_cli.store.paths import aha_home_path
 
 NETWORK_CONTROL_COMMANDS = {
@@ -44,6 +51,8 @@ NETWORK_CONTROL_COMMANDS = {
 _STREAM_INLINE_LIMIT = 12000
 _MAX_NETWORK_TX_PENDING_BYTES = 512 * 1024
 _TERMINAL_TASK_STATUSES = {"completed", "failed", "blocked"}
+_BRIDGE_HEARTBEAT_INTERVAL = 2.0
+_CONTROL_OFFSET_PERSIST_INTERVAL = 1.0
 
 
 def task_network_target(task: dict) -> tuple[str, int, str, str] | None:
@@ -103,6 +112,21 @@ def network_control_path(root: Path, host: str, port: int = 23) -> Path:
     return network_terminal_dir(root, host, port) / "control.jsonl"
 
 
+def network_control_offset_path(root: Path, host: str, port: int = 23) -> Path:
+    return network_terminal_dir(root, host, port) / "control.jsonl.offset"
+
+
+def network_alive(root: Path, host: str, port: int = 23) -> bool:
+    """Liveness for a Telnet bridge that works across WSL/Windows (heartbeat-based)."""
+    try:
+        state = json.loads(network_state_path(root, host, port).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return False
+    if pid_alive(state.get("pid")):
+        return True
+    return state_has_fresh_heartbeat(state)
+
+
 def network_credentials_path(root: Path, host: str, port: int = 23) -> Path:
     return network_terminal_dir(root, host, port) / "credentials.json"
 
@@ -136,7 +160,7 @@ def network_status(root: Path, host: str, port: int = 23) -> dict:
     except (OSError, json.JSONDecodeError):
         state = None
     endpoint = f"{host}:{int(port)}"
-    if not state or not pid_alive(state.get("pid")):
+    if not state or not network_alive(root, host, port):
         return {"endpoint": endpoint, "host": host, "port": int(port), "status": "stopped", "alive": False, "paused": False}
     status = str(state.get("status") or "connecting")
     result = {
@@ -176,7 +200,8 @@ def stop_all_network_terminals(root: Path, *, timeout: float = 3.0) -> dict:
                 continue
             states.append((state_path, state, pid))
             if pid_alive(pid):
-                append_jsonl(state_path.parent / "control.jsonl", {"cmd": "stop", "ts": utc_now()})
+                stop_record = stamp_control_generation({"cmd": "stop", "ts": utc_now()}, state)
+                append_jsonl(state_path.parent / "control.jsonl", stop_record)
 
     deadline = time.monotonic() + max(0.0, float(timeout))
     while any(pid_alive(pid) for _path, _state, pid in states) and time.monotonic() < deadline:
@@ -227,8 +252,17 @@ def append_network_control(root: Path, host: str, port: int, command: dict) -> d
     cmd = str(command.get("cmd") or "").strip().lower()
     if cmd not in NETWORK_CONTROL_COMMANDS:
         raise ValueError(f"Unknown network terminal command: {cmd or '(empty)'}")
+    path = network_control_path(root, host, port)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    rotate_control_file(path)
     record = {**command, "cmd": cmd, "ts": str(command.get("ts") or utc_now())}
-    append_jsonl(network_control_path(root, host, port), record)
+    if cmd == "stop":
+        try:
+            state = json.loads(network_state_path(root, host, port).read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            state = None
+        record = stamp_control_generation(record, state)
+    append_jsonl(path, record)
     return record
 
 
@@ -240,6 +274,7 @@ def ensure_network_terminal(
     username: str = "",
     password: str = "",
     launcher: list[str] | None = None,
+    detach: bool = False,
 ) -> dict:
     from aha_cli import locking
 
@@ -275,14 +310,22 @@ def ensure_network_terminal(
                 stdin=subprocess.DEVNULL,
                 stdout=log_handle,
                 stderr=subprocess.STDOUT,
-                preexec_fn=process_control.parent_death_preexec(),
+                preexec_fn=None if detach else process_control.parent_death_preexec(),
                 start_new_session=False,
                 env=child_env,
                 **platform.hidden_subprocess_kwargs(),
             )
         finally:
             log_handle.close()
-        process_control.assign_parent_death(proc)
+        if not detach:
+            process_control.assign_parent_death(proc)
+        previous_generation = 0
+        try:
+            previous_state = json.loads(network_state_path(root, host, port).read_text(encoding="utf-8"))
+            previous_generation = int(previous_state.get("generation") or 0)
+        except (OSError, json.JSONDecodeError):
+            pass
+        now = time.time()
         network_state_path(root, host, port).write_text(
             json.dumps(
                 {
@@ -292,6 +335,11 @@ def ensure_network_terminal(
                     "status": "starting",
                     "owner_pid": os.getpid(),
                     "owner_instance": str(child_env.get(AHA_WEB_INSTANCE_ENV) or ""),
+                    "spawn_source": "cli" if detach else "web",
+                    "generation": previous_generation + 1,
+                    "instance_uuid": str(uuid.uuid4()),
+                    "heartbeat_at": now,
+                    "started_at": now,
                     "updated_at": utc_now(),
                 },
                 ensure_ascii=False,
@@ -452,6 +500,11 @@ class NetworkTerminalDaemon:
             network_terminal_socket_path(root, host, port),
             network_stream_path(root, host, port),
         )
+        self._instance_uuid = str(uuid.uuid4())
+        self._generation = 1
+        self._started_at = time.time()
+        self._last_heartbeat_at = 0.0
+        self._last_offset_persist_at = 0.0
 
     @property
     def endpoint(self) -> str:
@@ -490,6 +543,10 @@ class NetworkTerminalDaemon:
             "rules": self.engine.snapshot(),
             "capabilities": ["network-transfer-v1"] + (["network-transfer-v2"] if self._codec.binary_ready else []),
             "telnet_binary": self._codec.binary_ready,
+            "instance_uuid": self._instance_uuid,
+            "generation": self._generation,
+            "started_at": self._started_at,
+            "heartbeat_at": time.time(),
         }
         if self._transfer is not None:
             state["transfer"] = dict(self._transfer)
@@ -503,6 +560,55 @@ class NetworkTerminalDaemon:
                 "paused": status == "paused",
                 "connected": status == "running",
             },
+        )
+
+    def _maybe_heartbeat(self) -> None:
+        now = time.time()
+        if now - self._last_heartbeat_at < _BRIDGE_HEARTBEAT_INTERVAL:
+            return
+        self._last_heartbeat_at = now
+        path = network_state_path(self.root, self.host, self.port)
+        try:
+            state = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+        except (json.JSONDecodeError, OSError):
+            state = {}
+        state.update(
+            {
+                "pid": os.getpid(),
+                "status": "paused" if self._paused else "running" if self._socket is not None else str(state.get("status") or "connecting"),
+                "instance_uuid": self._instance_uuid,
+                "generation": self._generation,
+                "heartbeat_at": now,
+                "updated_at": utc_now(),
+            }
+        )
+        try:
+            path.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
+        except OSError:
+            pass
+
+    def _persist_control_offset(self) -> None:
+        now = time.time()
+        if now - self._last_offset_persist_at < _CONTROL_OFFSET_PERSIST_INTERVAL:
+            return
+        self._last_offset_persist_at = now
+        try:
+            network_control_offset_path(self.root, self.host, self.port).write_text(str(self._control_offset), encoding="utf-8")
+        except OSError:
+            pass
+
+    def _rule_unchanged(self, previous: dict | None, rule: dict) -> bool:
+        if previous is None:
+            return False
+        return (
+            previous["trigger"] == rule["trigger"]
+            and previous["pattern"] == rule["pattern"]
+            and previous["regex"] == rule["regex"]
+            and previous["send"] == rule["send"]
+            and previous["max_fires"] == rule["max_fires"]
+            and previous["delay_seconds"] == rule["delay_seconds"]
+            and previous["interval_seconds"] == rule["interval_seconds"]
+            and previous["duration_seconds"] == rule["duration_seconds"]
         )
 
     def _connect(self) -> bool:
@@ -611,10 +717,14 @@ class NetworkTerminalDaemon:
 
     def _apply_control(self) -> None:
         path = network_control_path(self.root, self.host, self.port)
-        records, self._control_offset = iter_jsonl_records_from(path, self._control_offset, limit=200)
+        records, self._control_offset = read_control_records(path, self._control_offset, limit=200)
         for record, _line_end in records:
             cmd = str(record.get("cmd") or "").strip().lower()
             if cmd == "stop":
+                record_generation = int(record.get("generation") or 0)
+                if record_generation > 0 and record_generation != self._generation:
+                    self._log("system", f"ignored stale stop for generation {record_generation}", source="control")
+                    continue
                 self._transfer = None
                 self._running = False
             elif cmd == "pause":
@@ -691,10 +801,14 @@ class NetworkTerminalDaemon:
                     continue
                 self._resize(record.get("cols"), record.get("rows"))
             elif cmd == "arm":
+                rule_id = str(record.get("id") or "").strip()
+                previous = next((item for item in self.engine.rules if item["id"] == rule_id), None)
                 try:
                     rule = self.engine.arm(record)
                 except re.error as exc:
                     self._log("system", f"arm rejected: invalid regex ({exc})", source="control")
+                    continue
+                if self._rule_unchanged(previous, rule):
                     continue
                 self._log("system", f"rule {rule['id']} armed", source=f"rule:{rule['id']}")
                 self._write_state("running" if self._socket else "connecting")
@@ -736,7 +850,20 @@ class NetworkTerminalDaemon:
 
     def run(self) -> None:
         control = network_control_path(self.root, self.host, self.port)
-        self._control_offset = control.stat().st_size if control.exists() else 0
+        try:
+            state = json.loads(network_state_path(self.root, self.host, self.port).read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            state = None
+        if isinstance(state, dict):
+            self._generation = max(1, int(state.get("generation") or 1))
+            self._instance_uuid = str(state.get("instance_uuid") or self._instance_uuid)
+        offset_file = network_control_offset_path(self.root, self.host, self.port)
+        try:
+            persisted = int(offset_file.read_text(encoding="utf-8").strip() or "0") if offset_file.exists() else 0
+        except (OSError, ValueError):
+            persisted = 0
+        file_size = control.stat().st_size if control.exists() else 0
+        self._control_offset = persisted if 0 < persisted <= file_size else file_size
         self._terminal_ipc.start()
         try:
             self._write_state("connecting")
@@ -745,6 +872,8 @@ class NetworkTerminalDaemon:
                 self._apply_control()
                 if not self._running:
                     break
+                self._maybe_heartbeat()
+                self._persist_control_offset()
                 now = self._clock()
                 if self._self_reap and now - self._last_reap_check >= 8.0:
                     self._last_reap_check = now
@@ -861,6 +990,8 @@ __all__ = [
     "TelnetCodec",
     "append_network_control",
     "ensure_network_terminal",
+    "network_alive",
+    "network_control_offset_path",
     "network_status",
     "network_stream_page",
     "network_stream_path",

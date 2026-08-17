@@ -175,7 +175,7 @@ class AhaWebForwardCliTests(unittest.TestCase):
             self.assertEqual(code, 0)
             self.assertIn("Windows AHA bridge owns COM6", output)
             forward.assert_called_once()
-            tail.assert_called_once_with(root, "COM6")
+            tail.assert_called_once_with(root, "COM6", replay=False)
 
     def test_cmd_hardware_send_local_when_not_forwarding(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

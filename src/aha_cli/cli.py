@@ -37,6 +37,7 @@ from aha_cli.services.hardware_bridge import (
     append_bridge_control,
     bridge_status,
     device_stream_page,
+    device_stream_path,
     device_transfer_lock_path,
     ensure_bridge,
     stop_all_hardware_bridges,
@@ -1287,12 +1288,33 @@ def _forward_hardware_web(
     return 0
 
 
-def _tail_device_stream(root, device: str) -> None:
-    """Print the device bridge's RX/TX stream to stdout until interrupted."""
+def _tail_device_stream(root, device: str, *, replay: bool = False) -> None:
+    """Print the device bridge's RX/TX stream to stdout until interrupted.
+
+    TX lines are prefixed ``[TX]`` so a sent command is never mistaken for board
+    echo; RX stays raw terminal output. By default the tail starts from the live
+    offset at attach time (a history replay from an earlier bridge session is easy
+    to misread as a fresh boot); ``replay=True`` replays the recent tail with a
+    clear banner and time range.
+    """
 
     import time
 
-    after: int | None = None
+    if not replay:
+        stream = device_stream_path(root, device)
+        sys.stdout.write(
+            f"‹attached› showing live output from now; pass --replay to review the recent stream "
+            f"(Web Terminal keeps the full history).\n"
+        )
+        sys.stdout.flush()
+        try:
+            after = stream.stat().st_size if stream.exists() else 0
+        except OSError:
+            after = 0
+    else:
+        sys.stdout.write("‹replay› showing recent stream history; new output follows live.\n")
+        sys.stdout.flush()
+        after = None
     while True:
         page = device_stream_page(root, device, after=after, limit=1000)
         after = page.get("after_offset", after)
@@ -1302,25 +1324,40 @@ def _tail_device_stream(root, device: str) -> None:
             if direction == "rx":
                 sys.stdout.write(data)
             elif direction == "tx":
-                sys.stdout.write(data)
+                sys.stdout.write(f"\n[TX] {data}\n")
             else:
                 sys.stdout.write(f"\n‹{direction} {event.get('source', '')}› {data}\n")
         sys.stdout.flush()
         time.sleep(0.2)
 
 
-def _tail_network_stream(root, host: str, port: int) -> None:
+def _tail_network_stream(root, host: str, port: int, *, replay: bool = False) -> None:
     import time
 
-    after: int | None = None
+    if not replay:
+        stream = network_stream_path(root, host, port)
+        sys.stdout.write(
+            f"‹attached› showing live output from now; pass --replay to review the recent stream.\n"
+        )
+        sys.stdout.flush()
+        try:
+            after = stream.stat().st_size if stream.exists() else 0
+        except OSError:
+            after = 0
+    else:
+        sys.stdout.write("‹replay› showing recent stream history; new output follows live.\n")
+        sys.stdout.flush()
+        after = None
     while True:
         page = network_stream_page(root, host, port, after=after, limit=1000)
         after = page.get("after_offset", after)
         for event in page.get("events") or []:
             direction = str(event.get("direction") or "system")
             data = str(event.get("data") or "")
-            if direction in {"rx", "tx"}:
+            if direction == "rx":
                 sys.stdout.write(data)
+            elif direction == "tx":
+                sys.stdout.write(f"\n[TX] {data}\n")
             else:
                 sys.stdout.write(f"\n‹{direction} {event.get('source', '')}› {data}\n")
         sys.stdout.flush()
@@ -1361,12 +1398,12 @@ def cmd_hardware_attach(args: argparse.Namespace) -> int:
         if transport == "network":
             host, port = (endpoint.split(":", 1) + ["23"])[:2] if ":" in endpoint else (endpoint, "23")
             try:
-                _tail_network_stream(root, host, int(port))
+                _tail_network_stream(root, host, int(port), replay=args.replay)
             except KeyboardInterrupt:
                 pass
         else:
             try:
-                _tail_device_stream(root, endpoint)
+                _tail_device_stream(root, endpoint, replay=args.replay)
             except KeyboardInterrupt:
                 pass
         return 0
@@ -1376,10 +1413,13 @@ def cmd_hardware_attach(args: argparse.Namespace) -> int:
             print(f"No network device IP configured on task {args.task_id}.", file=sys.stderr)
             return 2
         host, port, username, password = target
-        status = ensure_network_terminal(root, host, port, username=username, password=password)
+        # Detach the bridge from this CLI process's death: interrupting the agent
+        # must not tear down a working terminal (the Web service / task references
+        # keep it alive; self-reap and explicit stop handle cleanup).
+        status = ensure_network_terminal(root, host, port, username=username, password=password, detach=True)
         print(f"Network terminal {host}:{port} (status={status.get('status')}). Streaming; Ctrl-C stops watching only.")
         try:
-            _tail_network_stream(root, host, port)
+            _tail_network_stream(root, host, port, replay=args.replay)
         except KeyboardInterrupt:
             pass
         return 0
@@ -1390,14 +1430,14 @@ def cmd_hardware_attach(args: argparse.Namespace) -> int:
     if not device:
         print("hardware-attach requires --device (e.g. /dev/ttyUSB0) or a UART channel on the task", file=sys.stderr)
         return 2
-    status = ensure_bridge(root, device, baudrate)
+    status = ensure_bridge(root, device, baudrate, detach=True)
     print(
         f"Bridge owns {device}@{baudrate} (status={status.get('status')}). "
         "Streaming RX; Ctrl-C to stop watching (the bridge keeps holding the port). "
         "Use `aha hardware-stop` to release it."
     )
     try:
-        _tail_device_stream(root, device)
+        _tail_device_stream(root, device, replay=args.replay)
     except KeyboardInterrupt:
         pass
     return 0

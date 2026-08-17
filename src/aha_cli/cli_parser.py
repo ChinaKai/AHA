@@ -471,6 +471,7 @@ def build_parser(handlers: Mapping[str, Callable[[argparse.Namespace], int]]) ->
     hardware_attach_p.add_argument("--baudrate", type=int, default=115200)
     hardware_attach_p.add_argument("--agent-id", default="main")
     hardware_attach_p.add_argument("--idle-timeout", type=float, default=None, help="Stop after N idle seconds")
+    hardware_attach_p.add_argument("--replay", action="store_true", help="Replay the recent stream history before live output")
     hardware_attach_p.set_defaults(func=handlers["hardware-attach"])
 
     hardware_send_p = sub.add_parser("hardware-send", help="Send (TX) data to an attached hardware session")
