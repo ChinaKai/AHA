@@ -736,9 +736,17 @@
         initialChatLoadPending ? { limit: 200 } : {}
       );
       if (!initialChatLoadPending || target !== "main") return;
+      // Bound the deep-link walk-back. Landing on one deep-linked message must not
+      // load the entire chat history (thousands of events, many page requests), which
+      // keeps the panel in a "Loading..." state for a long time on big conversations.
+      // If the target cursor is not reached within the cap, render the newest events
+      // and let the user scroll up / Load older to reach it.
+      const MAX_DEEP_LINK_WALK_PAGES = 2;
+      let walked = 0;
       let previousBeforeOffset = stateValue?.beforeOffset;
-      while (stateValue?.hasMore && !conversationContainsInitialChat(stateValue)) {
+      while (stateValue?.hasMore && !conversationContainsInitialChat(stateValue) && walked < MAX_DEEP_LINK_WALK_PAGES) {
         stateValue = await loadConversationPage(taskId, target, true, false, { limit: 200 });
+        walked += 1;
         if (stateValue?.beforeOffset === previousBeforeOffset) break;
         previousBeforeOffset = stateValue?.beforeOffset;
       }
@@ -1195,13 +1203,14 @@
     }
 
     // Mount a virtual list into hostEl for the given task's conversation.
-    function mountVirtualConversation(hostEl, taskId, target) {
+    function mountVirtualConversation(hostEl, taskId, target, options = {}) {
       if (!hostEl || !taskId) return null;
       const key = virtualListKey(taskId, target);
       disposeVirtual(taskId, target);
       const list = window.AHAVirtualList?.createVirtualList?.(hostEl, {
         estimatedItemHeight: 48,
-        anchorBottom: true,
+        anchorBottom: options.anchorBottom !== false,
+        initialScrollTop: Number(options.initialScrollTop) || 0,
         overscan: 6
       });
       if (!list) return null;
@@ -1225,8 +1234,29 @@
       list.setItemCount(events.length);
       // Keep pinned to the newest message when the user was already at the bottom.
       if (list.isNearBottom()) {
-        list.appendItems(0, true);
+        list.scrollToBottom();
       }
+    }
+
+    function isVirtualConversation(taskId, target = backendTarget()) {
+      return deps.taskConversationEvents(taskId).length > VIRTUAL_THRESHOLD;
+    }
+
+    // In-place update of an already-mounted virtual list. Used by renderPanel on
+    // realtime re-renders so the panel is NOT torn down and re-created (which
+    // flickers and loses measured heights / scroll position on large conversations).
+    function updateMountedVirtualConversation(taskId, target, options = {}) {
+      const list = virtualLists.get(virtualListKey(taskId, target));
+      if (!list) return false;
+      const events = deps.taskConversationEvents(taskId);
+      list.setRenderFn((index) => deps.renderTimelineEvent(events[index] || {}));
+      list.setItemCount(events.length);
+      if (options.anchorBottom) {
+        list.scrollToBottom();
+      } else if (Number(options.initialScrollTop) > 0) {
+        list.scrollTo(Number(options.initialScrollTop));
+      }
+      return true;
     }
 
     return Object.freeze({
@@ -1242,7 +1272,9 @@
       ensureActiveTabData,
       ensureConversationLoaded,
       finalDetail,
+      isVirtualConversation,
       mountVirtualConversation,
+      updateMountedVirtualConversation,
       initializeEventTailOffset,
       latestKnownEventOrder,
       loadContextDetail,

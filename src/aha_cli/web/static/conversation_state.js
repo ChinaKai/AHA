@@ -58,6 +58,10 @@
 
     function conversationSourceEvents(taskId, target = backendTarget()) {
       const state = conversationStates.get(conversationKey(taskId, target));
+      // Prefer already-loaded page events whenever we have any: a session refresh
+      // invalidation clears `initialized` but must not blank the visible timeline
+      // by falling back to the bounded realtime cache (which may hold no chat rows).
+      if (state?.events?.length) return state.events;
       return state?.initialized ? state.events : agentTimelineEvents(taskId, target);
     }
 

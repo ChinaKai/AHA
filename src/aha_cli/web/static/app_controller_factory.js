@@ -327,6 +327,8 @@
       renderConversationFilters: deps.renderConversationFilters,
       renderConversation: deps.renderConversation,
       mountVirtualConversation: deps.mountVirtualConversation,
+      isVirtualConversation: deps.isVirtualConversation,
+      updateMountedVirtualConversation: deps.updateMountedVirtualConversation,
       renderFinalPanelHtml: deps.renderFinalPanelHtml,
       renderLogsPanelHtml: deps.renderLogsPanelHtml,
       renderHardwareIoPanelHtml: deps.renderHardwareIoPanelHtml,

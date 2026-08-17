@@ -94,6 +94,10 @@
 
     function isPanelNearBottom() {
       if (!panelEl) return true;
+      // The virtualized conversation scrolls inside .vl-host (the panel itself is
+      // height-constrained and does not scroll), so check the host when present.
+      const host = panelEl.querySelector?.(".vl-host");
+      if (host) return host.scrollHeight - host.scrollTop - host.clientHeight < 80;
       return panelEl.scrollHeight - panelEl.scrollTop - panelEl.clientHeight < 80;
     }
 
@@ -130,11 +134,42 @@
         const metricsPopoverOpen = Boolean(metricsPopoverState);
         const shouldFollow = !metricsPopoverOpen && (conversationAutoFollow() || isPanelNearBottom());
         syncExpandedMessageKeysFromDom();
+        // When the virtual conversation is already mounted and the new render is also
+        // virtual, keep the mounted list alive: re-render the timeline chrome (Load
+        // older button, timer) fresh but swap the freshly-built .vl-host for the
+        // previously-mounted host element, so the virtual list is NOT torn down and
+        // re-created every poll tick (which flickers and loses measured heights and
+        // scroll position on large conversations).
+        const keptVlHost = panelEl.querySelector(".vl-host");
+        const virtualTarget = deps.backendTarget?.() || "main";
+        if (keptVlHost && deps.isVirtualConversation?.(task.id, virtualTarget)) {
+          const keptScrollTop = keptVlHost.scrollTop;
+          panelEl.innerHTML = renderConversation(task.id);
+          const freshVlHost = panelEl.querySelector(".vl-host");
+          if (freshVlHost && freshVlHost !== keptVlHost) {
+            freshVlHost.replaceWith(keptVlHost);
+            deps.updateMountedVirtualConversation?.(task.id, virtualTarget, {
+              anchorBottom: shouldFollow,
+              initialScrollTop: keptScrollTop
+            });
+          }
+          restorePromptMetricsPopoverState(metricsPopoverState);
+          positionPromptMetricsPopover();
+          return;
+        }
+        // Capture the virtual host's scroll position before innerHTML replaces it so a
+        // re-render (realtime usage update, session refresh) can restore it instead of
+        // forcing the user back to the newest message.
+        const previousVlHost = panelEl.querySelector(".vl-host");
+        const previousVlScrollTop = previousVlHost ? previousVlHost.scrollTop : 0;
         panelEl.innerHTML = renderConversation(task.id);
         const vlHost = panelEl.querySelector(".vl-host");
         if (vlHost) {
-          deps.mountVirtualConversation?.(vlHost, vlHost.dataset.vlTask || task.id, vlHost.dataset.vlTarget || "");
-          panelEl.scrollTop = panelEl.scrollHeight;
+          deps.mountVirtualConversation?.(vlHost, vlHost.dataset.vlTask || task.id, vlHost.dataset.vlTarget || "", {
+            anchorBottom: shouldFollow,
+            initialScrollTop: previousVlScrollTop
+          });
+          if (shouldFollow) vlHost.scrollTop = vlHost.scrollHeight;
         } else if (options.preserveScroll) {
           panelEl.scrollTop = panelEl.scrollHeight - previousHeight + previousTop;
         } else if (metricsPopoverOpen) {

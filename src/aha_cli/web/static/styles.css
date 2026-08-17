@@ -8380,6 +8380,16 @@ body.task-memo-home .task-memo-page .task-memo-panel {
   overflow-y: auto;
   overscroll-behavior: contain;
 }
+/* When the conversation is virtualized, make the timeline a height-constrained
+   flex column so .vl-host becomes the scroll container instead of growing to the
+   full spacer height (which pins the view to the oldest messages). */
+.conversation.timeline:has(.vl-host) {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+}
 .vl-item {
   position: absolute;
   top: 0;

@@ -45,7 +45,7 @@
       if (view.error) {
         return `<div class="empty">Conversation unavailable. Realtime updates will start from the latest event offset.<br><code>${escapeHtml(view.error)}</code></div>`;
       }
-      if (!view.eventsHtml && !view.hasMore) {
+      if (!view.eventsHtml && !view.hasMore && !view.virtual) {
         const empty = `<div class="empty">No conversation for ${escapeHtml(view.target || "main")} yet.</div>`;
         return `<div class="conversation timeline">${empty}${view.timerHtml || ""}${view.metricsDockHtml || ""}</div>`;
       }
