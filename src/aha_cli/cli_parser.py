@@ -26,6 +26,7 @@ COMMANDS = {
     "runs",
     "workspace",
     "kb",
+    "skill",
     "watch",
     "send",
     "chat",
@@ -282,6 +283,9 @@ def build_parser(handlers: Mapping[str, Callable[[argparse.Namespace], int]]) ->
     kb_search.add_argument("query")
     kb_search.add_argument("--json", action="store_true", help="Emit JSON output")
     kb_search.set_defaults(func=handlers["kb"])
+    kb_links = kb_sub.add_parser("links", help="Rebuild the wikilink ([[...]]) index across all entries")
+    kb_links.add_argument("--json", action="store_true", help="Emit JSON output")
+    kb_links.set_defaults(func=handlers["kb"])
     kb_approve = kb_sub.add_parser("approve", help="Approve a pending candidate into the knowledge base")
     kb_approve.add_argument("candidate_id")
     kb_approve.add_argument("--json", action="store_true", help="Emit JSON output")
@@ -360,8 +364,40 @@ def build_parser(handlers: Mapping[str, Callable[[argparse.Namespace], int]]) ->
     kb_sync.add_argument("--message", "-m", default=None, help="Commit message for pending changes")
     kb_sync.add_argument("--no-pull", action="store_true", help="Skip pulling from the remote")
     kb_sync.add_argument("--push", action="store_true", help="Force push even if git.auto_push is off")
+    kb_sync.add_argument("--resolve", action="store_true", help="Resolve a sync conflict via the KB maintenance agent")
     kb_sync.add_argument("--json", action="store_true", help="Emit JSON output")
     kb_sync.set_defaults(func=handlers["kb"])
+    kb_sync_status = kb_sub.add_parser("sync-status", help="Report KB git sync + maintenance state")
+    kb_sync_status.add_argument("--remote", action="store_true", help="Check remote (fetch) before reporting")
+    kb_sync_status.add_argument("--json", action="store_true", help="Emit JSON output")
+    kb_sync_status.set_defaults(func=handlers["kb"])
+
+    skill_p = sub.add_parser("skill", help="Manage AHA skills (system/personal)")
+    skill_sub = skill_p.add_subparsers(dest="skill_cmd", required=True)
+    skill_list = skill_sub.add_parser("list", help="List managed skills with their system/personal source")
+    skill_list.add_argument("--json", action="store_true", help="Emit JSON output")
+    skill_list.set_defaults(func=handlers["skill"])
+    skill_show = skill_sub.add_parser("show", help="Show a skill's SKILL.md and metadata")
+    skill_show.add_argument("skill_id")
+    skill_show.add_argument("--json", action="store_true", help="Emit JSON output")
+    skill_show.set_defaults(func=handlers["skill"])
+    skill_create = skill_sub.add_parser("create", help="Create a new personal skill")
+    skill_create.add_argument("skill_id")
+    skill_create.add_argument("--title", default=None, help="Display title (defaults from skill id)")
+    skill_create.add_argument("--description", default=None, help="One-line description")
+    skill_create.add_argument("--body", default=None, help="SKILL.md body (markdown). Defaults to a template.")
+    skill_create.add_argument("--json", action="store_true", help="Emit JSON output")
+    skill_create.set_defaults(func=handlers["skill"])
+    skill_edit = skill_sub.add_parser("edit", help="Overwrite a personal skill's SKILL.md")
+    skill_edit.add_argument("skill_id")
+    skill_edit.add_argument("--body", default=None, help="New SKILL.md body")
+    skill_edit.add_argument("--description", default=None, help="New one-line description")
+    skill_edit.add_argument("--json", action="store_true", help="Emit JSON output")
+    skill_edit.set_defaults(func=handlers["skill"])
+    skill_rm = skill_sub.add_parser("delete", help="Delete a personal skill")
+    skill_rm.add_argument("skill_id")
+    skill_rm.add_argument("--json", action="store_true", help="Emit JSON output")
+    skill_rm.set_defaults(func=handlers["skill"])
 
     watch_p = sub.add_parser("watch")
     watch_p.add_argument("run_id", nargs="?")

@@ -121,7 +121,9 @@ class TaskRuntimeTests(unittest.TestCase):
         self.assertEqual(messages[-1]["final_context"]["to_at"], detail["task"]["coordination"]["final_summary_requested_at"])
         self.assertIn("AHA finalization request.", messages[-1]["message"])
         self.assertIn("Knowledge/nav feedback context:", messages[-1]["message"])
-        self.assertIn("knowledge_enabled: false", messages[-1]["message"])
+        # Knowledge base is enabled by default; nav index is not initialized in
+        # this run so feedback stays inactive (no hidden sidecar).
+        self.assertIn("knowledge_enabled: true", messages[-1]["message"])
         self.assertIn("Knowledge/nav feedback is not active", messages[-1]["message"])
         self.assertNotIn("Final source range:", messages[-1]["message"])
         self.assertNotIn("<aha_knowledge_candidates>", messages[-1]["message"])

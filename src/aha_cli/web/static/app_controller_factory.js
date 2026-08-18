@@ -1,6 +1,7 @@
 (() => {
   const ahaSlashCommands = Object.freeze([
     { scope: "aha", name: "/aha kb", insert: "/aha kb ", desc: "Ask the current agent to generate knowledge-base candidates." },
+    { scope: "aha", name: "/aha skill", insert: "/aha skill ", desc: "Ask the current agent to create a personal AHA skill." },
     { scope: "aha", name: "/aha complete", insert: "/aha complete", desc: "Mark the task completed." },
     { scope: "aha", name: "/aha reopen", insert: "/aha reopen", desc: "Reopen a completed task for follow-up." },
     { scope: "aha", name: "/aha interrupt", insert: "/aha interrupt", desc: "Interrupt the selected agent's current turn." }

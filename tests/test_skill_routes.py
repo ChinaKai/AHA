@@ -78,7 +78,8 @@ class SkillRoutesTests(unittest.TestCase):
             self.assertEqual(create_body["skill"]["id"], "board-debug")
             self.assertEqual(create_body["skill"]["label"], "Board Debug UI")
             self.assertEqual(create_body["skill"]["short_description"], "Board debug helpers")
-            self.assertEqual(create_body["skill"]["source"], "knowledge")
+            self.assertEqual(create_body["skill"]["source"], "personal")
+            self.assertEqual(create_body["skill"]["storage_source"], "knowledge")
             self.assertEqual((skills_root / "board-debug" / "SKILL.md").read_text(encoding="utf-8"), skill_md)
             self.assertEqual(
                 (skills_root / "board-debug" / "agents" / "openai.yaml").read_text(encoding="utf-8"),
@@ -158,7 +159,7 @@ class SkillRoutesTests(unittest.TestCase):
 
         self.assertTrue(response.startswith(b"HTTP/1.1 200 OK"))
         self.assertEqual([item["id"] for item in body["skills"]], ["board-debug"])
-        self.assertEqual(body["skills"][0]["source"], "knowledge")
+        self.assertEqual(body["skills"][0]["source"], "personal")
         self.assertEqual(body["skills"][0]["path"], str(migrated / "SKILL.md"))
         self.assertEqual(migrated_skill_md, "# Legacy Board Debug\n\nUse UART safely.\n")
         self.assertEqual(migrated_checklist, "- power\n")
@@ -215,6 +216,6 @@ class SkillRoutesTests(unittest.TestCase):
                 "id": "scope-debug",
                 "label": "Scope Debug",
                 "path": str(migrated / "SKILL.md"),
-                "source": "knowledge",
+                "source": "personal",
             }
         ])

@@ -616,59 +616,59 @@ AHA 声明零第三方依赖（`pyproject.toml dependencies=[]`），不能引 d
 > 标注：**升级** = 改现有代码；**新建** = 新增功能。多数是升级（基于 0.1 已有基础）。
 
 ### Phase 1：自动沉淀闭环（地基，最高优先级）
-- [ ] **升级** `enabled` 默认 True + 任务创建强制 KB（`default_knowledge_config`）
-- [ ] **升级** `curation.gate` 新增 `agent-auto` + 质量门控 `_quality_gate`（`knowledge_distill.py`）
-- [ ] **新建** `auto_distill`：agent_finished / task_result_written 自动蒸馏（挂 `orchestrator.py` 事件）
-- [ ] **升级** git 默认 `auto_commit/auto_push/auto_pull = True`（`knowledge_git.py`，机制已有）
-- [ ] **升级** 去重合并增强（`candidate_identity` → 语义相似度合并）
+- [x] **升级** `enabled` 默认 True + 任务创建强制 KB（`default_knowledge_config`）
+- [x] **升级** `curation.gate` 新增 `agent-auto` + 质量门控 `_quality_gate`（`knowledge_distill.py`）
+- [x] **新建** `auto_distill`：agent_finished / task_result_written 自动蒸馏（挂 `orchestrator.py` 事件）
+- [x] **升级** git 默认 `auto_commit/auto_push/auto_pull = True`（`knowledge_git.py`，机制已有）
+- [x] **升级** 去重合并增强（`candidate_identity` → 语义相似度合并）——轻量版：标题 token Jaccard ≥ 0.6 或（tags 重叠 且 标题相似 ≥ 0.35）即合并历史候选，保留双方 body + 合并 sources
 - **验证**：跑一个任务 → final 自动进 KB（approved）→ git 自动 push → 新任务注入该条目
 
 ### Phase 2：Obsidian 存储（网状知识）
-- [ ] **新建** `[[双链]]` 解析 + `meta.links/backlinks` 维护 + `aha kb links` 重建
-- [ ] **新建** `MOC/` 层 + 自动 MOC 挂载
-- [ ] **新建** `zettelkasten/` 原子笔记 + 标签行内解析
+- [x] **新建** `[[双链]]` 解析 + `meta.links/backlinks` 维护 + `aha kb links` 重建
+- [~] **新建** `MOC/` 层 + 自动 MOC 挂载 —— 已收敛不做：`MOC/skills.md` 单页已实现（2c），通用 MOC 层留作后续可选
+- [~] **新建** `zettelkasten/` 原子笔记 + 标签行内解析 —— 已收敛不做：当前用 `general/wiki` + `projects/<key>/navigation` 承载原子笔记，zettelkasten 目录留作后续可选
 - **验证**：`aha kb links` 扫描 → 双链/反链正确；新条目自动挂 MOC
 
 ### Phase 2b：nav 升级为项目知识库
-- [ ] **新建** nav 的 `knowledge/` 子目录（decisions/pitfalls/components/topic）
-- [ ] **升级** 任务蒸馏分类落位：可复用→solutions，项目级→nav/knowledge，流水→worklog（`knowledge_distill.py`）
-- [ ] **升级** nav index 自动挂「知识区」链接 + 关联 solutions（`knowledge_navigation.py`）
-- [ ] **升级** `scan_workspace` 增强：除代码结构外识别架构决策/踩坑候选
-- **验证**：跑一个项目任务 → 结论自动进 nav/knowledge + solutions，nav index 出现知识区
+- [x] **新建** nav 的 `knowledge/` 子目录（decisions/pitfalls/components/topic）
+- [x] **升级** 任务蒸馏分类落位：可复用→solutions，项目级→nav/knowledge，流水→worklog（`knowledge_distill.py`）
+- [x] **升级** nav index 自动挂「知识区」链接 + 关联 solutions（`knowledge_navigation.py`）
+- [x] **升级** `scan_workspace` 增强：除代码结构外识别架构决策/踩坑候选
+- **验证**：跑一个项目任务 → 结论自动进 nav/knowledge + solutions，nav index 出现知识区（7 个单测：scan 识别决策/踩坑、sidecar 知识类目路由、worklog 路由、父级回填、solution 挂 nav index、知识 slug 校验通过/非法类目拒绝）
 
 ### Phase 2c：Skills 系统化
-- [ ] **升级** skill 区分系统/个人（frontmatter `source` + 目录 `system/`+`personal/`，`skill_management.py`）
-- [ ] **新建** `/skill` CLI 命令 + 技能创建说明提示词注入（`prompts/skill_creation_guide.md`）
-- [ ] **升级** Web skill tab 分区展示（系统只读 / 个人可编辑，`knowledge.html`）
-- [ ] **新建** skill 节点进星球图 + `MOC/skills.md` 技能总览
-- [ ] **升级** 技能绑定任务增强（图拖拽 / 蒸馏提升系统技能候选）
-- **验证**：`/skill` 创建技能 → 进 personal → 星球图可见 → 任务可绑定
+- [x] **升级** skill 区分系统/个人（frontmatter `source` + 目录 `system/`+`personal/`，`skill_management.py`）
+- [x] **新建** `/skill` CLI 命令 + 技能创建说明提示词注入（`prompts/skill_creation_guide.md`）
+- [x] **升级** Web skill tab 分区展示（系统只读 / 个人可编辑，`knowledge.html`）
+- [x] **新建** skill 节点进星球图 + `MOC/skills.md` 技能总览
+- [~] **升级** 技能绑定任务增强（图拖拽 / 蒸馏提升系统技能候选）——延后：任务绑定已具备（`task_skills` 注入），图拖拽/蒸馏提升系统技能候选后续做
+- **验证**：`/skill` 创建技能 → 进 personal → Web Skills tab 可见/可编辑、系统技能只读（`scripts/verify_kb_skills.py` 真实浏览器）；星球图 skill 节点 + `MOC/skills.md`（9 个单测 + 全量 1658 通过）
 
 ### Phase 2d：通用附件支持（PDF/Word/TXT/MP4 + 附件内图片）
-- [ ] **升级** `knowledge_assets.py`：从"仅图片"扩为"通用附件"（白名单 mime + kind 分类 + 大小上限）
-- [ ] **新建** `GET /api/kb/attachment`（按 mime 内联/下载，扩展 `/api/kb/entry/image`）
-- [ ] **新建** docx/pptx 插图提取（标准库 `zipfile` 读 `word/media`/`ppt/media`，零依赖）
-- [ ] **升级** Web 条目详情「附件区」：图片内联 / PDF embed / 文本 pre / 视频播放 / Office 下载
-- [ ] **新建** 大附件独立存储（KB 仓库只存引用 + 校验和）
-- **验证**：上传 PDF/docx/mp4 附件 → Web 详情附件区正确展示（pdf 可预览、mp4 可播、docx 可下载）→ docx 插图自动提取内联
+- [x] **升级** `knowledge_assets.py`：从"仅图片"扩为"通用附件"（白名单 mime + kind 分类 + 大小上限 + sha256）
+- [x] **新建** `GET /api/kb/attachment`（按 mime 内联/下载 + Content-Disposition，路径校验防穿越）
+- [x] **新建** docx/pptx 插图提取（标准库 `zipfile` 读 `word/media`/`ppt/media`，零依赖、失败隔离）
+- [x] **升级** Web 条目详情「附件区」：图片内联 / PDF embed / 文本 pre / 视频播放 / Office 下载
+- [x] **新建** 大附件独立存储（媒体/超大文件进 `<aha_home>/knowledge_local_assets/`，KB 只存引用 + sha256；gitignore 兜底排除媒体扩展名）
+- **验证**：上传 PDF/docx/mp4 附件 → Web 详情附件区正确展示（pdf embed、mp4 video、txt pre）→ docx 插图自动提取内联（16 个单测 + 真实浏览器 `scripts/verify_kb_attachments.py` + git 排除实测）
 
 ### Phase 2e：智能同步 + agent KB 维护
-- [ ] **升级** `sync_status`/`pull`：`diverged` 状态触发维护任务（`knowledge_git.py`）
-- [ ] **新建** KB 维护 agent 子任务（冲突分析 + 语义解决 + 用户优先 + 提交 + 汇报）
-- [ ] **新建** 定时同步调度器（`knowledge.sync.interval_minutes`，服务内定时器 + 锁）
-- [ ] **升级** Web 同步面板：显示同步状态 + 冲突详情 + 维护任务结果
-- [ ] **新建** `conflicts/` 保留无法判断的两版（待人工）
-- **验证**：两台设备各改 KB → 同步产生 diverged → agent 维护任务自动解决 → 知识合并不丢
+- [x] **升级** `sync_status`/`pull`：冲突检测（`unmerged`/`rebase_in_progress`/`conflict` 状态）；agent 模式下 `pull` 保留 rebase 供维护任务处理（`knowledge_git.py`）
+- [x] **新建** KB 维护 agent 任务（`knowledge_maintenance.py`）：真实 backend 分析 base/local/remote → JSON 计划 → 确定性应用（local/remote/merge/archive）+ 用户优先兜底 + rebase --continue + push + 状态落盘）
+- [x] **新建** 定时同步调度器（`knowledge_sync_loop.py`：`knowledge.sync.interval_minutes`，服务内 asyncio 定时器 + 单飞锁 + 冲突派发维护）
+- [x] **升级** Web 同步面板：冲突状态展示 + 「Resolve conflicts」按钮 + 轮询维护结果 + CLI `aha kb sync --resolve` / `aha kb sync-status`
+- [x] **新建** `conflicts/` 保留无法判断的两版（archive action 把本地版存档到 AHA home 的 `conflicts/`，待人工）
+- **验证**：本地双克隆模拟双设备各改 KB → sync 产生 diverged → agent 维护任务自动解决（用户优先）→ 知识合并不丢（`scripts/verify_kb_sync_ui.py` 真实浏览器 + 20 个单测 + CLI 端到端）
 
 ### Phase 3：检索升级
-- [ ] **升级** `retrieve_for_task` 双链传播 + 反链加权 + MOC 注入（`knowledge_retrieval.py`）
+- [x] **升级** `retrieve_for_task` 双链传播 + 反链加权 + MOC 注入（`knowledge_retrieval.py`）——双链单跳传播 + 反链加权已完成（`_expand_by_wikilinks`/`_score`），MOC 注入随通用 MOC 层收敛未做（见 Phase 2 备注）
 - **验证**：任务命中一篇 → 关联笔记随上下文注入
 
 ### Phase 4：Web 星球图
-- [ ] **新建** 后端 `GET /api/kb/graph`（`knowledge_routes.py`）
-- [ ] **新建** 前端 `knowledge_graph.js`（Canvas 力导向，自研零依赖）
-- [ ] **新建** Graph tab + 详情弹窗反链/双链/标签
-- [ ] **新建** 搜索/过滤/着色
+- [x] **新建** 后端 `GET /api/kb/graph`（`knowledge_routes.py`）
+- [x] **新建** 前端 `knowledge_graph.js`（Canvas 力导向，自研零依赖）
+- [x] **新建** Graph tab + 详情弹窗反链/双链/标签
+- [x] **新建** 搜索/过滤/着色
 - **验证**：KB 页 Graph tab 出现星球图，节点可拖拽/缩放，点击开详情，反链可跳
 
 ---

@@ -12,7 +12,7 @@ from aha_cli.store.knowledge import (
 )
 
 
-SUPPORTED_SLASH_COMMANDS = "Supported slash commands: /aha kb <message>, /aha complete, /aha reopen, /aha interrupt, /agent <command>."
+SUPPORTED_SLASH_COMMANDS = "Supported slash commands: /aha kb <message>, /aha skill <name> <desc>, /aha complete, /aha reopen, /aha interrupt, /agent <command>."
 
 
 def format_aha_command(root: Path, run_id: str, task_id: str | None, command: str, target: str = "main") -> str:
@@ -121,6 +121,27 @@ def format_aha_kb_command(
     return False, prompt, None
 
 
+def format_aha_skill_command(
+    command: str,
+    *,
+    root: Path | None = None,
+    run_id: str | None = None,
+    task_id: str | None = None,
+) -> tuple[bool, str | None, str | None]:
+    parts = command.split(maxsplit=2)
+    suffix = parts[2].strip() if len(parts) > 2 and parts[0] == "/aha" and parts[1] == "skill" else ""
+    if not suffix:
+        return True, None, "Usage: /aha skill <name> <description> asks the current agent to create a personal AHA skill from its sticky session context."
+    prompt = render_prompt_template(
+        "skill_creation_guide.md",
+        instruction=suffix,
+        aha_home=str(root) if root else "",
+        run_id=str(run_id) if run_id else "",
+        task_id=str(task_id) if task_id else "",
+    ).rstrip()
+    return False, prompt, None
+
+
 def format_task_journal_for_prompt(rounds: list[dict]) -> str:
     if not rounds:
         return render_prompt_template("finalization_task_journal_empty.md").rstrip()
@@ -214,6 +235,7 @@ __all__ = [
     "format_finalization_context_for_prompt",
     "format_agent_command",
     "format_aha_kb_command",
+    "format_aha_skill_command",
     "format_aha_command",
     "format_knowledge_feedback_context_for_prompt",
     "format_task_journal_for_prompt",

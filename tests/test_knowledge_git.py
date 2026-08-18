@@ -374,7 +374,9 @@ def test_sync_unreachable_remote_cli_fails(tmp_path: Path):
 def test_auto_hooks_respect_flags(tmp_path: Path):
     root = tmp_path / ".aha"
     # Disabled entirely.
-    disabled = {"knowledge": default_knowledge_config()}
+    disabled_kb = default_knowledge_config()
+    disabled_kb["enabled"] = False
+    disabled = {"knowledge": disabled_kb}
     assert "skipped" in kg.auto_commit_after_change(root, "m", disabled)
     assert "skipped" in kg.auto_pull_before_task(root, disabled)
 

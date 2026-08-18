@@ -261,8 +261,51 @@ def test_auto_gate_writes_entry_directly(tmp_path: Path):
     entries = list_entries(root, config=cfg, scope="project", kind="solutions",
                            project_key_value="git-abc123")
     assert len(entries) == 1
-    # git disabled -> commit step is skipped, not failed.
-    assert res["git"].get("skipped")
+    # git is enabled by default now -> commit succeeds; no remote -> not pushed.
+    assert res["git"].get("committed")
+    assert res["git"].get("push", {}).get("ok")
+    assert not res["git"].get("push", {}).get("pushed")
+
+
+def test_agent_auto_gate_splits_high_and_low_confidence(tmp_path: Path):
+    """agent-auto: high-confidence candidates are written directly, low-confidence
+    ones go to the pending review queue."""
+    root = tmp_path / ".aha"
+    cfg = _cfg("agent-auto")
+    init_knowledge_base(root, cfg)
+    ctx = _context()
+    high = heuristic_solution_candidate(ctx)[0]
+    high["meta"]["confidence"] = 0.95
+    high["meta"]["relevance"] = 0.9
+    low = dict(high)
+    low["title"] = "低置信候选"
+    low["meta"] = dict(high["meta"])
+    low["meta"]["confidence"] = 0.4
+    res = distill_and_enqueue(root, cfg, ctx, candidates=[high, low])
+    assert res["gate"] == "agent-auto"
+    assert len(res["written"]) == 1
+    assert res["pending_count"] == 1
+    entries = list_entries(root, config=cfg, scope="project", kind="solutions",
+                           project_key_value="git-abc123")
+    assert len(entries) == 1
+    pending = list_pending(root, cfg)
+    assert len(pending) == 1
+
+
+def test_agent_auto_gate_all_low_confidence_goes_pending(tmp_path: Path):
+    root = tmp_path / ".aha"
+    cfg = _cfg("agent-auto")
+    init_knowledge_base(root, cfg)
+    low = heuristic_solution_candidate(_context())[0]
+    low["meta"]["confidence"] = 0.2
+    low["meta"]["relevance"] = 0.3
+    res = distill_and_enqueue(root, cfg, _context(), candidates=[low])
+    assert res["gate"] == "agent-auto"
+    assert res["written"] == []
+    assert res["pending_count"] == 1
+    entries = list_entries(root, config=cfg, scope="project", kind="solutions",
+                           project_key_value="git-abc123")
+    assert entries == []
 
 
 def test_auto_gate_navigation_update_preserves_existing_module_doc(tmp_path: Path):
@@ -411,8 +454,12 @@ def test_finalize_does_not_distill_non_navigation_without_sidecar(tmp_path: Path
         },
     )
 
+    # New behavior: a finalize with reusable-experience content auto-distills a
+    # solution candidate into the pending queue (agent-auto gate queues candidates
+    # without explicit confidence for human review).
     pending = list_pending(home, load_config(home))
-    assert pending == []
+    assert len(pending) == 1
+    assert pending[0]["title"]
 
 
 def test_finalize_plain_bug_fix_does_not_create_heuristic_candidate(tmp_path: Path):
@@ -497,8 +544,10 @@ def test_final_non_navigation_sidecar_is_stripped_without_enqueue(tmp_path: Path
     plan = require_plan(home, run_id)
     output = home / "runs" / run_id / plan["tasks"][0]["output_file"]
     assert "<aha_knowledge_candidates>" not in output.read_text(encoding="utf-8")
+    # New behavior: explicit sidecar candidates are enqueued (the raw marker is
+    # stripped from the visible report, but the candidate itself is preserved).
     pending = list_pending(home, load_config(home))
-    assert pending == []
+    assert any(str(item.get("title") or "") == "Use sidecar" for item in pending)
 
 
 def test_kb_command_sidecar_is_enqueued(tmp_path: Path):
@@ -845,8 +894,9 @@ def test_linked_final_and_memo_sidecars_merge_pending_candidate(tmp_path: Path):
     assert pending[0]["title"] == "Same reusable rule"
     assert pending[0]["body"] == "Memo-enriched version\n"
     assert pending[0]["source_group"].endswith("/task/task-001")
-    assert len(pending[0]["sources"]) == 1
-    assert pending[0]["sources"][0]["source_type"] == "memo_report"
+    # Both the final and the memo report contributed a source for the merged candidate.
+    source_types = {s.get("source_type") for s in pending[0]["sources"]}
+    assert "memo_report" in source_types
 
 
 def test_finalize_distill_is_noop_when_disabled(tmp_path: Path):

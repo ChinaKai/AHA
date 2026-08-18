@@ -11,31 +11,10 @@
     * { box-sizing: border-box; }
     [hidden] { display: none !important; }
     body {
-      min-height: 100vh; overflow-x: hidden; overflow-y: auto;
+      min-height: 100vh; overflow: hidden;
       background: var(--color-bg); color: var(--color-text);
     }
-    .kb-wrap { width: 100%; max-width: none; margin: 0; padding: 0 12px 56px; }
-    .kb-console-head {
-      display: flex; align-items: flex-start; justify-content: space-between;
-      gap: 16px; padding: 16px 0 12px; border-bottom: 1px solid var(--color-border-subtle);
-    }
-    .kb-console-head > div { min-width: 0; }
-    .kb-console-head h1 { margin: 0; font-size: 18px; color: var(--color-text-strong); }
-    .kb-console-head p { margin: 4px 0 0; font-size: 12px; color: var(--color-text-subtle); }
-    .kb-head-actions {
-      display: grid; justify-items: end; gap: 6px; min-width: 0;
-    }
-    .kb-sync-panel {
-      display: flex; align-items: center; justify-content: flex-end;
-      gap: 8px; min-width: 0; max-width: min(520px, 100%);
-    }
-    .kb-sync-panel .kb-muted { text-align: right; }
-    .kb-tabs { display: flex; gap: 8px; margin: 14px 0; flex-wrap: wrap; }
-    .kb-tabs button { min-width: 0; }
-    .kb-tab.active {
-      border-color: var(--color-primary); background: var(--color-primary-surface);
-      color: var(--color-primary-strong); font-weight: 650;
-    }
+    .kb-wrap { width: 100%; height: 100dvh; max-width: none; margin: 0; padding: 0; }
     .kb-row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin: 10px 0; }
     .kb-row > * { min-width: 0; }
     .kb-card {
@@ -246,51 +225,59 @@
     }
     .kb-pending-body { max-height: min(420px, 55vh); overflow: auto; white-space: normal; }
     .kb-pending-body pre { white-space: pre-wrap; }
-    #capture-list .kb-card { padding: 8px 10px; margin: 6px 0; gap: 4px; }
-    #capture-list .kb-card h3 { font-size: 14px; }
     .kb-cap-list-row { cursor: pointer; }
     .kb-cap-list-row:hover { background: var(--color-surface-muted); }
     .kb-cap-preview { font-size: 12px; color: var(--color-text); overflow-wrap: anywhere; white-space: pre-wrap; max-height: 2.8em; overflow: hidden; }
-    .kb-capture-toolbar { justify-content: flex-end; margin: 0 0 8px; }
     .kb-section-title { margin: 16px 0 6px; font-size: 14px; color: var(--color-text-strong); }
     .kb-modal { position: fixed; inset: 0; background: rgba(0,0,0,.4); display: flex; align-items: center; justify-content: center; z-index: 50; }
     .kb-modal[hidden] { display: none; }
     .kb-modal-card { background: var(--color-surface); padding: 16px; border-radius: var(--radius-md); min-width: min(260px, 92vw); max-width: 92vw; min-height: 0; box-sizing: border-box; display: grid; gap: 10px; box-shadow: 0 8px 30px rgba(0,0,0,.25); }
     .kb-modal-card h3 { margin: 0; font-size: 15px; }
-    .kb-detail-fullscreen-modal {
-      background: var(--color-bg); align-items: stretch; justify-content: stretch;
+    .kb-attachments { margin-top: 14px; border-top: 1px solid var(--color-border-subtle); padding-top: 10px; display: grid; gap: 10px; }
+    .kb-attachments-heading { font-weight: 650; color: var(--color-text-strong); }
+    .kb-attachment { border: 1px solid var(--color-border-subtle); border-radius: var(--radius-sm); padding: 8px; display: grid; gap: 6px; }
+    .kb-attachment-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+    .kb-attachment-head .kb-muted { flex: 1; min-width: 120px; }
+    .kb-attachment-embed { width: 100%; height: 420px; border: 1px solid var(--color-border-subtle); border-radius: var(--radius-sm); }
+    .kb-attachment-video { width: 100%; max-height: 320px; border-radius: var(--radius-sm); }
+    .kb-attachment-audio { width: 100%; }
+    .kb-attachment-text { max-height: 200px; overflow: auto; background: var(--color-surface-muted); padding: 8px; border-radius: var(--radius-sm); font-size: 12px; white-space: pre-wrap; }
+    .kb-workspace-detail {
+      position: absolute; inset: 0; z-index: 10; min-width: 0; min-height: 0;
+      background: var(--color-bg); overflow: hidden;
     }
-    .kb-detail-fullscreen-modal .kb-detail-fullscreen {
-      width: 100vw; height: 100vh; height: 100dvh; max-width: none; max-height: none;
+    .kb-workspace-detail-card {
+      width: 100%; height: 100%; max-width: none; max-height: none;
       overflow: hidden; border-radius: 0; box-shadow: none; padding: 0;
+      background: var(--color-surface);
       display: flex; flex-direction: column; gap: 0;
     }
-    .kb-detail-fullscreen > h3 {
+    .kb-workspace-detail-card > h3 {
       flex: 0 0 auto;
       padding: 16px 20px 8px; font-size: 18px; line-height: 1.35;
     }
-    .kb-detail-fullscreen > .kb-muted {
+    .kb-workspace-detail-card > .kb-muted {
       flex: 0 0 auto;
       padding: 0 20px 12px; border-bottom: 1px solid var(--color-border-subtle);
     }
-    .kb-detail-fullscreen .kb-modal-action-row {
+    .kb-workspace-detail-card .kb-modal-action-row {
       flex: 0 0 auto;
       margin: 0; padding: 10px 20px; justify-content: space-between; gap: 12px;
       border-bottom: 1px solid var(--color-border-subtle);
       background: var(--color-surface-muted);
     }
-    .kb-detail-fullscreen .kb-modal-action-group { flex: 1 1 auto; }
-    .kb-detail-fullscreen .kb-modal-action-row > button { margin-left: auto; }
-    .kb-detail-fullscreen #cap-view-refs,
-    .kb-detail-fullscreen #cap-view-distill {
+    .kb-workspace-detail-card .kb-modal-action-group { flex: 1 1 auto; }
+    .kb-workspace-detail-card .kb-modal-action-row > button { margin-left: auto; }
+    .kb-workspace-detail-card #cap-view-refs,
+    .kb-workspace-detail-card #cap-view-distill {
       flex: 0 0 auto; padding: 0 20px; background: var(--color-surface);
     }
-    .kb-detail-fullscreen .kb-detail-scroll-body {
+    .kb-workspace-detail-card .kb-detail-scroll-body {
       flex: 1 1 auto;
       min-height: 0; overflow: auto; border: 0; border-radius: 0;
       background: var(--color-surface); padding: 18px 22px 56px;
     }
-    .kb-detail-fullscreen #cap-view-log.kb-detail-scroll-body {
+    .kb-workspace-detail-card #cap-view-log.kb-detail-scroll-body {
       max-height: none; margin: 0; border: 0; border-radius: 0;
     }
     .search-deep-link-hit {
@@ -367,6 +354,14 @@
       border-color: var(--color-primary); background: var(--color-primary-surface);
       color: var(--color-primary-strong);
     }
+    .kb-skill-source {
+      display: inline-block; margin-left: 6px; padding: 0 6px; border-radius: 999px;
+      font-size: 10px; line-height: 16px; vertical-align: middle;
+      background: var(--color-surface-muted); color: var(--color-text-subtle);
+    }
+    .kb-skill-source-system {
+      background: var(--color-primary-surface); color: var(--color-primary-strong);
+    }
     .kb-skill-list-item strong, .kb-skill-list-item span {
       min-width: 0; overflow-wrap: anywhere; white-space: normal;
     }
@@ -436,17 +431,7 @@
     }
     .kb-toast.show { opacity: 1; }
     @media (max-width: 640px) {
-      .kb-wrap { padding: 0 8px 44px; }
-      .kb-console-head { display: grid; gap: 10px; padding-top: 12px; }
-      .kb-console-head .status { width: fit-content; max-width: 100%; }
-      .kb-head-actions { justify-items: start; }
-      .kb-sync-panel { justify-content: flex-start; flex-wrap: wrap; }
-      .kb-sync-panel .kb-muted { text-align: left; }
-      .kb-tabs { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 4px; }
-      .kb-tabs button {
-        width: 100%; min-height: 32px; padding: 0 4px;
-        justify-content: center; white-space: nowrap; font-size: 11px;
-      }
+      .kb-wrap { padding: 0; }
       .kb-row { display: grid; grid-template-columns: 1fr; }
       .kb-row > select, .kb-row > input, .kb-row > button { width: 100%; }
       .kb-card { padding: 10px; }
@@ -507,100 +492,366 @@
       .kb-capture-edit-form .kb-cap-edit-actions {
         display: grid; grid-template-columns: 1fr; width: 100%;
       }
-      .kb-detail-fullscreen > h3 { padding: 12px 12px 6px; font-size: 16px; }
-      .kb-detail-fullscreen > .kb-muted { padding: 0 12px 10px; }
-      .kb-detail-fullscreen .kb-modal-action-row {
+      .kb-workspace-detail-card > h3 { padding: 12px 12px 6px; font-size: 16px; }
+      .kb-workspace-detail-card > .kb-muted { padding: 0 12px 10px; }
+      .kb-workspace-detail-card .kb-modal-action-row {
         display: flex; padding: 8px 12px; overflow-x: auto;
       }
-      .kb-detail-fullscreen #cap-view-refs,
-      .kb-detail-fullscreen #cap-view-distill { padding: 0 12px; }
-      .kb-detail-fullscreen .kb-detail-scroll-body { padding: 14px 12px 44px; }
+      .kb-workspace-detail-card #cap-view-refs,
+      .kb-workspace-detail-card #cap-view-distill { padding: 0 12px; }
+      .kb-workspace-detail-card .kb-detail-scroll-body { padding: 14px 12px 44px; }
+    }
+    .kb-shell {
+      display: grid; grid-template-columns: var(--kb-sidebar-active-width, 380px) minmax(0, 1fr);
+      width: 100%; height: 100%; background: var(--color-surface); overflow: hidden;
+    }
+    .kb-wrap { --kb-sidebar-width: 380px; --kb-sidebar-active-width: var(--kb-sidebar-width); }
+    .kb-wrap.kb-sidebar-collapsed { --kb-sidebar-active-width: 42px; }
+    .kb-graph-sidebar {
+      position: relative; display: grid; grid-template-rows: auto minmax(0, 1fr) auto; min-width: 0; min-height: 0;
+      border-right: 1px solid var(--color-border-subtle); background: var(--color-bg);
+    }
+    .kb-graph-sidebar-head {
+      display: flex; align-items: center; justify-content: space-between;
+      gap: 8px; padding: 10px 12px; border-bottom: 1px solid var(--color-border-subtle);
+      color: var(--color-text-strong); font-size: 13px;
+    }
+    .kb-sidebar-actions { display: flex; align-items: center; gap: 5px; flex: 1 1 auto; min-width: 0; flex-wrap: wrap; }
+    .kb-sidebar-actions button { min-height: 28px; padding: 0 7px; font-size: 11px; display: inline-flex; align-items: center; gap: 4px; }
+    .kb-sidebar-actions button.active { border-color: var(--color-primary); background: var(--color-primary-surface); color: var(--color-primary-strong); }
+    .kb-sidebar-toggle { flex: 0 0 28px; width: 28px; min-height: 28px; padding: 0; }
+    .kb-sidebar-resizer {
+      position: absolute; z-index: 12; top: 0; right: -3px; bottom: 0; width: 6px;
+      cursor: col-resize; touch-action: none;
+    }
+    .kb-sidebar-resizer:hover, .kb-sidebar-resizer.dragging { background: var(--color-primary-surface); }
+    .kb-wrap.kb-sidebar-collapsed .kb-sidebar-actions,
+    .kb-wrap.kb-sidebar-collapsed .kb-graph-file-tree,
+    .kb-wrap.kb-sidebar-collapsed .kb-sidebar-footer,
+    .kb-wrap.kb-sidebar-collapsed .kb-sidebar-resizer { display: none; }
+    .kb-wrap.kb-sidebar-collapsed .kb-graph-sidebar-head { justify-content: center; padding-inline: 6px; }
+    .kb-sidebar-count { margin-left: auto; color: var(--color-text-subtle); font-size: 11px; }
+    .kb-sidebar-footer {
+      display: grid; gap: 5px; padding: 8px 10px; border-top: 1px solid var(--color-border-subtle);
+      background: var(--color-surface); min-width: 0;
+    }
+    .kb-sidebar-footer .status { justify-self: start; max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
+    .kb-sidebar-footer .kb-muted { white-space: normal; }
+    .kb-graph-file-tree { min-height: 0; overflow: auto; padding: 8px 6px 18px; }
+    .kb-graph-file-group { display: grid; gap: 1px; min-width: 0; }
+    .kb-graph-file-group-children { display: grid; gap: 1px; margin-left: 12px; }
+    .kb-graph-file-folder,
+    .kb-graph-file-entry {
+      width: 100%; min-width: 0; min-height: 28px; padding: 4px 7px;
+      display: flex; align-items: center; gap: 6px; border: 0; border-radius: 5px;
+      background: transparent; color: var(--color-text); text-align: left; font-size: 12px;
+    }
+    .kb-graph-file-folder:hover,
+    .kb-graph-file-entry:hover { background: var(--color-surface-hover); }
+    .kb-graph-file-entry.active { background: var(--color-primary-surface); color: var(--color-primary-strong); }
+    .kb-graph-file-folder-label,
+    .kb-graph-file-entry-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .kb-graph-file-folder-count { margin-left: auto; color: var(--color-text-subtle); font-size: 10px; }
+    .kb-graph-file-chevron { width: 10px; flex: 0 0 10px; color: var(--color-text-subtle); }
+    .kb-graph-file-entry::before { content: ""; width: 7px; height: 9px; flex: 0 0 7px; border: 1px solid currentColor; border-radius: 1px; opacity: .55; }
+    .kb-workspace-main { position: relative; display: block; min-width: 0; min-height: 0; overflow: hidden; padding: 12px; }
+    .kb-workspace-main > section[id^="tab-"] { min-width: 0; height: 100%; overflow: auto; }
+    #tab-graph { height: 100%; min-height: 560px; }
+    .kb-graph-main { display: grid; grid-template-rows: minmax(0, 1fr) auto; min-width: 0; min-height: 100%; padding: 0 2px 2px; }
+    .kb-graph-stage { position: relative; min-width: 0; min-height: 0; }
+    .kb-graph-canvas {
+      width: 100%;
+      height: 100%; min-height: 0;
+      border: 1px solid var(--color-border, #ccc);
+      border-radius: 8px;
+      background: var(--color-surface, #fff);
+      cursor: grab;
+      display: block;
+    }
+    .kb-graph-canvas.dragging { cursor: grabbing; }
+    .kb-graph-controls-toggle {
+      position: absolute; z-index: 4; top: 12px; right: 12px;
+      width: 34px; min-height: 34px; padding: 0;
+      display: grid; place-items: center;
+      background: color-mix(in srgb, var(--color-surface) 92%, transparent);
+      box-shadow: 0 6px 20px rgba(0, 0, 0, .12);
+      backdrop-filter: blur(8px);
+    }
+    .kb-graph-controls-toggle svg { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-width: 1.8; }
+    .kb-graph-controls-panel {
+      position: absolute; z-index: 5; top: 12px; right: 12px;
+      width: min(332px, calc(100% - 24px)); max-height: calc(100% - 24px); overflow: auto;
+      border: 1px solid var(--color-border-subtle); border-radius: 10px;
+      background: color-mix(in srgb, var(--color-surface) 96%, transparent);
+      box-shadow: 0 12px 32px rgba(0, 0, 0, .18);
+      backdrop-filter: blur(12px);
+    }
+    .kb-graph-controls-head {
+      position: sticky; z-index: 2; top: 0; min-height: 44px; padding: 0 10px 0 14px;
+      display: flex; align-items: center; gap: 8px;
+      border-bottom: 1px solid var(--color-border-subtle);
+      background: color-mix(in srgb, var(--color-surface) 98%, transparent);
+    }
+    .kb-graph-controls-title { flex: 1 1 auto; font-size: 14px; }
+    .kb-graph-controls-icon {
+      width: 30px; min-height: 30px; padding: 0;
+      border: 0; background: transparent; font-size: 20px; line-height: 1;
+    }
+    .kb-graph-control-group { border-bottom: 1px solid var(--color-border-subtle); }
+    .kb-graph-control-group:last-child { border-bottom: 0; }
+    .kb-graph-control-group summary {
+      min-height: 42px; padding: 0 14px;
+      display: flex; align-items: center; gap: 8px;
+      color: var(--color-text-strong); cursor: pointer; list-style: none; font-size: 13px;
+    }
+    .kb-graph-control-group summary::-webkit-details-marker { display: none; }
+    .kb-graph-control-group summary::before { content: "›"; color: var(--color-text-subtle); transition: transform .15s ease; }
+    .kb-graph-control-group[open] summary::before { transform: rotate(90deg); }
+    .kb-graph-control-body { display: grid; gap: 9px; padding: 0 14px 14px 30px; }
+    .kb-graph-control-body label { display: grid; gap: 5px; color: var(--color-text-subtle); font-size: 11px; }
+    .kb-graph-control-body .kb-input { width: 100%; max-width: none; box-sizing: border-box; }
+    .kb-graph-switch-row { display: flex !important; align-items: center; justify-content: space-between; gap: 12px; min-height: 28px; color: var(--color-text) !important; font-size: 12px !important; }
+    .kb-graph-switch {
+      appearance: none; width: 34px; height: 20px; margin: 0; flex: 0 0 34px;
+      border: 0; border-radius: 999px; background: var(--color-border-strong, #777); cursor: pointer;
+      position: relative; transition: background .15s ease;
+    }
+    .kb-graph-switch::after {
+      content: ""; position: absolute; top: 3px; left: 3px; width: 14px; height: 14px;
+      border-radius: 50%; background: #fff; box-shadow: 0 1px 3px rgba(0, 0, 0, .25); transition: transform .15s ease;
+    }
+    .kb-graph-switch:checked { background: var(--color-primary); }
+    .kb-graph-switch:checked::after { transform: translateX(14px); }
+    .kb-graph-range-control { display: grid; gap: 5px; }
+    .kb-graph-range-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; color: var(--color-text); font-size: 12px; }
+    .kb-graph-range-head output { min-width: 42px; color: var(--color-text-subtle); text-align: right; font-variant-numeric: tabular-nums; }
+    .kb-graph-range-control input[type="range"] { width: 100%; margin: 0; accent-color: var(--color-primary); }
+    .kb-graph-color-legend { display: grid; gap: 5px; }
+    .kb-graph-color-row { display: flex; align-items: center; gap: 7px; min-width: 0; color: var(--color-text); font-size: 11px; }
+    .kb-graph-color-swatch { width: 10px; height: 10px; flex: 0 0 10px; border-radius: 50%; background: var(--graph-color); }
+    .kb-graph-color-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .kb-graph-play { justify-self: end; }
+    #graph-status { margin-top: 6px; min-height: 1.2em; }
+    @media (max-width: 820px) {
+      body { overflow: auto; }
+      .kb-wrap { height: auto; min-height: 100dvh; }
+      .kb-shell { grid-template-columns: 1fr; height: auto; min-height: 100dvh; }
+      .kb-graph-sidebar { max-height: 38vh; border-right: 0; border-bottom: 1px solid var(--color-border-subtle); }
+      .kb-sidebar-resizer { display: none; }
+      .kb-wrap.kb-sidebar-collapsed .kb-graph-sidebar { max-height: 42px; }
+      .kb-workspace-main { min-height: 62vh; overflow: hidden; }
+      .kb-graph-main { min-height: 62vh; }
+      .kb-graph-canvas { min-height: 52vh; }
+      .kb-graph-controls-panel { top: 8px; right: 8px; width: min(300px, calc(100% - 16px)); }
+      .kb-graph-controls-toggle { top: 8px; right: 8px; }
     }
   </style>
 </head>
 <body>
  <div class="kb-wrap">
-  <div class="kb-console-head">
-    <div>
-      <h1 data-i18n="knowledge.title">AHA Knowledge Base</h1>
-      <p data-i18n="knowledge.subtitle">Browse entries · Review pending candidates · Configure the knowledge base</p>
-    </div>
-    <div class="kb-head-actions">
-      <span id="kb-summary" class="status idle" data-i18n="knowledge.loading">Loading...</span>
-      <div class="kb-sync-panel">
-        <button class="button-ghost" id="kb-sync" type="button" data-i18n="knowledge.sync_now">Sync now</button>
+  <div class="kb-shell">
+    <aside class="kb-graph-sidebar">
+      <div class="kb-graph-sidebar-head">
+        <div class="kb-sidebar-actions">
+          <button class="button-ghost" id="kb-sync" type="button" data-i18n="knowledge.sync_now">Sync</button>
+          <button class="button-ghost" id="kb-capture-new" type="button" data-i18n="knowledge.capture_new_file">New</button>
+          <button class="button-ghost" type="button" data-kb-view="graph" data-i18n="knowledge.tab_graph">Graph</button>
+          <button class="button-ghost" type="button" data-kb-view="pending"><span data-i18n="knowledge.tab_pending">Pending</span><span id="pending-badge" class="kb-sidebar-count"></span></button>
+          <button class="button-ghost" id="kb-settings-open" type="button" data-i18n="common.settings">Settings</button>
+        </div>
+        <button class="button-ghost kb-sidebar-toggle" id="kb-sidebar-toggle" type="button" aria-label="Collapse sidebar" data-i18n-aria-label="common.collapse_sidebar">‹</button>
+      </div>
+      <div id="graph-file-tree" class="kb-graph-file-tree"></div>
+      <div class="kb-sidebar-footer">
+        <span id="kb-summary" class="status idle" data-i18n="knowledge.loading">Loading...</span>
         <span class="kb-muted" id="kb-sync-status" data-i18n="knowledge.sync_status_checking">Checking sync status...</span>
+        <button class="button-ghost" id="kb-resolve" type="button" hidden data-i18n="knowledge.sync_resolve">Resolve conflicts</button>
       </div>
-    </div>
+      <div class="kb-sidebar-resizer" id="kb-sidebar-resizer" role="separator" aria-orientation="vertical" aria-label="Resize sidebar" data-i18n-aria-label="knowledge.resize_sidebar"></div>
+    </aside>
+
+    <main class="kb-workspace-main">
+      <section id="tab-entries" hidden>
+        <div id="entries-list"></div>
+      </section>
+
+      <section id="tab-navigation" hidden>
+        <div id="project-identity-toolbar" class="kb-project-identity-toolbar">
+          <select id="nav-workspace-select" aria-label="Workspace" data-i18n-aria-label="common.workspace"></select>
+          <input id="nav-workspace-custom" class="hidden" type="text" placeholder="Custom workspace path" data-i18n-placeholder="task.workspace_custom_placeholder" />
+          <div id="project-identity-summary" class="kb-project-identity-summary kb-muted"></div>
+          <div id="project-identity-result" class="kb-muted"></div>
+        </div>
+        <div id="project-nav-panel" class="kb-card kb-project-nav-panel" hidden>
+          <h3 data-i18n="knowledge.project_nav_actions">Project navigation</h3>
+          <div class="kb-muted" data-i18n="knowledge.project_nav_actions_hint">Project navigation is maintained by agents during token-saving tasks.</div>
+          <div class="kb-row kb-project-nav-controls">
+            <span class="kb-muted" data-i18n="knowledge.capture_agent_label">Distill agent:</span>
+            <select id="nav-backend" aria-label="Project navigation backend"></select>
+            <select id="nav-model" aria-label="Project navigation model"></select>
+            <select id="nav-effort" aria-label="Project navigation reasoning effort"></select>
+            <select id="nav-proxy-mode" aria-label="Proxy mode" data-i18n-aria-label="knowledge.proxy_mode">
+              <option value="on" data-i18n="knowledge.proxy_on">Proxy on</option>
+              <option value="off" data-i18n="knowledge.proxy_off">Proxy off</option>
+            </select>
+            <button class="button-ghost" id="nav-generate" type="button" data-i18n="knowledge.generate_project_nav" hidden>Generate project nav</button>
+          </div>
+          <div id="nav-result" class="kb-muted"></div>
+        </div>
+        <div id="nav-draft-list" hidden></div>
+        <div id="navigation-list"></div>
+      </section>
+
+      <section id="tab-graph">
+        <div class="kb-graph-main">
+          <div class="kb-graph-stage">
+            <canvas id="graph-canvas" class="kb-graph-canvas"></canvas>
+            <button class="button-ghost kb-graph-controls-toggle" id="graph-controls-toggle" type="button" aria-controls="graph-controls-panel" aria-expanded="false" aria-label="Graph controls" title="Graph controls" data-i18n-aria-label="knowledge.graph_controls" data-i18n-title="knowledge.graph_controls">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h10M18 7h2M4 17h2M10 17h10M14 4v6M6 14v6"></path></svg>
+            </button>
+            <aside id="graph-controls-panel" class="kb-graph-controls-panel" aria-label="Graph controls" data-i18n-aria-label="knowledge.graph_controls" hidden>
+              <div class="kb-graph-controls-head">
+                <strong class="kb-graph-controls-title" data-i18n="knowledge.graph_controls">Graph controls</strong>
+                <button class="kb-graph-controls-icon" id="graph-controls-reset" type="button" aria-label="Reset graph controls" title="Reset graph controls" data-i18n-aria-label="knowledge.graph_reset" data-i18n-title="knowledge.graph_reset">↶</button>
+                <button class="kb-graph-controls-icon" id="graph-controls-close" type="button" aria-label="Close" data-i18n-aria-label="common.close">×</button>
+              </div>
+              <details class="kb-graph-control-group" open>
+                <summary data-i18n="knowledge.graph_filter_group">Filters</summary>
+                <div class="kb-graph-control-body">
+                  <label><span data-i18n="knowledge.graph_search">Search</span><input id="graph-search" class="kb-input" type="text" placeholder="Filter graph…" data-i18n-placeholder="knowledge.graph_search_placeholder" /></label>
+                  <label><span data-i18n="knowledge.graph_project">Project</span><select id="graph-project" aria-label="Project" class="kb-input" data-i18n-aria-label="knowledge.graph_project"></select></label>
+                  <label class="kb-graph-switch-row"><span data-i18n="knowledge.graph_show_tags">Tags</span><input id="graph-show-tags" class="kb-graph-switch" type="checkbox" /></label>
+                  <label class="kb-graph-switch-row"><span data-i18n="knowledge.graph_show_attachments">Attachments</span><input id="graph-show-attachments" class="kb-graph-switch" type="checkbox" /></label>
+                  <label class="kb-graph-switch-row"><span data-i18n="knowledge.graph_documents_only">Existing Markdown only</span><input id="graph-documents-only" class="kb-graph-switch" type="checkbox" /></label>
+                  <label class="kb-graph-switch-row"><span data-i18n="knowledge.graph_show_orphans">Orphans</span><input id="graph-show-orphans" class="kb-graph-switch" type="checkbox" /></label>
+                </div>
+              </details>
+              <details class="kb-graph-control-group">
+                <summary data-i18n="knowledge.graph_color_group">Color groups</summary>
+                <div class="kb-graph-control-body">
+                  <label><span data-i18n="knowledge.graph_color_by">Color by</span><select id="graph-color" aria-label="Color by" class="kb-input" data-i18n-aria-label="knowledge.graph_color_by">
+                    <option value="kind" data-i18n="knowledge.graph_color_kind">Kind</option>
+                    <option value="scope" data-i18n="knowledge.graph_color_scope">Scope</option>
+                    <option value="project" data-i18n="knowledge.graph_color_project">Project</option>
+                    <option value="backlinks" data-i18n="knowledge.graph_color_backlinks">Backlinks</option>
+                  </select></label>
+                  <div id="graph-color-legend" class="kb-graph-color-legend"></div>
+                </div>
+              </details>
+              <details class="kb-graph-control-group" open>
+                <summary data-i18n="knowledge.graph_appearance_group">Appearance</summary>
+                <div class="kb-graph-control-body">
+                  <label class="kb-graph-switch-row"><span data-i18n="knowledge.graph_arrows">Arrows</span><input id="graph-arrows" class="kb-graph-switch" type="checkbox" /></label>
+                  <label class="kb-graph-range-control"><span class="kb-graph-range-head"><span data-i18n="knowledge.graph_text_opacity">Text opacity</span><output id="graph-text-opacity-value">0.75</output></span><input id="graph-text-opacity" type="range" min="0" max="1" step="0.05" /></label>
+                  <label class="kb-graph-range-control"><span class="kb-graph-range-head"><span data-i18n="knowledge.graph_node_size">Node size</span><output id="graph-node-scale-value">1.00</output></span><input id="graph-node-scale" type="range" min="0.5" max="2" step="0.05" /></label>
+                  <label class="kb-graph-range-control"><span class="kb-graph-range-head"><span data-i18n="knowledge.graph_link_width">Link thickness</span><output id="graph-link-width-value">1.00</output></span><input id="graph-link-width" type="range" min="0.5" max="3" step="0.1" /></label>
+                  <button class="button-ghost kb-graph-play" id="graph-play" type="button" data-i18n="knowledge.graph_play_animation">Play animation</button>
+                </div>
+              </details>
+              <details class="kb-graph-control-group" open>
+                <summary data-i18n="knowledge.graph_forces_group">Forces</summary>
+                <div class="kb-graph-control-body">
+                  <label class="kb-graph-range-control"><span class="kb-graph-range-head"><span data-i18n="knowledge.graph_center_force">Center force</span><output id="graph-center-force-value">0.40</output></span><input id="graph-center-force" type="range" min="0" max="1" step="0.01" /></label>
+                  <label class="kb-graph-range-control"><span class="kb-graph-range-head"><span data-i18n="knowledge.graph_repulsion">Repulsion force</span><output id="graph-repulsion-value">8.00</output></span><input id="graph-repulsion" type="range" min="0" max="20" step="0.05" /></label>
+                  <label class="kb-graph-range-control"><span class="kb-graph-range-head"><span data-i18n="knowledge.graph_link_force">Link force</span><output id="graph-link-force-value">1.00</output></span><input id="graph-link-force" type="range" min="0" max="2" step="0.05" /></label>
+                  <label class="kb-graph-range-control"><span class="kb-graph-range-head"><span data-i18n="knowledge.graph_link_distance">Link distance</span><output id="graph-link-distance-value">90</output></span><input id="graph-link-distance" type="range" min="30" max="300" step="5" /></label>
+                </div>
+              </details>
+            </aside>
+          </div>
+          <div id="graph-status" class="kb-muted"></div>
+        </div>
+      </section>
+
+      <section id="tab-pending" hidden>
+        <div id="pending-list"></div>
+      </section>
+
+      <section id="tab-skills" hidden>
+        <div class="kb-row kb-skills-toolbar">
+          <div>
+            <strong data-i18n="skills.title">Skills</strong>
+            <div id="skills-root" class="kb-muted"></div>
+          </div>
+          <div class="kb-skills-toolbar-actions">
+            <button class="button-ghost" id="skills-refresh" type="button" data-i18n="common.refresh">Refresh</button>
+            <button class="primary" id="skills-new" type="button" data-i18n="skills.new">New skill</button>
+          </div>
+        </div>
+        <div class="kb-skills-layout">
+          <div id="skills-list" class="kb-skills-list"></div>
+          <div id="skills-detail" class="kb-skills-detail"></div>
+        </div>
+      </section>
+
+      <section id="tab-settings" hidden>
+        <form id="settings-form" class="kb-card kb-settings-card">
+          <div class="kb-form-grid">
+            <div>
+              <label class="kb-field" for="s-enabled" data-i18n="knowledge.enable">Enable knowledge base</label>
+              <select id="s-enabled"><option value="on">on</option><option value="off">off</option></select>
+              <label class="kb-field" for="s-path" data-i18n="knowledge.storage_path">Storage path (blank = default ~/.aha/knowledge)</label>
+              <input type="text" id="s-path" />
+              <label class="kb-field" for="s-gate" data-i18n="knowledge.curation_gate">Curation gate</label>
+              <select id="s-gate"><option value="manual">manual</option><option value="auto">auto</option><option value="off">off</option></select>
+              <label class="kb-field" for="s-project-nav-enabled" data-i18n="knowledge.project_nav" hidden>Project navigation</label>
+              <select id="s-project-nav-enabled" hidden><option value="on">on</option><option value="off">off</option></select>
+            </div>
+            <div>
+              <label class="kb-field" for="s-git-enabled" data-i18n="knowledge.enable_git">Enable git sync</label>
+              <select id="s-git-enabled"><option value="on">on</option><option value="off">off</option></select>
+              <label class="kb-field" for="s-git-proxy-enabled" data-i18n="knowledge.git_proxy">Use shared proxy for Git sync</label>
+              <select id="s-git-proxy-enabled"><option value="on">on</option><option value="off">off</option></select>
+              <label class="kb-field" for="s-remote" data-i18n="knowledge.git_remote">Git remote</label>
+              <input type="text" id="s-remote" placeholder="git@github.com:user/aha-kb.git" />
+              <label class="kb-field" for="s-branch" data-i18n="knowledge.git_branch">Git branch</label>
+              <input type="text" id="s-branch" />
+            </div>
+          </div>
+          <div class="kb-row">
+            <button class="primary" type="submit" data-i18n="knowledge.save_settings">Save settings</button>
+            <button class="button-ghost" id="settings-sync" type="button" data-i18n="knowledge.sync_now">Sync now</button>
+            <button class="button-ghost" id="settings-resolve" type="button" hidden data-i18n="knowledge.sync_resolve">Resolve conflicts</button>
+            <span class="kb-muted" id="settings-sync-status" data-i18n="knowledge.sync_status_checking">Checking sync status...</span>
+          </div>
+        </form>
+      </section>
+
+      <section id="cap-view-modal" class="kb-workspace-detail" hidden>
+        <div class="kb-workspace-detail-card kb-capture-fullscreen" role="region" aria-labelledby="cap-view-title">
+          <h3 id="cap-view-title">Capture note</h3>
+          <div id="cap-view-meta" class="kb-muted"></div>
+          <div class="kb-card-actions kb-inline-actions kb-modal-action-row">
+            <div id="cap-view-actions" class="kb-modal-action-group"></div>
+            <button class="button-ghost" type="button" id="cap-view-close" data-i18n="common.close">Close</button>
+          </div>
+          <div id="cap-view-refs"></div>
+          <div id="cap-view-distill"></div>
+          <div id="cap-view-body" class="kb-body kb-cap-md kb-detail-scroll-body"></div>
+          <div id="cap-view-log" class="kb-cap-log-panel kb-detail-scroll-body" hidden>
+            <div class="kb-row kb-cap-log-head">
+              <strong data-i18n="knowledge.capture_agent_log">Agent log</strong>
+              <button class="button-ghost" type="button" id="cap-log-close" data-i18n="common.close">Close</button>
+            </div>
+            <div id="cap-log-meta" class="kb-muted"></div>
+            <div id="cap-agent-log" class="kb-agent-thread"></div>
+          </div>
+        </div>
+      </section>
+
+      <section id="entry-ref-modal" class="kb-workspace-detail" hidden>
+        <div class="kb-workspace-detail-card kb-entry-fullscreen" role="region" aria-labelledby="entry-ref-title">
+          <h3 id="entry-ref-title">Reference</h3>
+          <div id="entry-ref-meta" class="kb-muted"></div>
+          <div class="kb-card-actions kb-entry-actions kb-inline-actions kb-modal-action-row">
+            <div id="entry-ref-actions" class="kb-modal-action-group"></div>
+            <button class="button-ghost" type="button" id="entry-ref-close" data-i18n="common.close">Close</button>
+          </div>
+          <div id="entry-ref-body" class="kb-body kb-entry-body kb-detail-scroll-body" data-entry-body="reference"></div>
+        </div>
+      </section>
+    </main>
   </div>
-
-  <nav class="kb-tabs">
-    <button data-tab="entries" class="button-ghost kb-tab active" type="button"><span data-i18n="knowledge.tab_entries">Entries</span></button>
-    <button data-tab="navigation" class="button-ghost kb-tab" type="button"><span data-i18n="knowledge.tab_navigation">Nav</span></button>
-    <button data-tab="pending" class="button-ghost kb-tab" type="button"><span data-i18n="knowledge.tab_pending">Pending</span> <span id="pending-badge"></span></button>
-    <button data-tab="capture" class="button-ghost kb-tab" type="button"><span data-i18n="knowledge.tab_capture">Capture</span></button>
-    <button data-tab="skills" class="button-ghost kb-tab" type="button"><span data-i18n="skills.title">Skills</span></button>
-    <button data-tab="settings" class="button-ghost kb-tab" type="button"><span data-i18n="common.settings">Settings</span></button>
-  </nav>
-
-  <section id="tab-entries">
-    <div id="entries-list"></div>
-  </section>
-
-  <section id="tab-navigation" hidden>
-    <div id="project-identity-toolbar" class="kb-project-identity-toolbar">
-      <select id="nav-workspace-select" aria-label="Workspace" data-i18n-aria-label="common.workspace"></select>
-      <input id="nav-workspace-custom" class="hidden" type="text" placeholder="Custom workspace path" data-i18n-placeholder="task.workspace_custom_placeholder" />
-      <div id="project-identity-summary" class="kb-project-identity-summary kb-muted"></div>
-      <div id="project-identity-result" class="kb-muted"></div>
-    </div>
-    <div id="project-nav-panel" class="kb-card kb-project-nav-panel" hidden>
-      <h3 data-i18n="knowledge.project_nav_actions">Project navigation</h3>
-      <div class="kb-muted" data-i18n="knowledge.project_nav_actions_hint">Project navigation is maintained by agents during token-saving tasks.</div>
-      <div class="kb-row kb-project-nav-controls">
-        <span class="kb-muted" data-i18n="knowledge.capture_agent_label">Distill agent:</span>
-        <select id="nav-backend" aria-label="Project navigation backend"></select>
-        <select id="nav-model" aria-label="Project navigation model"></select>
-        <select id="nav-effort" aria-label="Project navigation reasoning effort"></select>
-        <select id="nav-proxy-mode" aria-label="Proxy mode" data-i18n-aria-label="knowledge.proxy_mode">
-          <option value="on" data-i18n="knowledge.proxy_on">Proxy on</option>
-          <option value="off" data-i18n="knowledge.proxy_off">Proxy off</option>
-        </select>
-        <button class="button-ghost" id="nav-generate" type="button" data-i18n="knowledge.generate_project_nav" hidden>Generate project nav</button>
-      </div>
-      <div id="nav-result" class="kb-muted"></div>
-    </div>
-    <div id="nav-draft-list" hidden></div>
-    <div id="navigation-list"></div>
-  </section>
-
-  <section id="tab-pending" hidden>
-    <div id="pending-list"></div>
-  </section>
-
-  <section id="tab-capture" hidden>
-    <div class="kb-row kb-capture-toolbar">
-      <button class="primary" id="cap-new-open" type="button" data-i18n="knowledge.capture_add">New note</button>
-    </div>
-    <div id="capture-list"></div>
-  </section>
-
-  <section id="tab-skills" hidden>
-    <div class="kb-row kb-skills-toolbar">
-      <div>
-        <strong data-i18n="skills.title">Skills</strong>
-        <div id="skills-root" class="kb-muted"></div>
-      </div>
-      <div class="kb-skills-toolbar-actions">
-        <button class="button-ghost" id="skills-refresh" type="button" data-i18n="common.refresh">Refresh</button>
-        <button class="primary" id="skills-new" type="button" data-i18n="skills.new">New skill</button>
-      </div>
-    </div>
-    <div class="kb-skills-layout">
-      <div id="skills-list" class="kb-skills-list"></div>
-      <div id="skills-detail" class="kb-skills-detail"></div>
-    </div>
-  </section>
 
   <div id="cap-new-modal" class="kb-modal" hidden>
     <form id="capture-form" class="kb-modal-card kb-capture-form">
@@ -619,40 +870,6 @@
         <button class="button-ghost" type="button" id="cap-new-cancel" data-i18n="common.cancel">Cancel</button>
       </div>
     </form>
-  </div>
-
-  <div id="cap-view-modal" class="kb-modal kb-detail-fullscreen-modal" hidden>
-    <div class="kb-modal-card kb-entry-ref-modal kb-detail-fullscreen kb-capture-fullscreen" role="dialog" aria-modal="true" aria-labelledby="cap-view-title">
-      <h3 id="cap-view-title">Capture note</h3>
-      <div id="cap-view-meta" class="kb-muted"></div>
-      <div class="kb-card-actions kb-inline-actions kb-modal-action-row">
-        <div id="cap-view-actions" class="kb-modal-action-group"></div>
-        <button class="button-ghost" type="button" id="cap-view-close" data-i18n="common.close">Close</button>
-      </div>
-      <div id="cap-view-refs"></div>
-      <div id="cap-view-distill"></div>
-      <div id="cap-view-body" class="kb-body kb-cap-md kb-detail-scroll-body"></div>
-      <div id="cap-view-log" class="kb-cap-log-panel kb-detail-scroll-body" hidden>
-        <div class="kb-row kb-cap-log-head">
-          <strong data-i18n="knowledge.capture_agent_log">Agent log</strong>
-          <button class="button-ghost" type="button" id="cap-log-close" data-i18n="common.close">Close</button>
-        </div>
-        <div id="cap-log-meta" class="kb-muted"></div>
-        <div id="cap-agent-log" class="kb-agent-thread"></div>
-      </div>
-    </div>
-  </div>
-
-  <div id="entry-ref-modal" class="kb-modal kb-detail-fullscreen-modal" hidden>
-    <div class="kb-modal-card kb-entry-ref-modal kb-entry-fullscreen kb-detail-fullscreen" role="dialog" aria-modal="true" aria-labelledby="entry-ref-title">
-      <h3 id="entry-ref-title">Reference</h3>
-      <div id="entry-ref-meta" class="kb-muted"></div>
-      <div class="kb-card-actions kb-entry-actions kb-inline-actions kb-modal-action-row">
-        <div id="entry-ref-actions" class="kb-modal-action-group"></div>
-        <button class="button-ghost" type="button" id="entry-ref-close" data-i18n="common.close">Close</button>
-      </div>
-      <div id="entry-ref-body" class="kb-body kb-entry-body kb-detail-scroll-body" data-entry-body="reference"></div>
-    </div>
   </div>
 
   <div id="nav-draft-modal" class="kb-modal" hidden>
@@ -707,38 +924,6 @@
       </div>
     </div>
   </div>
-
-  <section id="tab-settings" hidden>
-    <form id="settings-form" class="kb-card kb-settings-card">
-      <div class="kb-form-grid">
-        <div>
-          <label class="kb-field" for="s-enabled" data-i18n="knowledge.enable">Enable knowledge base</label>
-          <select id="s-enabled"><option value="on">on</option><option value="off">off</option></select>
-          <label class="kb-field" for="s-path" data-i18n="knowledge.storage_path">Storage path (blank = default ~/.aha/knowledge)</label>
-          <input type="text" id="s-path" />
-          <label class="kb-field" for="s-gate" data-i18n="knowledge.curation_gate">Curation gate</label>
-          <select id="s-gate"><option value="manual">manual</option><option value="auto">auto</option><option value="off">off</option></select>
-          <label class="kb-field" for="s-project-nav-enabled" data-i18n="knowledge.project_nav" hidden>Project navigation</label>
-          <select id="s-project-nav-enabled" hidden><option value="on">on</option><option value="off">off</option></select>
-        </div>
-        <div>
-          <label class="kb-field" for="s-git-enabled" data-i18n="knowledge.enable_git">Enable git sync</label>
-          <select id="s-git-enabled"><option value="on">on</option><option value="off">off</option></select>
-          <label class="kb-field" for="s-git-proxy-enabled" data-i18n="knowledge.git_proxy">Use shared proxy for Git sync</label>
-          <select id="s-git-proxy-enabled"><option value="on">on</option><option value="off">off</option></select>
-          <label class="kb-field" for="s-remote" data-i18n="knowledge.git_remote">Git remote</label>
-          <input type="text" id="s-remote" placeholder="git@github.com:user/aha-kb.git" />
-          <label class="kb-field" for="s-branch" data-i18n="knowledge.git_branch">Git branch</label>
-          <input type="text" id="s-branch" />
-        </div>
-      </div>
-      <div class="kb-row">
-        <button class="primary" type="submit" data-i18n="knowledge.save_settings">Save settings</button>
-        <button class="button-ghost" id="settings-sync" type="button" data-i18n="knowledge.sync_now">Sync now</button>
-        <span class="kb-muted" id="settings-sync-status" data-i18n="knowledge.sync_status_checking">Checking sync status...</span>
-      </div>
-    </form>
-  </section>
 
   <div id="toast" class="kb-toast"></div>
  </div>
@@ -837,19 +1022,70 @@
     }
     const CAPTURE_DRAFT_KEY = "aha:kb:capture:new-note-draft";
     const KB_ACTIVE_TAB_KEY = "aha:kb:active-tab";
-    const KB_TABS = ["entries", "navigation", "pending", "capture", "skills", "settings"];
+    const KB_SIDEBAR_WIDTH_KEY = "aha:kb:sidebar-width";
+    const KB_SIDEBAR_COLLAPSED_KEY = "aha:kb:sidebar-collapsed";
+    const GRAPH_SETTINGS_KEY = "aha:kb:graph-settings:v1";
+    const KB_TABS = ["entries", "navigation", "graph", "pending", "skills", "settings"];
     const ENTRIES_PAGE_LIMIT = 120;
+
+    const GRAPH_SETTINGS_DEFAULTS = Object.freeze({
+      showTags: false,
+      showAttachments: false,
+      documentsOnly: false,
+      showOrphans: true,
+      colorBy: "kind",
+      arrows: false,
+      textOpacity: 0.75,
+      nodeScale: 1,
+      linkWidth: 1,
+      centerForce: 0.4,
+      repulsion: 8,
+      linkForce: 1,
+      linkDistance: 90,
+    });
+
+    function clampGraphNumber(value, min, max, fallback) {
+      const number = Number(value);
+      return Number.isFinite(number) ? Math.min(max, Math.max(min, number)) : fallback;
+    }
+
+    function readGraphSettings() {
+      let saved = {};
+      try { saved = JSON.parse(window.localStorage?.getItem(GRAPH_SETTINGS_KEY) || "{}"); }
+      catch (_err) { saved = {}; }
+      const colorBy = ["kind", "scope", "project", "backlinks"].includes(saved.colorBy) ? saved.colorBy : GRAPH_SETTINGS_DEFAULTS.colorBy;
+      return {
+        showTags: Boolean(saved.showTags),
+        showAttachments: Boolean(saved.showAttachments),
+        documentsOnly: Boolean(saved.documentsOnly),
+        showOrphans: saved.showOrphans !== false,
+        colorBy,
+        arrows: Boolean(saved.arrows),
+        textOpacity: clampGraphNumber(saved.textOpacity, 0, 1, GRAPH_SETTINGS_DEFAULTS.textOpacity),
+        nodeScale: clampGraphNumber(saved.nodeScale, 0.5, 2, GRAPH_SETTINGS_DEFAULTS.nodeScale),
+        linkWidth: clampGraphNumber(saved.linkWidth, 0.5, 3, GRAPH_SETTINGS_DEFAULTS.linkWidth),
+        centerForce: clampGraphNumber(saved.centerForce, 0, 1, GRAPH_SETTINGS_DEFAULTS.centerForce),
+        repulsion: clampGraphNumber(saved.repulsion, 0, 20, GRAPH_SETTINGS_DEFAULTS.repulsion),
+        linkForce: clampGraphNumber(saved.linkForce, 0, 2, GRAPH_SETTINGS_DEFAULTS.linkForce),
+        linkDistance: clampGraphNumber(saved.linkDistance, 30, 300, GRAPH_SETTINGS_DEFAULTS.linkDistance),
+      };
+    }
+
+    function writeGraphSettings(settings) {
+      try { window.localStorage?.setItem(GRAPH_SETTINGS_KEY, JSON.stringify(settings)); }
+      catch (_err) { /* Graph preferences are best-effort. */ }
+    }
 
     function normalizedTabName(name) {
       const tab = String(name || "").trim();
-      return KB_TABS.includes(tab) ? tab : "entries";
+      return KB_TABS.includes(tab) ? tab : "graph";
     }
 
     function readStoredActiveTab() {
       try {
         return normalizedTabName(window.localStorage?.getItem(KB_ACTIVE_TAB_KEY));
       } catch (_err) {
-        return "entries";
+        return "graph";
       }
     }
 
@@ -861,28 +1097,904 @@
       }
     }
 
+    function readStoredSidebarWidth() {
+      try {
+        const raw = window.localStorage?.getItem(KB_SIDEBAR_WIDTH_KEY);
+        if (!raw) return 380;
+        const value = Number(raw);
+        return Number.isFinite(value) ? Math.min(520, Math.max(220, value)) : 380;
+      } catch (_err) {
+        return 380;
+      }
+    }
+
+    function readStoredSidebarCollapsed() {
+      try {
+        return window.localStorage?.getItem(KB_SIDEBAR_COLLAPSED_KEY) === "1";
+      } catch (_err) {
+        return false;
+      }
+    }
+
+    function applySidebarLayout() {
+      const wrap = $(".kb-wrap");
+      if (!wrap) return;
+      wrap.style.setProperty("--kb-sidebar-width", `${readStoredSidebarWidth()}px`);
+      const collapsed = readStoredSidebarCollapsed();
+      wrap.classList.toggle("kb-sidebar-collapsed", collapsed);
+      const toggle = $("#kb-sidebar-toggle");
+      if (toggle) {
+        toggle.textContent = collapsed ? "›" : "‹";
+        toggle.setAttribute("aria-label", collapsed ? t("common.expand_sidebar", "Expand sidebar") : t("common.collapse_sidebar", "Collapse sidebar"));
+      }
+    }
+
+    function setSidebarCollapsed(collapsed) {
+      try { window.localStorage?.setItem(KB_SIDEBAR_COLLAPSED_KEY, collapsed ? "1" : "0"); }
+      catch (_err) { /* Sidebar state is best-effort. */ }
+      applySidebarLayout();
+      if (state.activeTab === "graph") setTimeout(restartGraphLayout, 0);
+    }
+
+    function bindSidebarResize() {
+      const resizer = $("#kb-sidebar-resizer");
+      const wrap = $(".kb-wrap");
+      if (!resizer || !wrap) return;
+      let dragging = false;
+      const move = (event) => {
+        if (!dragging) return;
+        const width = Math.min(520, Math.max(220, Number(event.clientX || 0)));
+        wrap.style.setProperty("--kb-sidebar-width", `${width}px`);
+      };
+      const end = () => {
+        if (!dragging) return;
+        dragging = false;
+        resizer.classList.remove("dragging");
+        const width = Math.round(parseFloat(getComputedStyle(wrap).getPropertyValue("--kb-sidebar-width")) || 380);
+        try { window.localStorage?.setItem(KB_SIDEBAR_WIDTH_KEY, String(width)); }
+        catch (_err) { /* Sidebar width is best-effort. */ }
+        if (state.activeTab === "graph") restartGraphLayout();
+      };
+      resizer.addEventListener("pointerdown", (event) => {
+        if (readStoredSidebarCollapsed()) return;
+        dragging = true;
+        resizer.classList.add("dragging");
+        resizer.setPointerCapture?.(event.pointerId);
+        event.preventDefault();
+      });
+      resizer.addEventListener("pointermove", move);
+      resizer.addEventListener("pointerup", end);
+      resizer.addEventListener("pointercancel", end);
+    }
+
     const state = { entries: [], entriesTotal: 0, entriesOffset: 0, entriesLimit: ENTRIES_PAGE_LIMIT, entriesHasMore: false, entryCapture: [], navigation: [], navDrafts: [], activeNavDraft: null, activeNavAgentDraft: null, navDraftPoll: null, navDraftDetailPoll: null, navAgentPoll: null, pending: [], pendingExpanded: new Set(), capture: [], captureConfig: {}, editingNote: null, expandedNote: null, activeCaptureNote: null, distillTarget: null, activeDistillLogNote: null, captureViewMode: "view", captureEditMode: "edit", distillLogPoll: null, lastBackend: "", lastModel: "", lastReasoningEffort: "", lastProxyEnabled: null, lastDistillMode: "organize", navLastBackend: "", navLastModel: "", navLastReasoningEffort: "", navLastProxyEnabled: null, newNoteImages: [], activeEntry: null, referenceEntry: null, referenceEntryStack: [], editingEntry: null, editingReference: false, collapsedEntryGroups: new Set(), expandedEntryGroups: new Set(), workspaces: [], defaultWorkspacePath: "", projectIdentity: null, projectIdentityProjects: [], projectIdentityError: "", projectIdentityRequestSeq: 0, projectRelationTypes: ["upstream", "sdk", "fork", "reference", "other"], projectRelationProjectKey: "", projectRelations: [], skills: [], skillDetail: null, skillSelectedId: "", skillDraftNew: false, skillsRoot: "", skillsLoaded: false, skillsLoading: false, activeTab: readStoredActiveTab() };
 
     function syncChromeText() {
       document.title = t("knowledge.title", "AHA Knowledge Base");
       window.AHAI18n?.apply?.(document);
+      applySidebarLayout();
+    }
+
+    function clearWorkspaceDetails() {
+      if (state.distillLogPoll) {
+        clearTimeout(state.distillLogPoll);
+        state.distillLogPoll = null;
+      }
+      state.referenceEntry = null;
+      state.referenceEntryStack = [];
+      state.editingReference = false;
+      state.activeCaptureNote = null;
+      state.editingNote = null;
+      state.distillTarget = null;
+      state.activeDistillLogNote = null;
+      state.captureViewMode = "view";
+      $("#entry-ref-modal").hidden = true;
+      $("#cap-view-modal").hidden = true;
     }
 
     function showTab(name) {
       const tab = normalizedTabName(name);
+      clearWorkspaceDetails();
       state.activeTab = tab;
       writeStoredActiveTab(tab);
-      for (const b of document.querySelectorAll("nav.kb-tabs button")) b.classList.toggle("active", b.dataset.tab === tab);
+      for (const button of document.querySelectorAll("[data-kb-view]")) {
+        button.classList.toggle("active", button.dataset.kbView === tab);
+      }
+      $("#kb-settings-open")?.classList.toggle("active", tab === "settings");
       for (const id of KB_TABS) $("#tab-" + id).hidden = id !== tab;
+      if (tab !== "graph") stopGraphLoop();
       if (tab === "navigation") {
         return Promise.all([loadNavigation(), loadProjectIdentity()]);
       }
       if (tab === "pending") return loadPending();
-      if (tab === "capture") return loadCapture();
       if (tab === "skills") return loadSkills();
       if (tab === "settings") return loadSettings();
       if (tab === "entries") return loadEntries();
+      if (tab === "graph") return loadGraph();
       return Promise.resolve();
+    }
+
+    // ------------------------------------------------------------------ //
+    // Knowledge graph (Canvas force-directed, dependency-free)            //
+    // ------------------------------------------------------------------ //
+    const graphState = {
+      nodes: [],
+      links: [],
+      rawNodes: [],
+      rawLinks: [],
+      positions: new Map(),
+      velocities: new Map(),
+      raf: 0,
+      running: false,
+      dragIndex: -1,
+      offsetX: 0,
+      offsetY: 0,
+      scale: 1,
+      panX: 0,
+      panY: 0,
+      hover: -1,
+      search: "",
+      colorBy: "kind",
+      settings: readGraphSettings(),
+      totalEntries: 0,
+      collapsedFileGroups: new Set(),
+      expandedFileGroups: new Set(),
+    };
+    graphState.colorBy = graphState.settings.colorBy;
+    window.__kbGraphState = graphState;
+
+    const GRAPH_COLORS = {
+      navigation: "#7c5cff",
+      wiki: "#2f9e44",
+      solution: "#f08c00",
+      task_worklog: "#868e96",
+      project: "#1c7ed6",
+      general: "#2f9e44",
+      personal: "#e64980",
+      skill: "#0ca678",
+      tag: "#8b5cf6",
+      attachment: "#5c7cfa",
+      solutions: "#f08c00",
+      default: "#868e96",
+    };
+
+    function graphColorHash(value) {
+      let hash = 0;
+      for (const char of String(value || "default")) hash = ((hash << 5) - hash + char.charCodeAt(0)) | 0;
+      return `hsl(${Math.abs(hash) % 360} 68% 52%)`;
+    }
+
+    function graphBacklinkGroup(node) {
+      const count = Number(node.backlink_count || 0);
+      if (count <= 0) return "0";
+      if (count <= 2) return "1–2";
+      if (count <= 5) return "3–5";
+      return "6+";
+    }
+
+    function graphColorKey(node) {
+      if (graphState.colorBy === "scope") return node.scope || "default";
+      if (graphState.colorBy === "project") return node.project_key || node.scope || "general";
+      if (graphState.colorBy === "backlinks") return graphBacklinkGroup(node);
+      return node.kind || node.color_group || "default";
+    }
+
+    function graphNodeColor(node) {
+      const key = graphColorKey(node);
+      if (graphState.colorBy === "project") return graphColorHash(key);
+      if (graphState.colorBy === "backlinks") {
+        const colors = { "0": "#94a3b8", "1–2": "#60a5fa", "3–5": "#8b5cf6", "6+": "#f97316" };
+        return colors[key] || GRAPH_COLORS.default;
+      }
+      return GRAPH_COLORS[key] || GRAPH_COLORS.default;
+    }
+
+    function graphNodeRadius(node) {
+      const base = 6;
+      const count = Number(node.backlink_count || 0);
+      return Math.min(24, (base + count * 1.6) * graphState.settings.nodeScale);
+    }
+
+    function graphMatchesFilter(node) {
+      if (!graphState.search) return true;
+      const q = graphState.search.toLowerCase();
+      return String(node.title || "").toLowerCase().includes(q)
+        || String(node.id || "").toLowerCase().includes(q)
+        || (node.tags || []).some(tag => String(tag).toLowerCase().includes(q));
+    }
+
+    async function loadSidebarFileData() {
+      const [payload, capturePayload] = await Promise.all([
+        api("/api/kb/graph?max_nodes=0"),
+        api("/api/kb/capture"),
+      ]);
+      state.capture = capturePayload.notes || [];
+      graphState.rawNodes = payload.nodes || [];
+      graphState.rawLinks = payload.links || [];
+      graphState.totalEntries = Number(payload.total_entries || 0);
+      applyGraphProjectFilter(false);
+      return payload;
+    }
+
+    async function loadGraph() {
+      const canvas = $("#graph-canvas");
+      if (!canvas) return;
+      graphState.search = $("#graph-search")?.value || "";
+      graphState.colorBy = graphState.settings.colorBy;
+      try {
+        await loadSidebarFileData();
+        populateGraphProjectSelect();
+        applyGraphProjectFilter();
+      } catch (err) {
+        $("#graph-status").textContent = "Failed to load graph: " + (err?.message || err);
+      }
+    }
+
+    function populateGraphProjectSelect() {
+      const sel = $("#graph-project");
+      if (!sel) return;
+      if (!sel.dataset.bound) {
+        sel.dataset.bound = "1";
+        sel.addEventListener("change", applyGraphProjectFilter);
+      }
+      const projects = [...new Set((graphState.rawNodes || [])
+        .filter(n => n.scope === "project" && n.project_key)
+        .map(n => n.project_key))];
+      const current = sel.value;
+      sel.innerHTML = `<option value="">${esc(t("knowledge.graph_all_projects", "All projects"))}</option>`
+        + projects.map(p => `<option value="${esc(p)}">${esc(p)}</option>`).join("");
+      sel.value = projects.includes(current) ? current : "";
+    }
+
+    function restartGraphLayout() {
+      const canvas = $("#graph-canvas");
+      if (!canvas) return;
+      stopGraphLoop();
+      graphState.positions.clear();
+      graphState.velocities.clear();
+      initGraphPositions(canvas);
+      startGraphLoop(canvas);
+    }
+
+    function graphDerivedData(project) {
+      const settings = graphState.settings;
+      const baseNodes = (graphState.rawNodes || []).filter(node => {
+        if (project && node.project_key !== project) return false;
+        if (settings.documentsOnly && (!node.path || !String(node.path).toLowerCase().endsWith(".md"))) return false;
+        return true;
+      });
+      const nodes = baseNodes.map(node => ({ ...node }));
+      const nodeIds = new Set(nodes.map(node => node.id));
+      const links = (graphState.rawLinks || [])
+        .filter(link => nodeIds.has(link.source) && nodeIds.has(link.target))
+        .map(link => ({ ...link }));
+      if (!settings.documentsOnly && settings.showTags) {
+        const tags = new Map();
+        for (const node of baseNodes) {
+          if (!node.path) continue;
+          for (const rawTag of new Set(node.tags || [])) {
+            const tag = String(rawTag || "").trim();
+            if (!tag) continue;
+            const id = `tag:${encodeURIComponent(tag)}`;
+            if (!tags.has(id)) tags.set(id, { id, title: `#${tag}`, kind: "tag", scope: "general", project_key: node.project_key || null, tags: [tag], backlink_count: 0, virtual: true });
+            tags.get(id).backlink_count += 1;
+            links.push({ source: node.id, target: id, type: "tag" });
+          }
+        }
+        nodes.push(...tags.values());
+      }
+      if (!settings.documentsOnly && settings.showAttachments) {
+        for (const node of baseNodes) {
+          if (!node.path) continue;
+          const seenAttachments = new Set();
+          for (const attachment of node.attachments || []) {
+            const path = String(attachment.path || "").trim();
+            if (!path || seenAttachments.has(path)) continue;
+            seenAttachments.add(path);
+            const id = `attachment:${encodeURIComponent(node.id)}:${encodeURIComponent(path)}`;
+            nodes.push({
+              id,
+              title: attachment.name || path.split("/").pop() || path,
+              kind: "attachment",
+              scope: node.scope,
+              project_key: node.project_key || null,
+              tags: [],
+              backlink_count: 1,
+              virtual: true,
+              owner_id: node.id,
+              attachment,
+            });
+            links.push({ source: node.id, target: id, type: "attachment" });
+          }
+        }
+      }
+      if (settings.showOrphans) return { nodes, links };
+      const degree = new Map(nodes.map(node => [node.id, 0]));
+      for (const link of links) {
+        degree.set(link.source, (degree.get(link.source) || 0) + 1);
+        degree.set(link.target, (degree.get(link.target) || 0) + 1);
+      }
+      const connected = new Set([...degree.entries()].filter(([, count]) => count > 0).map(([id]) => id));
+      return {
+        nodes: nodes.filter(node => connected.has(node.id)),
+        links: links.filter(link => connected.has(link.source) && connected.has(link.target)),
+      };
+    }
+
+    function updateGraphStatus() {
+      const status = $("#graph-status");
+      if (status) status.textContent = `${graphState.totalEntries} entries · ${graphState.nodes.length} nodes`;
+    }
+
+    function renderGraphColorLegend() {
+      const legend = $("#graph-color-legend");
+      if (!legend) return;
+      const groups = new Map();
+      for (const node of graphState.nodes || []) {
+        const key = graphColorKey(node);
+        const item = groups.get(key) || { node, count: 0 };
+        item.count += 1;
+        groups.set(key, item);
+      }
+      legend.innerHTML = [...groups.entries()].slice(0, 10).map(([key, item]) => `<div class="kb-graph-color-row"><span class="kb-graph-color-swatch" style="--graph-color:${esc(graphNodeColor(item.node))}"></span><span class="kb-graph-color-label">${esc(key)} · ${item.count}</span></div>`).join("");
+    }
+
+    function applyGraphProjectFilter(restart = state.activeTab === "graph") {
+      const project = $("#graph-project")?.value || "";
+      const derived = graphDerivedData(project);
+      graphState.nodes = derived.nodes;
+      graphState.links = derived.links;
+      graphState.nodeMap = new Map(graphState.nodes.map(node => [node.id, node]));
+      renderGraphFileTree();
+      renderGraphColorLegend();
+      updateGraphStatus();
+      if (restart) restartGraphLayout();
+    }
+
+    function setGraphControlsOpen(open) {
+      const panel = $("#graph-controls-panel");
+      const toggle = $("#graph-controls-toggle");
+      if (!panel || !toggle) return;
+      panel.hidden = !open;
+      toggle.hidden = open;
+      toggle.setAttribute("aria-expanded", String(open));
+    }
+
+    function resetGraphControls() {
+      const search = $("#graph-search");
+      const project = $("#graph-project");
+      if (search) search.value = "";
+      if (project) project.value = "";
+      graphState.search = "";
+      graphState.settings = { ...GRAPH_SETTINGS_DEFAULTS };
+      graphState.colorBy = graphState.settings.colorBy;
+      writeGraphSettings(graphState.settings);
+      syncGraphSettingsControls();
+      applyGraphProjectFilter();
+    }
+
+    function graphSettingValue(id, value, digits = 2) {
+      const input = $(id);
+      const output = $(id + "-value");
+      if (input) input.value = String(value);
+      if (output) output.textContent = digits < 0 ? String(Math.round(value)) : Number(value).toFixed(digits);
+    }
+
+    function syncGraphSettingsControls() {
+      const settings = graphState.settings;
+      const toggles = {
+        "#graph-show-tags": settings.showTags,
+        "#graph-show-attachments": settings.showAttachments,
+        "#graph-documents-only": settings.documentsOnly,
+        "#graph-show-orphans": settings.showOrphans,
+        "#graph-arrows": settings.arrows,
+      };
+      for (const [selector, checked] of Object.entries(toggles)) {
+        const input = $(selector);
+        if (input) input.checked = checked;
+      }
+      if ($("#graph-color")) $("#graph-color").value = settings.colorBy;
+      graphSettingValue("#graph-text-opacity", settings.textOpacity);
+      graphSettingValue("#graph-node-scale", settings.nodeScale);
+      graphSettingValue("#graph-link-width", settings.linkWidth);
+      graphSettingValue("#graph-center-force", settings.centerForce);
+      graphSettingValue("#graph-repulsion", settings.repulsion);
+      graphSettingValue("#graph-link-force", settings.linkForce);
+      graphSettingValue("#graph-link-distance", settings.linkDistance, -1);
+    }
+
+    function updateGraphSetting(key, value, structural = false) {
+      graphState.settings[key] = value;
+      if (key === "colorBy") graphState.colorBy = value;
+      writeGraphSettings(graphState.settings);
+      syncGraphSettingsControls();
+      if (structural) applyGraphProjectFilter();
+      else renderGraphColorLegend();
+    }
+
+    function bindGraphSettingsControls() {
+      const panel = $("#graph-controls-panel");
+      if (!panel || panel.dataset.settingsBound) return;
+      panel.dataset.settingsBound = "1";
+      const structuralToggles = {
+        "#graph-show-tags": "showTags",
+        "#graph-show-attachments": "showAttachments",
+        "#graph-documents-only": "documentsOnly",
+        "#graph-show-orphans": "showOrphans",
+      };
+      for (const [selector, key] of Object.entries(structuralToggles)) {
+        $(selector)?.addEventListener("change", event => updateGraphSetting(key, Boolean(event.target.checked), true));
+      }
+      $("#graph-arrows")?.addEventListener("change", event => updateGraphSetting("arrows", Boolean(event.target.checked)));
+      $("#graph-color")?.addEventListener("change", event => updateGraphSetting("colorBy", event.target.value || "kind"));
+      const ranges = {
+        "#graph-text-opacity": "textOpacity",
+        "#graph-node-scale": "nodeScale",
+        "#graph-link-width": "linkWidth",
+        "#graph-center-force": "centerForce",
+        "#graph-repulsion": "repulsion",
+        "#graph-link-force": "linkForce",
+        "#graph-link-distance": "linkDistance",
+      };
+      for (const [selector, key] of Object.entries(ranges)) {
+        $(selector)?.addEventListener("input", event => updateGraphSetting(key, Number(event.target.value)));
+      }
+      $("#graph-play")?.addEventListener("click", restartGraphLayout);
+      syncGraphSettingsControls();
+    }
+
+    function graphFileTreeEntry(node) {
+      return {
+        id: node.id,
+        slug: node.id,
+        title: node.title || node.id,
+        scope: node.scope,
+        type: node.kind,
+        project_key: node.project_key,
+        path: node.path || "",
+      };
+    }
+
+    function graphFileGroupCollapsed(node, depth) {
+      if (graphState.expandedFileGroups.has(node.key)) return false;
+      if (graphState.collapsedFileGroups.has(node.key)) return true;
+      return depth > 0;
+    }
+
+    function specialFileGroupCollapsed(key, defaultCollapsed = true) {
+      if (graphState.expandedFileGroups.has(key)) return false;
+      if (graphState.collapsedFileGroups.has(key)) return true;
+      return defaultCollapsed;
+    }
+
+    function renderGraphFileGroup(node, depth, indexPath) {
+      const collapsed = graphFileGroupCollapsed(node, depth);
+      const encodedKey = encodeURIComponent(node.key);
+      const children = sortedEntryTreeChildren(node)
+        .map((child, index) => renderGraphFileGroup(child, depth + 1, `${indexPath}-${index}`))
+        .join("");
+      const entries = sortEntriesByTitle(node.entries).map(entry => {
+        const id = encodeURIComponent(entryIdentity(entry));
+        const title = entryTitle(entry);
+        return `<button class="kb-graph-file-entry" type="button" title="${esc(entry.path || title)}" onclick="openGraphEntry('${esc(id)}')"><span class="kb-graph-file-entry-label">${esc(title)}</span></button>`;
+      }).join("");
+      return `<section class="kb-graph-file-group">
+        <button class="kb-graph-file-folder" type="button" aria-expanded="${collapsed ? "false" : "true"}" onclick="toggleGraphFileGroup('${esc(encodedKey)}', ${collapsed ? "true" : "false"})">
+          <span class="kb-graph-file-chevron" aria-hidden="true">${collapsed ? "›" : "⌄"}</span>
+          <span class="kb-graph-file-folder-label">${esc(node.label)}</span>
+          <span class="kb-graph-file-folder-count">${node.count}</span>
+        </button>
+        <div class="kb-graph-file-group-children"${collapsed ? " hidden" : ""}>${children}${entries}</div>
+      </section>`;
+    }
+
+    function captureFileTree() {
+      const root = createEntryTreeNode(t("knowledge.tab_capture", "Capture"), "sidebar:capture");
+      for (const note of state.capture || []) {
+        let rawPath = String(note.path || `capture/inbox/${note.title || note.id || "note"}.md`).replace(/\\/g, "/");
+        const parts = rawPath.split("/").filter(Boolean);
+        if (parts[0] === "capture") parts.shift();
+        const filename = parts.pop() || `${note.title || note.id || "note"}.md`;
+        let node = root;
+        node.count += 1;
+        for (const segment of parts) {
+          const partKey = `dir:${segment}`;
+          const key = `${node.key}/${partKey}`;
+          if (!node.children.has(partKey)) node.children.set(partKey, createEntryTreeNode(segment, key));
+          node = node.children.get(partKey);
+          node.count += 1;
+        }
+        node.entries.push({ ...note, filename });
+      }
+      return root;
+    }
+
+    function renderCaptureFileGroup(node, depth = 0) {
+      const collapsed = specialFileGroupCollapsed(node.key, true);
+      const encodedKey = encodeURIComponent(node.key);
+      const children = sortedEntryTreeChildren(node).map(child => renderCaptureFileGroup(child, depth + 1)).join("");
+      const entries = [...node.entries].sort((a, b) => String(a.filename || "").localeCompare(String(b.filename || ""))).map(note => {
+        const active = state.activeCaptureNote?.id === note.id;
+        const label = String(note.filename || note.title || note.id || "note").replace(/\.md$/i, "");
+        return `<button class="kb-graph-file-entry${active ? " active" : ""}" type="button" title="${esc(note.path || label)}" onclick="openGraphCapture('${esc(encodeURIComponent(note.id))}')"><span class="kb-graph-file-entry-label">${esc(label)}</span></button>`;
+      }).join("");
+      return `<section class="kb-graph-file-group">
+        <button class="kb-graph-file-folder" type="button" aria-expanded="${collapsed ? "false" : "true"}" onclick="toggleGraphFileGroup('${esc(encodedKey)}', ${collapsed ? "true" : "false"})">
+          <span class="kb-graph-file-chevron" aria-hidden="true">${collapsed ? "›" : "⌄"}</span>
+          <span class="kb-graph-file-folder-label">${esc(node.label)}</span>
+          <span class="kb-graph-file-folder-count">${node.count}</span>
+        </button>
+        <div class="kb-graph-file-group-children"${collapsed ? " hidden" : ""}>${children}${entries}</div>
+      </section>`;
+    }
+
+    function renderGraphFileTree() {
+      const container = $("#graph-file-tree");
+      if (!container) return;
+      const matchingNodes = (graphState.nodes || []).filter(graphMatchesFilter);
+      const entryNodes = matchingNodes.filter(node => node.path);
+      const skillNodes = matchingNodes.filter(node => node.kind === "skill" && node.id !== "skills");
+      const tree = groupEntries(entryNodes.map(graphFileTreeEntry));
+      const groups = sortedEntryTreeChildren(tree)
+        .map((child, index) => renderGraphFileGroup(child, 0, String(index)))
+        .join("");
+      const capture = renderCaptureFileGroup(captureFileTree());
+      const skillsKey = "sidebar:skills";
+      const skillsCollapsed = specialFileGroupCollapsed(skillsKey, true);
+      const skills = `<section class="kb-graph-file-group">
+        <button class="kb-graph-file-folder" type="button" aria-expanded="${skillsCollapsed ? "false" : "true"}" onclick="toggleGraphFileGroup('${encodeURIComponent(skillsKey)}', ${skillsCollapsed ? "true" : "false"})">
+          <span class="kb-graph-file-chevron" aria-hidden="true">${skillsCollapsed ? "›" : "⌄"}</span>
+          <span class="kb-graph-file-folder-label">${esc(t("skills.title", "Skills"))}</span>
+          <span class="kb-graph-file-folder-count">${skillNodes.length}</span>
+        </button>
+        <div class="kb-graph-file-group-children"${skillsCollapsed ? " hidden" : ""}>
+          <button class="kb-graph-file-entry" type="button" onclick="openGraphSkills()"><span class="kb-graph-file-entry-label">${esc(t("skills.manage", "Manage Skills"))}</span></button>
+          ${skillNodes.map(node => `<button class="kb-graph-file-entry${state.skillSelectedId === String(node.id).replace(/^skill:/, "") ? " active" : ""}" type="button" onclick="openGraphSkill('${esc(encodeURIComponent(String(node.id).replace(/^skill:/, "")))}')"><span class="kb-graph-file-entry-label">${esc(node.title || node.id)}</span></button>`).join("")}
+        </div>
+      </section>`;
+      container.innerHTML = capture + groups + skills;
+    }
+
+    window.toggleGraphFileGroup = (encodedKey, wasCollapsed = false) => {
+      const key = decodeURIComponent(String(encodedKey || ""));
+      graphState.collapsedFileGroups.delete(key);
+      graphState.expandedFileGroups.delete(key);
+      if (wasCollapsed) graphState.expandedFileGroups.add(key);
+      else graphState.collapsedFileGroups.add(key);
+      renderGraphFileTree();
+    };
+
+    window.openGraphEntry = async (encodedId) => {
+      await openEntryReference(encodedId);
+    };
+
+    window.openGraphCapture = async (encodedId) => {
+      await window.openCaptureNote(encodedId);
+    };
+
+    window.openGraphSkill = async (encodedId) => {
+      const id = decodeURIComponent(String(encodedId || ""));
+      await showTab("skills");
+      if (id) await loadSkill(id);
+    };
+
+    window.openGraphSkills = async () => {
+      await showTab("skills");
+    };
+
+    function initGraphPositions(canvas) {
+      const w = canvas.clientWidth || 800;
+      const h = canvas.clientHeight || 560;
+      const n = graphState.nodes.length;
+      graphState.nodeById = id => graphState.nodes.find(node => node.id === id) || null;
+      const angleStep = n ? (2 * Math.PI) / n : 0;
+      graphState.nodes.forEach((node, i) => {
+        graphState.positions.set(node.id, {
+          x: w / 2 + Math.cos(i * angleStep) * (w / 3),
+          y: h / 2 + Math.sin(i * angleStep) * (h / 3),
+        });
+        graphState.velocities.set(node.id, { x: 0, y: 0 });
+      });
+      graphState.panX = 0;
+      graphState.panY = 0;
+      graphState.scale = 1;
+    }
+
+    function graphStep(dt) {
+      const nodes = graphState.nodes;
+      const positions = graphState.positions;
+      const velocities = graphState.velocities;
+      const w = 1200;
+      const h = 800;
+      // Pairwise repulsion (bounded for cost).
+      const limited = nodes.slice(0, 300);
+      for (let i = 0; i < limited.length; i++) {
+        for (let j = i + 1; j < limited.length; j++) {
+          const a = positions.get(limited[i].id);
+          const b = positions.get(limited[j].id);
+          if (!a || !b) continue;
+          let dx = a.x - b.x;
+          let dy = a.y - b.y;
+          let dist2 = dx * dx + dy * dy;
+          if (dist2 < 1) { dx = (Math.random() - 0.5); dy = (Math.random() - 0.5); dist2 = 1; }
+          const dist = Math.sqrt(dist2);
+          const force = (graphState.settings.repulsion * 300) / dist2;
+          const fx = (dx / dist) * force;
+          const fy = (dy / dist) * force;
+          velocities.get(limited[i].id).x += fx;
+          velocities.get(limited[i].id).y += fy;
+          velocities.get(limited[j].id).x -= fx;
+          velocities.get(limited[j].id).y -= fy;
+        }
+      }
+      // Spring attraction along links.
+      for (const link of graphState.links) {
+        const a = positions.get(link.source);
+        const b = positions.get(link.target);
+        if (!a || !b) continue;
+        let dx = b.x - a.x;
+        let dy = b.y - a.y;
+        let dist = Math.sqrt(dx * dx + dy * dy) || 1;
+        const ideal = graphState.settings.linkDistance;
+        const force = (dist - ideal) * 0.02 * graphState.settings.linkForce;
+        const fx = (dx / dist) * force;
+        const fy = (dy / dist) * force;
+        velocities.get(link.source).x += fx;
+        velocities.get(link.source).y += fy;
+        velocities.get(link.target).x -= fx;
+        velocities.get(link.target).y -= fy;
+      }
+      // Center gravity keeps the cloud together.
+      for (const node of nodes) {
+        const p = positions.get(node.id);
+        const v = velocities.get(node.id);
+        if (!p || !v) continue;
+        const centerStrength = graphState.settings.centerForce * 0.005;
+        v.x += (w / 2 - p.x) * centerStrength;
+        v.y += (h / 2 - p.y) * centerStrength;
+        v.x *= 0.85;
+        v.y *= 0.85;
+        p.x += v.x * dt;
+        p.y += v.y * dt;
+      }
+    }
+
+    function drawGraphArrow(ctx, source, target, targetRadius) {
+      const dx = target.x - source.x;
+      const dy = target.y - source.y;
+      const distance = Math.sqrt(dx * dx + dy * dy) || 1;
+      const angle = Math.atan2(dy, dx);
+      const offset = targetRadius + 3;
+      const x = target.x - (dx / distance) * offset;
+      const y = target.y - (dy / distance) * offset;
+      const size = 4 + graphState.settings.linkWidth;
+      ctx.save();
+      ctx.translate(x, y);
+      ctx.rotate(angle);
+      ctx.fillStyle = ctx.strokeStyle;
+      ctx.beginPath();
+      ctx.moveTo(0, 0);
+      ctx.lineTo(-size, -size * 0.6);
+      ctx.lineTo(-size, size * 0.6);
+      ctx.closePath();
+      ctx.fill();
+      ctx.restore();
+    }
+
+    function graphRender(canvas, ctx) {
+      const dpr = window.devicePixelRatio || 1;
+      const w = canvas.clientWidth || 800;
+      const h = canvas.clientHeight || 560;
+      canvas.width = Math.round(w * dpr);
+      canvas.height = Math.round(h * dpr);
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      ctx.clearRect(0, 0, w, h);
+      ctx.save();
+      ctx.translate(graphState.panX, graphState.panY);
+      ctx.scale(graphState.scale, graphState.scale);
+
+      const hoverId = graphState.hover >= 0 && graphState.hover < graphState.nodes.length
+        ? graphState.nodes[graphState.hover].id : null;
+      const hoverNeighbors = new Set();
+      if (hoverId) {
+        for (const link of graphState.links) {
+          if (link.source === hoverId) hoverNeighbors.add(link.target);
+          if (link.target === hoverId) hoverNeighbors.add(link.source);
+        }
+      }
+
+      // Links.
+      ctx.lineWidth = graphState.settings.linkWidth;
+      for (const link of graphState.links) {
+        const a = graphState.positions.get(link.source);
+        const b = graphState.positions.get(link.target);
+        if (!a || !b) continue;
+        const dimmed = hoverId && link.source !== hoverId && link.target !== hoverId;
+        ctx.strokeStyle = dimmed ? "rgba(150,150,150,0.12)" : "rgba(150,150,150,0.45)";
+        ctx.beginPath();
+        ctx.moveTo(a.x, a.y);
+        ctx.lineTo(b.x, b.y);
+        ctx.stroke();
+        if (graphState.settings.arrows) {
+          const targetNode = graphState.nodeMap?.get(link.target);
+          drawGraphArrow(ctx, a, b, targetNode ? graphNodeRadius(targetNode) : 6);
+        }
+      }
+
+      // Nodes.
+      for (let i = 0; i < graphState.nodes.length; i++) {
+        const node = graphState.nodes[i];
+        const p = graphState.positions.get(node.id);
+        if (!p) continue;
+        const matches = graphMatchesFilter(node);
+        const dimmed = hoverId && node.id !== hoverId && !hoverNeighbors.has(node.id);
+        const alpha = matches ? (dimmed ? 0.25 : 1) : 0.08;
+        const radius = graphNodeRadius(node);
+        ctx.globalAlpha = alpha;
+        ctx.fillStyle = graphNodeColor(node);
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, radius, 0, Math.PI * 2);
+        ctx.fill();
+        if (node.id === hoverId) {
+          ctx.strokeStyle = "#000";
+          ctx.lineWidth = 2;
+          ctx.stroke();
+        }
+        ctx.globalAlpha = 1;
+        // Label for larger nodes / hover.
+        if (hoverId === node.id || radius >= 9) {
+          const textColor = getComputedStyle(canvas).getPropertyValue("--color-text").trim() || "#222";
+          ctx.globalAlpha = alpha * graphState.settings.textOpacity;
+          ctx.fillStyle = textColor;
+          ctx.font = "10px sans-serif";
+          ctx.fillText(String(node.title || node.id || "").slice(0, 24), p.x + radius + 3, p.y + 3);
+          ctx.globalAlpha = 1;
+        }
+      }
+      ctx.restore();
+    }
+
+    function startGraphLoop(canvas) {
+      if (!canvas) return;
+      graphState.running = true;
+      const ctx = canvas.getContext("2d");
+      let last = performance.now();
+      const tick = (now) => {
+        if (!graphState.running) return;
+        const dt = Math.min(0.05, (now - last) / 1000 || 0.016);
+        last = now;
+        graphStep(dt * 60);
+        graphRender(canvas, ctx);
+        graphState.raf = requestAnimationFrame(tick);
+      };
+      graphState.raf = requestAnimationFrame(tick);
+    }
+
+    function stopGraphLoop() {
+      graphState.running = false;
+      if (graphState.raf) cancelAnimationFrame(graphState.raf);
+      graphState.raf = 0;
+    }
+
+    function graphCanvasPoint(canvas, clientX, clientY) {
+      const rect = canvas.getBoundingClientRect();
+      const x = clientX - rect.left;
+      const y = clientY - rect.top;
+      return { x: (x - graphState.panX) / graphState.scale, y: (y - graphState.panY) / graphState.scale };
+    }
+
+    async function openGraphNode(node) {
+      if (!node?.id) return;
+      if (node.kind === "tag") {
+        const tag = String(node.tags?.[0] || node.title || "").replace(/^#/, "");
+        const search = $("#graph-search");
+        if (search) search.value = tag;
+        graphState.search = tag;
+        renderGraphFileTree();
+        return;
+      }
+      if (node.kind === "attachment" && node.owner_id) {
+        await openEntryReference(encodeURIComponent(String(node.owner_id)));
+        return;
+      }
+      if (node.kind === "skill" || node.id === "skills") {
+        await showTab("skills");
+        if (node.id !== "skills") await loadSkill(String(node.id).replace(/^skill:/, ""));
+        return;
+      }
+      await openEntryReference(encodeURIComponent(String(node.id)));
+    }
+
+    function bindGraphCanvas() {
+      const canvas = $("#graph-canvas");
+      if (!canvas || canvas.dataset.bound) return;
+      canvas.dataset.bound = "1";
+      let dragNode = -1;
+      let panning = false;
+      let lastX = 0;
+      let lastY = 0;
+      let startX = 0;
+      let startY = 0;
+      let moved = false;
+
+      canvas.addEventListener("pointerdown", (ev) => {
+        startX = ev.clientX;
+        startY = ev.clientY;
+        moved = false;
+        const point = graphCanvasPoint(canvas, ev.clientX, ev.clientY);
+        dragNode = -1;
+        for (let i = graphState.nodes.length - 1; i >= 0; i--) {
+          const node = graphState.nodes[i];
+          const p = graphState.positions.get(node.id);
+          if (!p) continue;
+          const dx = point.x - p.x;
+          const dy = point.y - p.y;
+          if (dx * dx + dy * dy <= (graphNodeRadius(node) + 6) ** 2) {
+            dragNode = i;
+            break;
+          }
+        }
+        if (dragNode >= 0) {
+          graphState.dragIndex = dragNode;
+          canvas.classList.add("dragging");
+        } else {
+          panning = true;
+          lastX = ev.clientX;
+          lastY = ev.clientY;
+          canvas.classList.add("dragging");
+        }
+      });
+
+      canvas.addEventListener("pointermove", (ev) => {
+        if (Math.abs(ev.clientX - startX) > 4 || Math.abs(ev.clientY - startY) > 4) moved = true;
+        if (dragNode >= 0) {
+          const point = graphCanvasPoint(canvas, ev.clientX, ev.clientY);
+          const node = graphState.nodes[dragNode];
+          if (node) graphState.positions.set(node.id, point);
+          return;
+        }
+        if (panning) {
+          graphState.panX += ev.clientX - lastX;
+          graphState.panY += ev.clientY - lastY;
+          lastX = ev.clientX;
+          lastY = ev.clientY;
+          return;
+        }
+        // Hover detection.
+        const point = graphCanvasPoint(canvas, ev.clientX, ev.clientY);
+        let hover = -1;
+        for (let i = 0; i < graphState.nodes.length; i++) {
+          const node = graphState.nodes[i];
+          const p = graphState.positions.get(node.id);
+          if (!p) continue;
+          const dx = point.x - p.x;
+          const dy = point.y - p.y;
+          if (dx * dx + dy * dy <= (graphNodeRadius(node) + 6) ** 2) { hover = i; break; }
+        }
+        graphState.hover = hover;
+      });
+
+      const endDrag = (openNode = false) => {
+        const node = openNode && dragNode >= 0 && !moved ? graphState.nodes[dragNode] : null;
+        dragNode = -1;
+        graphState.dragIndex = -1;
+        panning = false;
+        canvas.classList.remove("dragging");
+        if (node) void openGraphNode(node);
+      };
+      canvas.addEventListener("pointerup", () => endDrag(true));
+      canvas.addEventListener("pointerleave", () => endDrag(false));
+
+      canvas.addEventListener("wheel", (ev) => {
+        ev.preventDefault();
+        const factor = ev.deltaY < 0 ? 1.1 : 0.9;
+        graphState.scale = Math.min(4, Math.max(0.2, graphState.scale * factor));
+      }, { passive: false });
+
+      $("#graph-search")?.addEventListener("input", (ev) => {
+        graphState.search = ev.target.value || "";
+        renderGraphFileTree();
+      });
     }
 
     function defaultSkillMarkdown(id) {
@@ -939,7 +2051,11 @@
           const description = skill.short_description || skill.description || skill.path || "";
           const toolCount = Number(skill.tool_count || 0);
           const tools = toolCount ? ` · ${formatText("skills.tool_count", { count: toolCount }, `${toolCount} 个工具`)}` : "";
-          return `<button class="kb-skill-list-item ${active ? "active" : ""}" type="button" data-skill-id="${esc(skill.id)}"><strong>${esc(skill.label || skill.id)}</strong><span>${esc(description + tools)}</span></button>`;
+          const isSystem = Boolean(skill.system);
+          const badge = isSystem
+            ? `<span class="kb-skill-source kb-skill-source-system">${esc(t("skills.system", "系统"))}</span>`
+            : `<span class="kb-skill-source">${esc(t("skills.personal", "个人"))}</span>`;
+          return `<button class="kb-skill-list-item ${active ? "active" : ""}" type="button" data-skill-id="${esc(skill.id)}"><strong>${esc(skill.label || skill.id)} ${badge}</strong><span>${esc(description + tools)}</span></button>`;
         }).join("");
       }
 
@@ -951,15 +2067,22 @@
       const id = state.skillDraftNew ? "" : String(selected?.id || "");
       const skillMd = state.skillDraftNew ? defaultSkillMarkdown("new-skill") : String(selected?.skill_md || "");
       const openaiYaml = state.skillDraftNew ? "" : String(selected?.openai_yaml || "");
+      const isSystem = Boolean(selected?.system) && !state.skillDraftNew;
+      const readonlyAttr = isSystem ? "readonly" : "";
+      const disableAttr = isSystem ? "disabled" : "";
+      const readOnlyNote = isSystem
+        ? `<div class="kb-muted">${esc(t("skills.system_readonly", "系统技能只读，不可编辑。"))}</div>`
+        : "";
       detail.innerHTML = `
         <form id="skills-form" class="kb-skills-form">
+          ${readOnlyNote}
           <label><span class="kb-field">${esc(t("skills.id", "技能 ID"))}</span><input id="skill-id" value="${esc(id)}" ${state.skillDraftNew ? "" : "readonly"} autocomplete="off" /></label>
-          <label><span class="kb-field">${esc(t("skills.body", "技能正文（SKILL.md）"))}</span><textarea id="skill-md" class="kb-skills-editor" wrap="soft">${esc(skillMd)}</textarea></label>
-          <label><span class="kb-field">${esc(t("skills.agent_metadata", "界面元数据（agents/openai.yaml）"))}</span><textarea id="skill-openai-yaml" class="kb-skills-editor kb-skills-agent-editor" wrap="soft">${esc(openaiYaml)}</textarea></label>
+          <label><span class="kb-field">${esc(t("skills.body", "技能正文（SKILL.md）"))}</span><textarea id="skill-md" class="kb-skills-editor" wrap="soft" ${readonlyAttr}>${esc(skillMd)}</textarea></label>
+          <label><span class="kb-field">${esc(t("skills.agent_metadata", "界面元数据（agents/openai.yaml）"))}</span><textarea id="skill-openai-yaml" class="kb-skills-editor kb-skills-agent-editor" wrap="soft" ${readonlyAttr}>${esc(openaiYaml)}</textarea></label>
           <div><span class="kb-field">${esc(t("skills.bundled_tools", "携带的工具与文件"))}</span>${renderSkillTools(selected)}</div>
           <div class="kb-card-actions">
-            <button class="primary" type="submit">${esc(t("common.save", "保存"))}</button>
-            ${state.skillDraftNew ? "" : `<button class="kb-reject" id="skill-delete" type="button">${esc(t("skills.delete", "删除"))}</button>`}
+            <button class="primary" type="submit" ${disableAttr}>${esc(t("common.save", "保存"))}</button>
+            ${state.skillDraftNew || isSystem ? "" : `<button class="kb-reject" id="skill-delete" type="button">${esc(t("skills.delete", "删除"))}</button>`}
           </div>
         </form>`;
     }
@@ -976,6 +2099,7 @@
         toast(error.message);
       }
       renderSkills();
+      renderGraphFileTree();
     }
 
     async function loadSkills(force = false) {
@@ -1000,6 +2124,7 @@
         state.skillsLoading = false;
       }
       renderSkills();
+      renderGraphFileTree();
       if (!state.skillDraftNew && state.skillSelectedId && state.skillDetail?.id !== state.skillSelectedId) {
         await loadSkill(state.skillSelectedId);
       }
@@ -1063,7 +2188,7 @@
           git: s.git.is_repo ? t("knowledge.git_repo", "repo") : t("knowledge.git_off", "off"),
         }, `Entries ${s.total_entries} · Pending ${s.pending} · Stale ${s.stale} · gate ${s.curation_gate} · git ${s.git.is_repo ? "repo" : "off"}`);
         $("#kb-summary").className = "status " + (s.enabled ? "completed" : "idle");
-        $("#pending-badge").textContent = s.pending ? `(${s.pending})` : "";
+        $("#pending-badge").textContent = s.pending ? String(s.pending) : "";
       } catch (e) { $("#kb-summary").textContent = formatText("knowledge.load_failed_with_error", { error: e.message }, "Load failed: " + e.message); }
     }
 
@@ -1837,9 +2962,67 @@
       } else {
         body.textContent = ref.body || "";
       }
+      // Attachment area: image inline / pdf embed / video play / text pre / office download.
+      const attachments = renderEntryAttachments(ref);
+      if (attachments) body.insertAdjacentHTML("beforeend", attachments);
       modal.hidden = false;
       renderEntryEditMarkdown();
+      loadAttachmentTexts(body);
       setTimeout(() => focusPageSearchMatch($("#entry-ref-title"), body), 0);
+    }
+
+    function attachmentHref(asset, entry) {
+      const id = entryRenderId(entry || state.activeEntry || state.referenceEntry);
+      if (!id || !asset?.path) return "";
+      return `/api/kb/attachment?id=${encodeURIComponent(id)}&path=${encodeURIComponent(asset.path)}`;
+    }
+
+    function renderEntryAttachments(entry) {
+      const meta = entry?.meta || {};
+      const assets = Array.isArray(meta.assets) ? meta.assets : [];
+      const nonImages = assets.filter((a) => a?.kind !== "image");
+      if (!nonImages.length) return "";
+      const heading = `<div class="kb-attachments-heading">${esc(t("knowledge.attachments", "附件"))}</div>`;
+      const items = nonImages.map((asset) => {
+        const href = attachmentHref(asset, entry);
+        if (!href) return "";
+        const name = esc(asset.original || asset.name || "attachment");
+        const mime = String(asset.mime || "");
+        const size = formatFileSize(asset.size);
+        const localOnly = asset.local_only ? ` · ${esc(t("knowledge.attachment_local_only", "仅本机"))}` : "";
+        let body = "";
+        if (mime === "application/pdf") {
+          body = `<embed class="kb-attachment-embed" src="${esc(href)}" type="application/pdf" />`;
+        } else if (mime.startsWith("video/")) {
+          body = `<video class="kb-attachment-video" src="${esc(href)}" controls preload="metadata"></video>`;
+        } else if (mime.startsWith("audio/")) {
+          body = `<audio class="kb-attachment-audio" src="${esc(href)}" controls></audio>`;
+        } else if (mime.startsWith("text/")) {
+          body = `<pre class="kb-attachment-text" data-attachment-text="${esc(href)}">${esc(t("knowledge.attachment_text_loading", "加载文本…"))}</pre>`;
+        }
+        const download = `<a class="button-ghost" href="${esc(href)}" download="${name}">${esc(t("knowledge.attachment_download", "下载"))}</a>`;
+        return `<div class="kb-attachment" data-mime="${esc(mime)}">
+          <div class="kb-attachment-head"><strong>${name}</strong><span class="kb-muted">${esc(mime)} · ${size}${localOnly}</span>${download}</div>
+          ${body}
+        </div>`;
+      }).join("");
+      return items ? `<div class="kb-attachments">${heading}${items}</div>` : "";
+    }
+
+    function loadAttachmentTexts(rootEl) {
+      if (!rootEl) return;
+      rootEl.querySelectorAll("[data-attachment-text]").forEach(async (pre) => {
+        const href = pre.getAttribute("data-attachment-text") || "";
+        if (!href) return;
+        try {
+          const res = await fetch(href);
+          if (!res.ok) throw new Error(String(res.status));
+          const text = await res.text();
+          pre.textContent = text.length > 4000 ? text.slice(0, 4000) + "\n…" : text;
+        } catch (e) {
+          pre.textContent = t("knowledge.attachment_text_failed", "文本加载失败");
+        }
+      });
     }
 
     function renderEntryModalActions(entry) {
@@ -2556,7 +3739,6 @@
     };
 
     $("#entry-ref-close").addEventListener("click", closeEntryReferenceModal);
-    $("#entry-ref-modal").addEventListener("click", (ev) => { if (ev.target.id === "entry-ref-modal") closeEntryReferenceModal(); });
 
     document.addEventListener("click", (ev) => {
       const link = ev.target.closest?.('a[href^="#kb-entry:"]');
@@ -2709,7 +3891,7 @@
       const el = $("#cap-view-body");
       if (note && el) {
         el.innerHTML = "";
-        window.AHATaskMemoMarkdown.renderMarkdownPreview(el, note.text || "", { documentRef: document, t, imageSrc: captureImageSrc });
+        window.AHATaskMemoMarkdown.renderMarkdownPreview(el, note.render_text || note.text || "", { documentRef: document, t, imageSrc: captureImageSrc });
       }
     }
 
@@ -2790,7 +3972,12 @@
       const assocText = captureAssociationSummary(note);
       if (state.activeDistillLogNote && state.activeDistillLogNote !== note.id) closeDistillLogModal();
       $("#cap-view-title").textContent = title.slice(0, 120);
-      $("#cap-view-meta").textContent = `${note.scope_hint || "-"} · ${statusLabel}${assocText ? " · " + assocText : ""} · ${timeLine(note)}`;
+      $("#cap-view-meta").textContent = [
+        note.path || "",
+        note.scope_hint || "-",
+        statusLabel + (assocText ? " · " + assocText : ""),
+        timeLine(note),
+      ].filter(Boolean).join(" · ");
       $("#cap-view-refs").innerHTML = renderCaptureRefs(note);
       $("#cap-view-actions").innerHTML = state.editingNote === note.id ? "" : renderCaptureNoteActions(note);
       $("#cap-view-distill").innerHTML = state.editingNote === note.id ? "" : renderCaptureDistillPanel(note);
@@ -2801,7 +3988,7 @@
         body.innerHTML = renderCaptureNoteEditForm(note);
         renderCaptureEditMarkdown(body.querySelector("[data-capture-edit-form]"));
       } else if (window.AHATaskMemoMarkdown) {
-        window.AHATaskMemoMarkdown.renderMarkdownPreview(body, note.text || "", { documentRef: document, t, imageSrc: captureImageSrc });
+        window.AHATaskMemoMarkdown.renderMarkdownPreview(body, note.render_text || note.text || "", { documentRef: document, t, imageSrc: captureImageSrc });
       } else {
         body.textContent = note.text || "";
       }
@@ -2818,7 +4005,7 @@
       state.captureEditMode = "edit";
       closeDistillLogModal();
       renderCaptureNoteModal();
-      renderCapture();
+      renderGraphFileTree();
     }
 
     function openCaptureNoteView(id) {
@@ -2921,12 +4108,6 @@
       </div>`;
     }
 
-    window.captureNoteRowKeydown = (event, id) => {
-      if (!["Enter", " "].includes(event.key)) return;
-      event.preventDefault();
-      openCaptureNoteView(id);
-    };
-
     function captureAssociationSummary(note) {
       const pendingCount = (note.candidate_refs || []).length;
       const entryCount = (note.entry_refs || []).length;
@@ -2961,23 +4142,10 @@
       return buttons.length ? `<div class="kb-card-actions kb-inline-actions">${buttons.join("")}</div>` : "";
     }
 
-    function renderCapture() {
-      $("#capture-list").innerHTML = state.capture.length
-        ? state.capture.map((n) => {
-            const full = n.text || "";
-            const title = n.title || (full.split("\n")[0] || n.id);
-            return `<div class="kb-card kb-cap-list-row" data-note-id="${esc(n.id)}" tabindex="0" role="button" onclick="openCaptureNoteView('${esc(n.id)}')" onkeydown="captureNoteRowKeydown(event, '${esc(n.id)}')">
-              <h3>${esc(title.slice(0, 120))}</h3>
-              </div>`;
-          }).join("")
-        : `<p class="kb-muted">${esc(t("knowledge.capture_empty", "No capture notes"))}</p>`;
-      renderCaptureMarkdown();
-    }
-
     async function loadCapture() {
       const data = await api("/api/kb/capture");
       state.capture = data.notes || [];
-      renderCapture();
+      renderGraphFileTree();
       syncActiveCaptureNote();
       if (!state.captureBackends) loadCaptureAgents();
     }
@@ -3173,23 +4341,22 @@
       if (note) state.activeCaptureNote = note;
       state.editingNote = id;
       state.captureEditMode = "edit";
-      renderCapture();
       renderCaptureNoteModal();
     };
     window.cancelNoteEdit = () => {
       state.editingNote = null;
       state.captureEditMode = "edit";
-      renderCapture();
       renderCaptureNoteModal();
     };
     window.toggleNote = (id) => openCaptureNoteView(id);
     window.openCaptureNote = async (encodedId) => {
       const id = decodeURIComponent(String(encodedId || ""));
       if (!id) return;
-      await showTab("capture");
+      if (!state.capture.some((item) => item.id === id)) await loadCapture();
+      clearWorkspaceDetails();
       state.editingNote = null;
       openCaptureNoteView(id);
-      setTimeout(() => scrollToDataValue("data-note-id", id), 0);
+      renderGraphFileTree();
     };
     window.saveNote = async (id) => {
       const title = document.querySelector(`.kb-cap-edit-title[data-id="${id}"]`).value.trim();
@@ -3285,7 +4452,6 @@
     };
     $("#cap-log-close").addEventListener("click", closeDistillLogModal);
     $("#cap-view-close").addEventListener("click", closeCaptureNoteModal);
-    $("#cap-view-modal").addEventListener("click", (ev) => { if (ev.target.id === "cap-view-modal") closeCaptureNoteModal(); });
     function readFileAsDataUrl(file) {
       return new Promise((resolve, reject) => {
         const reader = new FileReader();
@@ -3296,6 +4462,7 @@
     }
 
     function captureImageMarkdown(noteId, image, fallbackName = "") {
+      if (image?.markdown) return String(image.markdown);
       const name = String(image?.name || "").trim();
       if (!noteId || !name) return "";
       const alt = String(image?.original || fallbackName || name || "image").replace(/[\r\n\[\]]+/g, " ").trim() || "image";
@@ -3473,6 +4640,47 @@
       $("#cap-new-modal").hidden = false;
       setTimeout(() => $("#cap-text").focus(), 0);
     }
+    function captureTemplateValues() {
+      const now = new Date();
+      const pad = value => String(value).padStart(2, "0");
+      const stamp = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} ${pad(now.getHours())}:${pad(now.getMinutes())}`;
+      const title = t("knowledge.capture_template_title", "Quick Note");
+      const text = [
+        `# ${title} ${stamp}`,
+        "",
+        `## ${t("knowledge.capture_template_content", "Notes")}`,
+        "",
+        "- ",
+        "",
+        `## ${t("knowledge.capture_template_todo", "To organize")}`,
+        "",
+        "- ",
+        "",
+      ].join("\n");
+      return { title, text };
+    }
+    async function createCaptureTemplateFile() {
+      const button = $("#kb-capture-new");
+      if (button) button.disabled = true;
+      try {
+        const template = captureTemplateValues();
+        const created = await api("/api/kb/capture", {
+          method: "POST",
+          body: JSON.stringify({ title: template.title, text: template.text, scope_hint: "personal" }),
+        });
+        graphState.collapsedFileGroups.delete("sidebar:capture");
+        graphState.expandedFileGroups.add("sidebar:capture");
+        await loadCapture();
+        const noteId = String(created.note?.id || "");
+        if (noteId) openCaptureNoteView(noteId);
+        const path = created.note?.path || "capture/inbox";
+        toast(formatText("knowledge.capture_template_created", { path }, `Created ${path}. Continue editing it in Obsidian.`));
+      } catch (error) {
+        toast(formatText("knowledge.failed_with_error", { error: error.message }, "Failed: " + error.message));
+      } finally {
+        if (button) button.disabled = false;
+      }
+    }
     function closeNewNoteModal(clearDraft) {
       if (!clearDraft) saveNewNoteDraft();
       $("#cap-new-modal").hidden = true;
@@ -3503,7 +4711,7 @@
       } catch (e) { toast(formatText("knowledge.failed_with_error", { error: e.message }, "Failed: " + e.message)); }
       finally { input.value = ""; }
     }
-    $("#cap-new-open").addEventListener("click", openNewNoteModal);
+    $("#kb-capture-new").addEventListener("click", createCaptureTemplateFile);
     $("#cap-new-cancel").addEventListener("click", () => closeNewNoteModal(false));
     $("#cap-new-modal").addEventListener("click", (ev) => { if (ev.target.id === "cap-new-modal") closeNewNoteModal(false); });
     $("#cap-new-image").addEventListener("change", (ev) => queueNewNoteImage(ev.currentTarget));
@@ -3534,7 +4742,7 @@
           const ref = captureImageMarkdown(noteId, uploaded.image, image.filename);
           const token = image.id ? pendingCaptureImageToken(image) : "";
           if (token && nextText.includes(token)) {
-            nextText = nextText.split(token).join(`/api/kb/capture/image?id=${encodeURIComponent(noteId)}&name=${encodeURIComponent(uploaded.image?.name || "")}`);
+            nextText = nextText.split(token).join(String(uploaded.image?.src || `/api/kb/capture/image?id=${encodeURIComponent(noteId)}&name=${encodeURIComponent(uploaded.image?.name || "")}`));
           } else if (ref) {
             refsToAppend.push(ref);
           }
@@ -3582,6 +4790,18 @@
       if (status?.remote_error) {
         return formatText("knowledge.sync_status_remote_error", { error: status.remote_error }, "Remote check failed: " + status.remote_error);
       }
+      const maintenance = status.maintenance || {};
+      if (maintenance.status === "running") {
+        return t("knowledge.sync_status_resolving", "Resolving conflicts...");
+      }
+      if (status.unmerged?.length || status.state === "conflict") {
+        const files = (status.conflict_files || []).slice(0, 3).join(", ");
+        const extra = files ? " · " + files : "";
+        return t("knowledge.sync_status_conflict", "Sync conflict needs resolution") + extra;
+      }
+      if (maintenance.status === "resolved") {
+        return maintenance.summary || t("knowledge.sync_status_resolved", "Conflicts resolved");
+      }
       const parts = [];
       if (status.changed_count) {
         parts.push(formatText("knowledge.sync_status_dirty", { count: status.changed_count }, status.changed_count + " local change(s)"));
@@ -3614,14 +4834,80 @@
       }
     }
 
+    function resolveButtons() {
+      return ["#kb-resolve", "#settings-resolve"].map((selector) => $(selector)).filter(Boolean);
+    }
+
+    function setResolveButtons(visible, disabled, text) {
+      for (const button of resolveButtons()) {
+        button.hidden = !visible;
+        button.disabled = disabled;
+        if (text) button.textContent = text;
+      }
+    }
+
+    function maintenanceSummary(maintenance) {
+      if (!maintenance || maintenance.status === "idle") return null;
+      if (maintenance.status === "running") return t("knowledge.sync_status_resolving", "Resolving conflicts...");
+      return maintenance.summary || maintenance.error || maintenance.status;
+    }
+
     async function loadSyncStatus() {
       if (!syncStatusElements().length) return;
       setSyncStatusText(t("knowledge.sync_status_checking", "Checking sync status..."));
       try {
         const status = await api("/api/kb/sync-status");
         setSyncStatusText(syncStatusMessage(status));
+        const hasConflict = Boolean(status?.unmerged?.length || status?.state === "conflict");
+        setResolveButtons(hasConflict, false);
       } catch (e) {
         setSyncStatusText(formatText("knowledge.sync_status_failed", { error: e.message }, "Sync status failed: " + e.message));
+      }
+    }
+
+    async function resolveKnowledgeSync() {
+      setResolveButtons(true, true, t("knowledge.sync_resolving", "Resolving..."));
+      try {
+        const result = await api("/api/kb/sync", {
+          method: "POST",
+          body: JSON.stringify({ pull: true, push: true, resolve: true }),
+        });
+        const maintenance = result.maintenance || (result.sync ? result.sync.maintenance : null);
+        if (!result.sync?.conflict && maintenance?.status !== "running") {
+          toast(t("knowledge.sync_complete", "Sync complete"));
+          setResolveButtons(false, false);
+          await loadStatus();
+          await loadSyncStatus();
+          return;
+        }
+        toast(t("knowledge.sync_resolve_dispatched", "Resolve started"));
+        setSyncStatusText(t("knowledge.sync_status_resolving", "Resolving conflicts..."));
+        // Poll until the maintenance job finishes so the user sees completion.
+        const deadline = Date.now() + 180000;
+        while (Date.now() < deadline) {
+          await new Promise((resolve) => setTimeout(resolve, 2500));
+          const status = await api("/api/kb/sync-status");
+          const record = status.maintenance || {};
+          if (record.status === "resolved") {
+            toast(record.summary || t("knowledge.sync_status_resolved", "Conflicts resolved"));
+            setResolveButtons(false, false);
+            await loadStatus();
+            await loadSyncStatus();
+            return;
+          }
+          if (record.status === "failed") {
+            toast(record.error || t("knowledge.sync_failed", "Sync failed"));
+            setResolveButtons(true, false);
+            await loadSyncStatus();
+            return;
+          }
+        }
+        toast(formatText("knowledge.sync_failed_with_error", { error: t("knowledge.sync_status_resolving_timeout", "resolve timed out") }, "Sync failed: resolve timed out"));
+        setResolveButtons(true, false);
+        await loadSyncStatus();
+      } catch (e) {
+        toast(formatText("knowledge.sync_failed_with_error", { error: e.message }, "Sync failed: " + e.message));
+        setResolveButtons(true, false);
       }
     }
 
@@ -3675,6 +4961,7 @@
     });
 
     for (const button of syncButtons()) button.addEventListener("click", runKnowledgeSync);
+    for (const button of resolveButtons()) button.addEventListener("click", resolveKnowledgeSync);
 
     $("#nav-workspace-select").addEventListener("change", () => { syncProjectNavCustomWorkspace(); loadProjectIdentity(); loadProjectNavDrafts(); loadNavigation(); });
     $("#nav-workspace-custom").addEventListener("keydown", (event) => {
@@ -3739,6 +5026,10 @@
       return Boolean(modal && !modal.hidden);
     }
     function closeTopKnowledgeModal() {
+      if (!$("#graph-controls-panel")?.hidden) {
+        setGraphControlsOpen(false);
+        return true;
+      }
       if (knowledgeModalOpen("#project-relations-modal")) {
         closeProjectRelations();
         return true;
@@ -3786,7 +5077,17 @@
       if (!openKnowledgeImage(event.target)) return;
       event.preventDefault();
     });
-    for (const b of document.querySelectorAll("nav.kb-tabs button")) b.addEventListener("click", () => showTab(b.dataset.tab));
+    for (const button of document.querySelectorAll("[data-kb-view]")) {
+      button.addEventListener("click", () => showTab(button.dataset.kbView));
+    }
+    $("#kb-settings-open").addEventListener("click", () => showTab("settings"));
+    $("#kb-sidebar-toggle").addEventListener("click", () => setSidebarCollapsed(!readStoredSidebarCollapsed()));
+    bindSidebarResize();
+    bindGraphCanvas();
+    bindGraphSettingsControls();
+    $("#graph-controls-toggle").addEventListener("click", () => setGraphControlsOpen(true));
+    $("#graph-controls-close").addEventListener("click", () => setGraphControlsOpen(false));
+    $("#graph-controls-reset").addEventListener("click", resetGraphControls);
     $("#skills-refresh").addEventListener("click", () => loadSkills(true));
     $("#skills-new").addEventListener("click", newSkillDraft);
     $("#skills-list").addEventListener("click", event => {
@@ -3811,7 +5112,6 @@
       syncChromeText();
       renderEntries();
       renderPending();
-      renderCapture();
       renderNavigationList();
       renderProjectNavDrafts();
       renderProjectNavDraftModal();
@@ -3827,16 +5127,20 @@
     });
     window.addEventListener("storage", (event) => {
       if (event.key === window.AHAI18n?.languageStorageKey) window.AHAI18n.setLanguage(event.newValue);
+      if ([KB_SIDEBAR_WIDTH_KEY, KB_SIDEBAR_COLLAPSED_KEY].includes(event.key)) applySidebarLayout();
     });
     syncChromeText();
     loadStatus();
     loadSyncStatus();
     loadProjectNavWorkspaces().finally(() => {
       if (pageEntryId) {
+        void loadSidebarFileData().catch(() => {});
         void showTab("entries").then(() => openEntryReference(encodeURIComponent(pageEntryId)));
       } else if (pageNoteId) {
+        void loadSidebarFileData().catch(() => {});
         void window.openCaptureNote(encodeURIComponent(pageNoteId));
       } else {
+        if (state.activeTab !== "graph") void loadSidebarFileData().catch(() => {});
         showTab(state.activeTab);
       }
     });

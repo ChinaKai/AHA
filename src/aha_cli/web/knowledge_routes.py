@@ -67,10 +67,25 @@ from aha_cli.store.project_identity import (
     update_project_relations,
     validate_project_key,
 )
-from aha_cli.store.knowledge_assets import EntryImageRejected, add_entry_image, read_entry_image
+from aha_cli.store.knowledge_assets import (
+    EntryImageRejected,
+    add_entry_attachment,
+    add_docx_media_as_images,
+    add_entry_image,
+    read_entry_attachment,
+    read_entry_image,
+)
 from aha_cli.store import knowledge_capture as capture
 from aha_cli.store.paths import config_path
 from aha_cli.web.http_utils import http_response, json_response, parse_json_body
+
+
+def read_entry_attachment_entry(root: Path, config: dict, identifier: str) -> dict:
+    """Return the full entry record after attachment mutation (refreshed)."""
+    from aha_cli.store.knowledge import find_entry
+
+    entry = find_entry(root, config, identifier)
+    return entry or {}
 
 
 def _default_dispatch_distill_job(
@@ -300,10 +315,18 @@ project_navigation_agent = None
 dispatch_project_nav_job = _default_dispatch_project_nav_job
 
 
-def _note_view(note: dict | None) -> dict | None:
+def _note_view(note: dict | None, root: Path | None = None, cfg: dict | None = None) -> dict | None:
     if note is None:
         return None
     view = dict(note)
+    if root is not None:
+        view["render_text"] = capture.note_text_for_web(root, cfg, note)
+        raw_path = str(view.get("_path") or "").strip()
+        if raw_path:
+            try:
+                view["path"] = Path(raw_path).resolve().relative_to(knowledge_root(root, cfg).resolve()).as_posix()
+            except (OSError, ValueError):
+                pass
     view.pop("_path", None)
     return view
 
@@ -396,8 +419,8 @@ def _candidate_view(candidate: dict, notes_by_id: dict[str, dict] | None = None)
     return view
 
 
-def _note_with_refs(note: dict, pending: list[dict], entries: list[dict]) -> dict:
-    view = _note_view(note) or {}
+def _note_with_refs(root: Path, cfg: dict, note: dict, pending: list[dict], entries: list[dict]) -> dict:
+    view = _note_view(note, root, cfg) or {}
     note_id = str(note.get("id") or "")
     candidate_ids = {str(item) for item in (note.get("candidate_ids") or []) if str(item)}
     candidate_refs = [
@@ -942,6 +965,160 @@ def _project_identity_candidates(root: Path, cfg: dict) -> list[dict]:
     return candidates
 
 
+def _graph_entry_attachments(meta: dict) -> list[dict]:
+    attachments: list[dict] = []
+    seen_paths: set[str] = set()
+    for asset in meta.get("assets") or []:
+        if isinstance(asset, str):
+            path = asset.strip()
+            name = Path(path).name
+            mime = ""
+        elif isinstance(asset, dict):
+            path = str(asset.get("path") or "").strip()
+            name = str(asset.get("name") or Path(path).name).strip()
+            mime = str(asset.get("mime") or asset.get("content_type") or "").strip()
+        else:
+            continue
+        if not path or path in seen_paths:
+            continue
+        seen_paths.add(path)
+        attachments.append({"path": path, "name": name or Path(path).name, "mime": mime})
+    return attachments
+
+
+def _kb_graph_payload(root: Path, cfg: dict, *, max_nodes: int = 300, project_key: str | None = None) -> dict:
+    """Build the knowledge graph (nodes + links) for the Web graph view.
+
+    Reuses the wikilink index (meta.links / meta.backlinks) maintained by Phase 2
+    — no body re-parsing. A positive ``max_nodes`` bounds the payload; ``0``
+    returns the complete graph for the full-screen Web workspace.
+    """
+    from aha_cli.store.knowledge import iter_all_entries
+
+    entries = iter_all_entries(root, cfg)
+    filtered = []
+    for entry in entries:
+        meta = entry.get("meta", {})
+        if meta.get("status") == "deprecated":
+            continue
+        # Project-scoped filter: only show entries that belong to the project
+        # (scope=project with matching project_key); exclude general/personal.
+        if project_key:
+            if str(meta.get("scope") or "") != "project":
+                continue
+            if str(meta.get("project_key") or "") != project_key:
+                continue
+        filtered.append(entry)
+
+    # Prioritize: navigation indexes first, then entries with backlinks, then the
+    # rest, so the bounded graph keeps its routing value.
+    def priority(entry: dict) -> int:
+        meta = entry.get("meta", {})
+        if meta.get("type") == "navigation" and meta.get("slug") == "index":
+            return 0
+        if meta.get("type") == "navigation":
+            return 1
+        backlinks = meta.get("backlinks") if isinstance(meta.get("backlinks"), list) else []
+        return 2 if backlinks else 3
+
+    filtered.sort(key=priority)
+    bounded = filtered if max_nodes <= 0 else filtered[:max_nodes]
+    bounded_slugs = {str(e.get("meta", {}).get("slug") or "") for e in bounded}
+    repo = knowledge_root(root, cfg)
+
+    nodes = []
+    for entry in bounded:
+        meta = entry.get("meta", {})
+        nodes.append({
+            "id": str(meta.get("slug") or ""),
+            "title": meta.get("title") or "",
+            "kind": meta.get("type") or "",
+            "scope": meta.get("scope") or "",
+            "project_key": meta.get("project_key"),
+            "tags": meta.get("tags") or [],
+            "attachments": _graph_entry_attachments(meta),
+            "backlink_count": len(meta.get("backlinks") or []) if isinstance(meta.get("backlinks"), list) else 0,
+            "confidence": meta.get("confidence"),
+            "updated_at": meta.get("updated_at"),
+            "color_group": meta.get("type") or (meta.get("scope") or "general"),
+            "path": _entry_relative_path(entry, repo),
+        })
+
+    # Skills appear as a "skills" hub node plus one node per managed skill. They
+    # are not knowledge entries (no slug-based lookup), so their ids use a
+    # skill: prefix and they link to the hub only.
+    try:
+        from aha_cli.services.skill_management import list_managed_skills
+
+        skill_summaries = list_managed_skills(root, None, cfg)
+    except Exception:  # noqa: BLE001 - skills are advisory in the graph
+        skill_summaries = []
+    skill_nodes: list[dict] = []
+    skill_node_ids: set[str] = set()
+    if skill_summaries:
+        skill_nodes.append({
+            "id": "skills",
+            "title": "Skills",
+            "kind": "skill",
+            "scope": "general",
+            "project_key": None,
+            "tags": ["skills"],
+            "attachments": [],
+            "backlink_count": len(skill_summaries),
+            "confidence": None,
+            "updated_at": None,
+            "color_group": "skill",
+        })
+        skill_node_ids.add("skills")
+        for skill in skill_summaries:
+            skill_id = str(skill.get("id") or "")
+            if not skill_id:
+                continue
+            skill_node_ids.add(f"skill:{skill_id}")
+            skill_nodes.append({
+                "id": f"skill:{skill_id}",
+                "title": str(skill.get("label") or skill_id),
+                "kind": "skill",
+                "scope": "general",
+                "project_key": None,
+                "tags": [str(skill.get("source") or "personal")],
+                "attachments": [],
+                "backlink_count": 0,
+                "confidence": None,
+                "updated_at": skill.get("updated_at"),
+                "color_group": "skill",
+            })
+    nodes.extend(skill_nodes)
+
+    links = []
+    seen_links: set[tuple[str, str]] = set()
+    for entry in bounded:
+        src = str(entry.get("meta", {}).get("slug") or "")
+        for target in (entry.get("meta", {}).get("links") or []):
+            target = str(target or "")
+            if not target or target not in bounded_slugs:
+                continue
+            key = (src, target)
+            if key in seen_links:
+                continue
+            seen_links.add(key)
+            links.append({"source": src, "target": target, "type": "wikilink"})
+    # Hub links from the "skills" node to each skill node.
+    for skill_node_id in sorted(skill_node_ids - {"skills"}):
+        key = ("skills", skill_node_id)
+        if key in seen_links:
+            continue
+        seen_links.add(key)
+        links.append({"source": "skills", "target": skill_node_id, "type": "skill"})
+    return {
+        "nodes": nodes,
+        "links": links,
+        "total_entries": len(filtered),
+        "shown": len(nodes),
+        "truncated": max_nodes > 0 and len(filtered) > max_nodes,
+    }
+
+
 def knowledge_route_response(
     root: Path,
     method: str,
@@ -957,8 +1134,20 @@ def knowledge_route_response(
     if method in {"GET", "HEAD"} and path == "/api/kb/status":
         return _ok(method, knowledge_status(root, cfg))
 
+    if method in {"GET", "HEAD"} and path == "/api/kb/graph":
+        max_nodes = max(0, int((query.get("max_nodes") or ["300"])[0] or 300))
+        project_key = (query.get("project_key") or [""])[0].strip() or None
+        return _ok(method, _kb_graph_payload(root, cfg, max_nodes=max_nodes, project_key=project_key))
+
     if method in {"GET", "HEAD"} and path == "/api/kb/sync-status":
-        return _ok(method, knowledge_sync_status(root, cfg, check_remote=_query_bool_param(query, "remote")))
+        status = knowledge_sync_status(root, cfg, check_remote=_query_bool_param(query, "remote"))
+        # Surface the persisted maintenance + scheduled-loop state alongside the
+        # live git state so the web panel can show conflict detail and agent jobs.
+        from aha_cli.services.knowledge_maintenance import maintenance_record, read_sync_state
+
+        status["maintenance"] = maintenance_record(root)
+        status["sync_loop"] = (read_sync_state(root).get("loop") or {})
+        return _ok(method, status)
 
     if method in {"GET", "HEAD"} and path == "/api/kb/project-identity":
         try:
@@ -1169,7 +1358,7 @@ def knowledge_route_response(
             pending = list_pending(root, cfg)
             capture_notes = [
                 note
-                for note in (_note_with_refs(n, pending, all_entries) for n in capture.list_notes(root, cfg))
+                for note in (_note_with_refs(root, cfg, n, pending, all_entries) for n in capture.list_notes(root, cfg))
                 if _capture_note_matches_query(note, search)
             ]
             payload["capture_notes"] = capture_notes
@@ -1204,6 +1393,61 @@ def knowledge_route_response(
             return json_response({"error": "image not found"}, "404 Not Found")
         data, mime = found
         return http_response("200 OK", data if method == "GET" else b"", content_type=mime)
+
+    if method in {"GET", "HEAD"} and path == "/api/kb/attachment":
+        identifier = str(query.get("id", [""])[0] or query.get("slug", [""])[0] or "").strip()
+        asset_path = str(query.get("path", [""])[0] or query.get("name", [""])[0] or "").strip()
+        if not identifier or not asset_path:
+            return json_response({"error": "id and path required"}, "400 Bad Request")
+        found = read_entry_attachment(root, cfg, identifier, asset_path)
+        if found is None:
+            return json_response({"error": "attachment not found"}, "404 Not Found")
+        data, record = found
+        mime = str(record.get("mime") or "application/octet-stream")
+        disposition = str(record.get("disposition") or "inline")
+        name = str(record.get("name") or "attachment")
+        headers = {
+            "Content-Disposition": f"{disposition}; filename*=UTF-8''{name.replace(chr(34), '_')}"
+        }
+        return http_response(
+            "200 OK",
+            data if method == "GET" else b"",
+            content_type=mime,
+            headers=headers,
+        )
+
+    if method == "POST" and path == "/api/kb/attachment":
+        payload = parse_json_body(body) if body.strip() else {}
+        identifier = str(payload.get("id") or payload.get("slug") or "").strip()
+        if not identifier:
+            return json_response({"error": "id or slug required"}, "400 Bad Request")
+        raw = str(payload.get("data") or payload.get("data_url") or "")
+        if "," in raw and raw.strip().lower().startswith("data:"):
+            raw = raw.split(",", 1)[1]
+        try:
+            data = base64.b64decode(raw, validate=False)
+        except (ValueError, binascii.Error):
+            return json_response({"error": "invalid base64 attachment data"}, "400 Bad Request")
+        filename = str(payload.get("filename") or "attachment")
+        try:
+            entry, attachment = add_entry_attachment(root, cfg, identifier, data=data, filename=filename)
+        except FileNotFoundError:
+            return json_response({"error": f"entry not found: {identifier}"}, "404 Not Found")
+        except EntryImageRejected as exc:
+            return json_response({"error": str(exc)}, "400 Bad Request")
+        result = {"ok": True, "entry": entry, "attachment": attachment}
+        # For docx/pptx, extract embedded images and attach them too.
+        if str(attachment.get("mime") or "").startswith(
+            ("application/vnd.openxmlformats-officedocument.wordprocessingml", "application/vnd.openxmlformats-officedocument.presentationml")
+        ):
+            try:
+                extraction = add_docx_media_as_images(root, cfg, identifier, data=data)
+                if extraction.get("added"):
+                    result["extracted_images"] = extraction
+                    result["entry"] = read_entry_attachment_entry(root, cfg, identifier)
+            except Exception:  # noqa: BLE001 - extraction is best-effort
+                pass
+        return json_response(result)
 
     if method == "POST" and path == "/api/kb/entry/image":
         payload = parse_json_body(body) if body.strip() else {}
@@ -1708,8 +1952,17 @@ def knowledge_route_response(
             return json_response({"error": str(exc)}, "400 Bad Request")
         do_pull = True if pull_value is None else pull_value
         do_push = True if push_value is None else push_value
+        resolve_requested = bool(payload.get("resolve", False))
         result = knowledge_sync(root, cfg, message=message, do_pull=do_pull, do_push=do_push)
-        return json_response({"ok": bool(result.get("ok")), "sync": result})
+        maintenance = None
+        if resolve_requested and result.get("conflict"):
+            # Dispatch the KB maintenance agent to resolve the conflict. It runs
+            # in a background thread; the returned record is the running state.
+            from aha_cli.services.knowledge_maintenance import dispatch_maintenance_job, maintenance_record
+
+            dispatch_maintenance_job(root, cfg)
+            maintenance = maintenance_record(root)
+        return json_response({"ok": bool(result.get("ok")), "sync": result, "maintenance": maintenance})
 
     # --- Capture inbox (raw notes) ------------------------------------------ #
     if method == "POST" and path == "/api/kb/capture/distill":
@@ -1772,12 +2025,12 @@ def knowledge_route_response(
         entries = iter_all_entries(root, cfg)
         if note_id:
             raw_note = capture.read_note(root, cfg, note_id)
-            note = _note_with_refs(raw_note, pending, entries) if raw_note is not None else None
+            note = _note_with_refs(root, cfg, raw_note, pending, entries) if raw_note is not None else None
             if note is None:
                 return json_response({"error": f"capture note not found: {note_id}"}, "404 Not Found")
             return _ok(method, note)
         search = str(query.get("q", [""])[0] or "").strip()
-        notes = [_note_with_refs(n, pending, entries) for n in capture.list_notes(root, cfg)]
+        notes = [_note_with_refs(root, cfg, n, pending, entries) for n in capture.list_notes(root, cfg)]
         if search:
             notes = [note for note in notes if _capture_note_matches_query(note, search)]
         return _ok(method, {"notes": notes, "count": len(notes)})
@@ -1792,7 +2045,8 @@ def knowledge_route_response(
             scope_hint=str(payload.get("scope_hint") or "personal"),
             title=payload.get("title"),
         )
-        return json_response({"ok": True, "note": _note_view(note)})
+        note = capture.read_note(root, cfg, str(note.get("id") or "")) or note
+        return json_response({"ok": True, "note": _note_view(note, root, cfg)})
 
     if method == "PATCH" and path == "/api/kb/capture":
         payload = parse_json_body(body) if body.strip() else {}
@@ -1806,7 +2060,7 @@ def knowledge_route_response(
             )
         except FileNotFoundError:
             return json_response({"error": f"capture note not found: {note_id}"}, "404 Not Found")
-        return json_response({"ok": True, "note": _note_view(note)})
+        return json_response({"ok": True, "note": _note_view(note, root, cfg)})
 
     if method == "DELETE" and path == "/api/kb/capture":
         payload = parse_json_body(body) if body.strip() else {}
@@ -1819,7 +2073,8 @@ def knowledge_route_response(
     if method in {"GET", "HEAD"} and path == "/api/kb/capture/image":
         note_id = str(query.get("id", [""])[0] or "").strip()
         name = str(query.get("name", [""])[0] or "").strip()
-        found = capture.read_note_image(root, cfg, note_id, name)
+        relative_path = str(query.get("path", [""])[0] or "").strip()
+        found = capture.read_note_image(root, cfg, note_id, name, relative_path)
         if found is None:
             return json_response({"error": "image not found"}, "404 Not Found")
         data, mime = found

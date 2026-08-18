@@ -16,6 +16,8 @@ SKILL_MD = "SKILL.md"
 OPENAI_YAML = "openai.yaml"
 KNOWLEDGE_SKILL_SOURCE = "knowledge"
 LEGACY_SKILL_SOURCE = "aha_home"
+SYSTEM_SKILL_SOURCE = "system"
+PERSONAL_SKILL_SOURCE = "personal"
 _BUNDLED_FILE_LIMIT = 256
 _SOURCE_SUFFIXES = {
     ".c",
@@ -112,9 +114,26 @@ def skill_frontmatter(skill_md: str) -> dict[str, str]:
             continue
         key, value = line.split(":", 1)
         key = key.strip()
-        if key in {"name", "description"}:
+        if key in {"name", "description", "source"}:
             fields[key] = _frontmatter_value(value)
     return fields
+
+
+def classify_skill_source(skill_md: str, *, fallback_source: str) -> str:
+    """Resolve a skill's system/personal classification.
+
+    The frontmatter ``source`` field wins when present and recognized; otherwise
+    the fallback storage source is used. Legacy ``aha_home`` skills (user-installed
+    before the knowledge-dir layout) are always personal. Knowledge-dir skills
+    default to personal unless they explicitly declare ``source: system``.
+    """
+    frontmatter = skill_frontmatter(skill_md)
+    declared = str(frontmatter.get("source") or "").strip().lower()
+    if declared in {SYSTEM_SKILL_SOURCE, PERSONAL_SKILL_SOURCE}:
+        return declared
+    if str(fallback_source or "").strip() == LEGACY_SKILL_SOURCE:
+        return PERSONAL_SKILL_SOURCE
+    return PERSONAL_SKILL_SOURCE
 
 
 def skill_title(skill_md: str, fallback: str) -> str:
@@ -197,6 +216,9 @@ def _skill_summary(path: Path, *, source: str) -> dict[str, object]:
     bundled_files = _bundled_files(path)
     stat = skill_md_path.stat()
     label = interface.get("display_name") or skill_title(skill_md, path.name)
+    # Storage origin (knowledge/aha_home) plus frontmatter source -> system/personal.
+    storage_source = source
+    classification = classify_skill_source(skill_md, fallback_source=storage_source)
     return {
         "id": path.name,
         "name": frontmatter.get("name") or path.name,
@@ -207,7 +229,9 @@ def _skill_summary(path: Path, *, source: str) -> dict[str, object]:
         "path": str(skill_md_path),
         "agents_path": str(openai_yaml_path) if openai_yaml_path.exists() else "",
         "has_agent_metadata": openai_yaml_path.exists(),
-        "source": source,
+        "source": classification,
+        "storage_source": storage_source,
+        "system": classification == SYSTEM_SKILL_SOURCE,
         "updated_at": stat.st_mtime,
         "size": stat.st_size,
         "bundled_file_count": len(bundled_files),
@@ -260,6 +284,55 @@ def sync_legacy_skills_to_knowledge(
     return migrated
 
 
+def write_skills_moc(root: Path, config: dict | None = None) -> Path | None:
+    """Write a `MOC/skills.md` overview of all managed skills into the KB.
+
+    Returns the written path, or None when the KB is not enabled/initialized.
+    Skills are grouped by source (system/personal) so the Web graph and docs can
+    link to a single skills entry point.
+    """
+    cfg = _config(root, config)
+    if not knowledge_config_enabled(root, cfg):
+        return None
+    init_knowledge_base(root, cfg)
+    skills = list_managed_skills(root, None, cfg)
+    moc_root = knowledge_root(root, cfg) / "MOC"
+    moc_root.mkdir(parents=True, exist_ok=True)
+    moc_path = moc_root / "skills.md"
+    system_items = [s for s in skills if s.get("system")]
+    personal_items = [s for s in skills if not s.get("system")]
+    lines = [
+        "# Skills 总览",
+        "",
+        "AHA 技能按 system（系统内置，只读）/ personal（个人/agent 创建，可编辑）分类。",
+        "",
+        f"共 {len(skills)} 个技能。",
+        "",
+    ]
+    for heading, items in (("## 系统技能", system_items), ("## 个人技能", personal_items)):
+        lines.append(heading)
+        if not items:
+            lines.append("- (无)")
+        else:
+            for skill in items:
+                skill_id = str(skill.get("id") or "")
+                label = str(skill.get("label") or skill_id)
+                description = str(skill.get("description") or skill.get("short_description") or "").strip()
+                line = f"- **{label}** (`{skill_id}`)"
+                if description:
+                    line += f" — {description}"
+                lines.append(line)
+        lines.append("")
+    moc_path.write_text("\n".join(lines).strip() + "\n", encoding="utf-8")
+    return moc_path
+
+
+def knowledge_config_enabled(root: Path, cfg: dict) -> bool:
+    from aha_cli.store.knowledge import knowledge_config
+
+    return bool(knowledge_config(cfg).get("enabled"))
+
+
 def list_managed_skills(
     root: Path,
     workspace: Path | str | None = None,
@@ -270,18 +343,26 @@ def list_managed_skills(
     skills: list[dict[str, object]] = []
     seen_ids: set[str] = set()
     base = skills_root(root, workspace, cfg)
-    if base.is_dir():
-        for item in sorted(base.iterdir(), key=lambda candidate: candidate.name.lower()):
-            if item.is_dir() and (item / SKILL_MD).is_file():
-                seen_ids.add(item.name)
-                skills.append(_skill_summary(item, source=KNOWLEDGE_SKILL_SOURCE))
-    legacy_base = legacy_skills_root(root)
-    if legacy_base.is_dir():
-        for item in sorted(legacy_base.iterdir(), key=lambda candidate: candidate.name.lower()):
+
+    def _collect_dir(directory: Path, source: str) -> None:
+        if not directory.is_dir():
+            return
+        for item in sorted(directory.iterdir(), key=lambda candidate: candidate.name.lower()):
             if not item.is_dir() or not (item / SKILL_MD).is_file() or item.name in seen_ids:
                 continue
             seen_ids.add(item.name)
-            skills.append(_skill_summary(item, source=LEGACY_SKILL_SOURCE))
+            skills.append(_skill_summary(item, source=source))
+
+    if base.is_dir():
+        # Flat layout: <skills_root>/<skill_id>/ (the existing/legacy layout).
+        _collect_dir(base, KNOWLEDGE_SKILL_SOURCE)
+        # Directory-classified layout: <skills_root>/system/<id> and
+        # <skills_root>/personal/<id> (new layout). Flat wins on id collision so
+        # an existing skill is never shadowed by an empty-category twin.
+        for category in (SYSTEM_SKILL_SOURCE, PERSONAL_SKILL_SOURCE):
+            _collect_dir(base / category, KNOWLEDGE_SKILL_SOURCE)
+    legacy_base = legacy_skills_root(root)
+    _collect_dir(legacy_base, LEGACY_SKILL_SOURCE)
     return skills
 
 
@@ -299,6 +380,14 @@ def get_managed_skill(
     if (candidate / SKILL_MD).is_file():
         path = candidate
         summary = _skill_summary(candidate, source=KNOWLEDGE_SKILL_SOURCE)
+    if summary is None:
+        # Directory-classified layout: <skills_root>/{system,personal}/<id>.
+        for category in (SYSTEM_SKILL_SOURCE, PERSONAL_SKILL_SOURCE):
+            candidate = _safe_skill_dir(candidate.parent / category, skill_id)
+            if (candidate / SKILL_MD).is_file():
+                path = candidate
+                summary = _skill_summary(candidate, source=KNOWLEDGE_SKILL_SOURCE)
+                break
     if summary is None:
         candidate = _legacy_skill_dir(root, skill_id)
         if (candidate / SKILL_MD).is_file():
@@ -321,6 +410,7 @@ def default_skill_markdown(skill_id: str) -> str:
             "---",
             f"name: {safe_id}",
             "description: 说明这个技能提供的能力，以及应在什么场景下使用。",
+            "source: personal",
             "---",
             "",
             f"# {title}",
@@ -333,6 +423,15 @@ def default_skill_markdown(skill_id: str) -> str:
     )
 
 
+def _require_mutable_skill(path: Path, summary: dict) -> None:
+    """System skills are read-only: refuse edits and deletion."""
+    if bool(summary.get("system")):
+        raise SkillManagementError(
+            f"skill '{summary.get('id')}' is a system skill and is read-only",
+            "403 Forbidden",
+        )
+
+
 def save_managed_skill(
     root: Path,
     skill_id: str,
@@ -343,6 +442,9 @@ def save_managed_skill(
     cfg = _config(root, config)
     init_knowledge_base(root, cfg)
     path = _skill_dir(root, skill_id, workspace, cfg)
+    if (path / SKILL_MD).is_file():
+        existing = get_managed_skill(root, skill_id, workspace, cfg)
+        _require_mutable_skill(path, existing)
     skill_md = str(payload.get("skill_md", payload.get("content", "")) or "")
     if not skill_md.strip():
         skill_md = default_skill_markdown(skill_id)
@@ -389,6 +491,7 @@ def delete_managed_skill(
     deleted = False
     path = _skill_dir(root, skill_id, workspace, cfg)
     if (path / SKILL_MD).is_file():
+        _require_mutable_skill(path, _skill_summary(path, source=KNOWLEDGE_SKILL_SOURCE))
         shutil.rmtree(path)
         deleted = True
     legacy_path = _legacy_skill_dir(root, skill_id)
@@ -410,4 +513,5 @@ __all__ = [
     "skills_root",
     "sync_legacy_skills_to_knowledge",
     "validate_skill_id",
+    "write_skills_moc",
 ]

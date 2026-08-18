@@ -683,15 +683,58 @@ def cmd_kb(args: argparse.Namespace) -> int:
             do_pull=not args.no_pull,
             do_push=True if args.push else None,
         )
+        maintenance = None
+        if getattr(args, "resolve", False) and result.get("conflict"):
+            from aha_cli.services.knowledge_maintenance import maintenance_record, run_kb_maintenance_job
+
+            if getattr(args, "json", False):
+                # The maintenance agent streams backend progress to stdout,
+                # which would corrupt the JSON payload; capture it.
+                import contextlib
+                import io
+
+                with contextlib.redirect_stdout(io.StringIO()):
+                    maintenance = run_kb_maintenance_job(root, cfg)
+            else:
+                maintenance = run_kb_maintenance_job(root, cfg)
         if getattr(args, "json", False):
-            print(json.dumps(result, indent=2, ensure_ascii=False))
+            payload = dict(result)
+            if maintenance:
+                payload["maintenance"] = maintenance
+            print(json.dumps(payload, indent=2, ensure_ascii=False))
         else:
             steps = result.get("steps", {})
             for name, step in steps.items():
                 detail = step.get("error") or step.get("reason") or step.get("skipped") or "ok"
                 print(f"  {name}: {'ok' if step.get('ok', True) else 'FAIL'} ({detail})")
-            print(f"sync {'ok' if result['ok'] else 'FAILED'}")
-        return 0 if result["ok"] else 1
+            if result.get("conflict"):
+                print("sync CONFLICT")
+                if maintenance:
+                    print(f"maintenance: {maintenance.get('status')} — {maintenance.get('summary') or maintenance.get('error')}")
+            else:
+                print(f"sync {'ok' if result['ok'] else 'FAILED'}")
+        return 0 if (result.get("ok") or maintenance and maintenance.get("status") == "resolved") else 1
+    if args.kb_cmd == "sync-status":
+        from aha_cli.services.knowledge_git import sync_status as knowledge_sync_status
+        from aha_cli.services.knowledge_maintenance import maintenance_record, read_sync_state
+
+        status = knowledge_sync_status(root, cfg, check_remote=bool(getattr(args, "remote", False)))
+        status["maintenance"] = maintenance_record(root)
+        status["sync_loop"] = (read_sync_state(root).get("loop") or {})
+        if getattr(args, "json", False):
+            print(json.dumps(status, indent=2, ensure_ascii=False))
+        else:
+            print(f"state: {status.get('state')}")
+            print(f"repo: {status.get('repo')}")
+            if status.get("unmerged"):
+                print(f"conflict files: {', '.join(status['unmerged'])}")
+            maintenance = status.get("maintenance") or {}
+            if maintenance.get("status") and maintenance.get("status") != "idle":
+                print(f"maintenance: {maintenance.get('status')} — {maintenance.get('summary') or maintenance.get('error') or 'no summary'}")
+            loop = status.get("sync_loop") or {}
+            if loop.get("last_sync_at"):
+                print(f"scheduled sync: last {loop.get('last_sync_state')} at {loop.get('last_sync_at')} (every {loop.get('interval_minutes')} min)")
+        return 0
     if args.kb_cmd == "list":
         entries = knowledge_iter_all_entries(root, cfg)
         entries = [e for e in entries if _kb_entry_matches(e, args)]
@@ -734,6 +777,17 @@ def cmd_kb(args: argparse.Namespace) -> int:
                 meta = entry.get("meta", {})
                 print(f"  {meta.get('id') or meta.get('slug')}  {meta.get('title')}")
             print(f"matches: {len(hits)}")
+        return 0
+    if args.kb_cmd == "links":
+        from aha_cli.store.knowledge import rebuild_wikilinks
+
+        result = rebuild_wikilinks(root, cfg)
+        if getattr(args, "json", False):
+            print(json.dumps(result, indent=2, ensure_ascii=False))
+        else:
+            print(
+                f"wikilink index rebuilt: {result['updated']}/{result['total']} entries updated"
+            )
         return 0
     if args.kb_cmd == "approve":
         pending = {c.get("id"): c for c in knowledge_list_pending(root, cfg)}
@@ -1028,6 +1082,120 @@ def format_knowledge_status(status: dict) -> str:
     lines.append(f"  stale (need review): {status.get('stale', 0)}")
     lines.append(f"  total entries: {status.get('total_entries', 0)}")
     return "\n".join(lines) + "\n"
+
+
+def cmd_skill(args: argparse.Namespace) -> int:
+    """Manage AHA skills (list/show/create/edit/delete)."""
+    from aha_cli.services.skill_management import (
+        SkillManagementError,
+        create_managed_skill,
+        delete_managed_skill,
+        default_skill_markdown,
+        get_managed_skill,
+        list_managed_skills,
+        save_managed_skill,
+    )
+
+    root = command_aha_home(args)
+    cfg = load_config(root)
+    skill_cmd = str(getattr(args, "skill_cmd", "") or "")
+    try:
+        if skill_cmd == "list":
+            from aha_cli.services.skill_management import write_skills_moc
+
+            skills = list_managed_skills(root, None, cfg)
+            try:
+                moc_path = write_skills_moc(root, cfg)
+            except Exception:  # noqa: BLE001 - MOC is best-effort
+                moc_path = None
+            if getattr(args, "json", False):
+                payload = {"skills": skills}
+                if moc_path:
+                    payload["moc_path"] = str(moc_path)
+                print(json.dumps(payload, indent=2, ensure_ascii=False))
+            else:
+                if not skills:
+                    print("no skills")
+                for skill in skills:
+                    badge = "system" if skill.get("system") else "personal"
+                    print(f"  {skill.get('id')} [{badge}] - {skill.get('label')}")
+                if moc_path:
+                    print(f"moc: {moc_path}")
+            return 0
+        if skill_cmd == "show":
+            skill = get_managed_skill(root, args.skill_id, None, cfg)
+            if getattr(args, "json", False):
+                print(json.dumps(skill, indent=2, ensure_ascii=False))
+            else:
+                print(f"id: {skill.get('id')}  [{skill.get('source')}]")
+                print(f"label: {skill.get('label')}")
+                print(f"description: {skill.get('description')}")
+                print(f"path: {skill.get('path')}")
+                print("--- SKILL.md ---")
+                print(str(skill.get("skill_md") or "").rstrip())
+            return 0
+        if skill_cmd == "create":
+            skill_id = args.skill_id
+            if args.body:
+                skill_md = args.body
+            else:
+                skill_md = default_skill_markdown(skill_id)
+                if args.title:
+                    skill_md = skill_md.replace(
+                        f"# {' '.join(part.capitalize() for part in skill_id.split('-'))}",
+                        f"# {args.title}",
+                    )
+                if args.description:
+                    skill_md = skill_md.replace(
+                        "description: 说明这个技能提供的能力，以及应在什么场景下使用。",
+                        f"description: {args.description}",
+                    )
+            skill = create_managed_skill(
+                root,
+                {"id": skill_id, "skill_md": skill_md},
+                None,
+                cfg,
+            )
+            if getattr(args, "json", False):
+                print(json.dumps(skill, indent=2, ensure_ascii=False))
+            else:
+                print(f"created skill: {skill_id} [{skill.get('source')}] -> {skill.get('path')}")
+            return 0
+        if skill_cmd == "edit":
+            if not args.body and args.description is None:
+                print("nothing to edit; pass --body or --description", file=sys.stderr)
+                return 2
+            existing = get_managed_skill(root, args.skill_id, None, cfg)
+            skill_md = str(existing.get("skill_md") or "")
+            if args.body:
+                skill_md = args.body
+            elif args.description:
+                skill_md = skill_md.replace(
+                    "description: 说明这个技能提供的能力，以及应在什么场景下使用。",
+                    f"description: {args.description}",
+                )
+                skill_md = skill_md.replace(
+                    f"description: {existing.get('description')}",
+                    f"description: {args.description}",
+                )
+            skill = save_managed_skill(root, args.skill_id, {"skill_md": skill_md}, None, cfg)
+            if getattr(args, "json", False):
+                print(json.dumps(skill, indent=2, ensure_ascii=False))
+            else:
+                print(f"updated skill: {args.skill_id} -> {skill.get('path')}")
+            return 0
+        if skill_cmd == "delete":
+            delete_managed_skill(root, args.skill_id, None, cfg)
+            if getattr(args, "json", False):
+                print(json.dumps({"deleted": args.skill_id}, ensure_ascii=False))
+            else:
+                print(f"deleted skill: {args.skill_id}")
+            return 0
+        print(f"unknown skill command: {skill_cmd}", file=sys.stderr)
+        return 2
+    except SkillManagementError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
 
 
 def cmd_watch(args: argparse.Namespace) -> int:
@@ -2483,6 +2651,7 @@ def command_handlers() -> dict[str, object]:
         "runs": cmd_runs,
         "workspace": cmd_workspace,
         "kb": cmd_kb,
+        "skill": cmd_skill,
         "watch": cmd_watch,
         "send": cmd_send,
         "hardware-io": cmd_hardware_io,

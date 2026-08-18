@@ -12,10 +12,12 @@ from aha_cli.domain.models import default_config
 from aha_cli.store.config import load_config
 from aha_cli.store.io import read_json, write_json
 from aha_cli.store.knowledge import (
+    enqueue_candidate,
     init_knowledge_base,
     knowledge_root,
     knowledge_status,
     list_entries,
+    list_pending,
     normalize_git_remote,
     parse_entry,
     project_key,
@@ -45,11 +47,13 @@ from aha_cli.store.project_identity import (
 # --------------------------------------------------------------------------- #
 def test_default_config_has_knowledge_block():
     cfg = default_config()
-    assert cfg["knowledge"]["enabled"] is False
-    assert cfg["knowledge"]["git"]["auto_pull"] is False
-    assert cfg["knowledge"]["git"]["auto_commit"] is False
-    assert cfg["knowledge"]["git"]["auto_push"] is False
-    assert cfg["knowledge"]["curation"]["gate"] == "manual"
+    # Knowledge base is enabled by default (default-required core feature).
+    assert cfg["knowledge"]["enabled"] is True
+    assert cfg["knowledge"]["git"]["enabled"] is True
+    assert cfg["knowledge"]["git"]["auto_pull"] is True
+    assert cfg["knowledge"]["git"]["auto_commit"] is True
+    assert cfg["knowledge"]["git"]["auto_push"] is True
+    assert cfg["knowledge"]["curation"]["gate"] == "agent-auto"
     assert cfg["knowledge"]["project_nav"]["enabled"] is True
     assert cfg["knowledge"]["project_nav"]["maintain_during_task"] is True
     assert cfg["knowledge"]["retrieval"]["inject_mode"] == "references"
@@ -69,8 +73,8 @@ def test_load_config_deep_merges_partial_knowledge(tmp_path: Path):
     assert kb["git"]["remote"] == "git@github.com:u/kb.git"
     # untouched defaults preserved through the deep merge
     assert kb["git"]["branch"] == "main"
-    assert kb["git"]["auto_push"] is False
-    assert kb["curation"]["gate"] == "manual"
+    assert kb["git"]["auto_push"] is True
+    assert kb["curation"]["gate"] == "agent-auto"
     assert kb["project_nav"]["enabled"] is True
     assert kb["retrieval"]["inject_mode"] == "references"
     assert kb["retrieval"]["max_entries"] == 5
@@ -544,5 +548,134 @@ def test_cli_kb_init_and_status(tmp_path: Path):
     status = json.loads(out.getvalue())
     assert status["initialized"] is True
     assert status["total_entries"] == 0
-    assert status["curation_gate"] == "manual"
+    assert status["curation_gate"] == "agent-auto"
     assert status["project_nav"]["enabled"] is True
+
+
+# --------------------------------------------------------------------------- #
+# Wikilinks (Obsidian [[...]])
+# --------------------------------------------------------------------------- #
+def test_extract_wikilinks_basic():
+    from aha_cli.store.knowledge import extract_wikilinks
+
+    body = "See [[cross-os-liveness]] and [[WSL 后端|alias]] plus [[cross-os-liveness]] again."
+    targets = extract_wikilinks(body)
+    assert targets == ["cross-os-liveness", "WSL 后端"]
+
+
+def test_write_entry_maintains_links_and_backlinks(tmp_path: Path):
+    from aha_cli.store.knowledge import extract_wikilinks, rebuild_wikilinks
+
+    home = tmp_path / ".aha"
+    cfg = {"knowledge": {"enabled": True}}
+    init_knowledge_base(home, cfg)
+
+    # Entry B links to entry A via wikilink.
+    path_a = write_entry(
+        home, config=cfg, scope="general", kind="wiki", title="跨 OS 存活",
+        body="判断跨 OS 进程存活。",
+        slug="cross-os-liveness",
+    )
+    path_b = write_entry(
+        home, config=cfg, scope="general", kind="wiki", title="WSL 后端",
+        body="参考 [[cross-os-liveness]] 判断进程。",
+        slug="wsl-backend",
+    )
+
+    entry_a = read_entry(path_a)
+    entry_b = read_entry(path_b)
+    # B links to A: B.links contains A, and A.backlinks contains B.
+    assert "cross-os-liveness" in entry_b["meta"].get("links", [])
+    assert "wsl-backend" in entry_a["meta"].get("backlinks", [])
+
+    # rebuild is idempotent: a second pass changes nothing.
+    result = rebuild_wikilinks(home, cfg)
+    assert result["total"] >= 2
+    assert result["updated"] == 0
+
+
+def test_kb_links_cli_rebuilds_index(tmp_path: Path):
+    from aha_cli.store.knowledge import read_entry, write_entry
+
+    home = tmp_path / ".aha"
+    cfg = {"knowledge": {"enabled": True}}
+    init_knowledge_base(home, cfg)
+    write_entry(
+        home, config=cfg, scope="general", kind="wiki", title="源笔记",
+        body="链接到 [[target-note]]。",
+        slug="source-note",
+    )
+    write_entry(
+        home, config=cfg, scope="general", kind="wiki", title="目标笔记",
+        body="正文。",
+        slug="target-note",
+    )
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out):
+        rc = main(["--home", str(home), "kb", "links"])
+    assert rc == 0
+    assert "wikilink index rebuilt" in out.getvalue()
+    # source entry should have target-note in its links.
+    from aha_cli.store.knowledge import list_entries
+
+    entries = {e["meta"]["slug"]: e for e in list_entries(home, config=cfg, scope="general", kind="wiki")}
+    assert "target-note" in entries["source-note"]["meta"].get("links", [])
+
+
+def test_enqueue_merges_similar_candidates_by_title(tmp_path: Path):
+    home = tmp_path / ".aha"
+    cfg = {"knowledge": {"enabled": True}}
+    init_knowledge_base(home, cfg)
+
+    def enq(title, tags, src):
+        return enqueue_candidate(home, cfg, {
+            "kind": "solutions", "scope": "project", "project_key": "git-abc",
+            "title": title, "body": f"body {title}", "meta": {"tags": tags, "confidence": 0.7},
+            "source": {"source_type": "task_final", **src},
+        })
+
+    p1 = enq("WSL python3 shim trap", ["wsl"], {"run_id": "r1", "task_id": "t1"})
+    p2 = enq("WSL python3 shim 陷阱", ["wsl"], {"run_id": "r2", "task_id": "t2"})
+    # Near-duplicate (title Jaccard 0.6 + shared tag) merges into the same file.
+    assert p1 == p2
+    pending = list_pending(home, cfg)
+    assert len(pending) == 1
+    merged = pending[0]
+    assert len(merged.get("sources") or []) == 2
+    # Bodies are preserved side by side with a merge marker.
+    assert "WSL python3 shim trap" in merged["body"]
+    assert "WSL python3 shim 陷阱" in merged["body"]
+
+
+def test_enqueue_keeps_distinct_candidates_with_shared_tag(tmp_path: Path):
+    home = tmp_path / ".aha"
+    cfg = {"knowledge": {"enabled": True}}
+    init_knowledge_base(home, cfg)
+
+    def enq(title, src):
+        return enqueue_candidate(home, cfg, {
+            "kind": "solutions", "scope": "project", "project_key": "git-abc",
+            "title": title, "body": f"body {title}", "meta": {"tags": ["wyze"], "confidence": 0.7},
+            "source": {"source_type": "task_final", **src},
+        })
+
+    p1 = enq("Wyze 云存上传双路视频排查要点", {"run_id": "r1", "task_id": "t1"})
+    p2 = enq("Wyze 云存业务层时间戳对齐逻辑", {"run_id": "r2", "task_id": "t2"})
+    # Distinct solutions sharing one generic tag stay separate.
+    assert p1 != p2
+    assert len(list_pending(home, cfg)) == 2
+
+
+def test_enqueue_merges_distinct_project_keys_never(tmp_path: Path):
+    home = tmp_path / ".aha"
+    cfg = {"knowledge": {"enabled": True}}
+    init_knowledge_base(home, cfg)
+    base = {
+        "kind": "solutions", "scope": "project", "title": "WSL python3 shim trap",
+        "body": "body", "meta": {"tags": ["wsl"], "confidence": 0.7},
+        "source": {"source_type": "task_final", "run_id": "r1", "task_id": "t1"},
+    }
+    p1 = enqueue_candidate(home, cfg, {**base, "project_key": "git-a"})
+    p2 = enqueue_candidate(home, cfg, {**base, "project_key": "git-b"})
+    assert p1 != p2
+    assert len(list_pending(home, cfg)) == 2

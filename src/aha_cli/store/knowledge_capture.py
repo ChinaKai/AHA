@@ -6,8 +6,8 @@ This is the first stage of the third knowledge ingestion channel:
 
 A capture note is unstructured raw material the user dumps in to deal with
 later (pasted logs, half-formed ideas, screenshots). It is neither a candidate
-nor a tracked entry. Notes live under ``capture/`` (one JSON each) with
-attachments under ``capture/assets/``. These are user materials and stay
+nor a tracked entry. Notes live as normal Markdown files under ``capture/``
+with attachments under ``capture/assets/``. These are user materials and stay
 syncable across machines; only generated distill logs under
 ``capture/distill/`` are ignored.
 
@@ -16,10 +16,14 @@ Phase 2 owns storage + CRUD only; the distill trigger is wired in Phase 3.
 
 from __future__ import annotations
 
+import hashlib
+import os
 import re
 import shutil
 import uuid
+from datetime import datetime, timezone
 from pathlib import Path
+from urllib.parse import quote, unquote
 
 from aha_cli.domain.models import utc_now
 from aha_cli.store.io import read_json, write_json
@@ -27,10 +31,13 @@ from aha_cli.store.knowledge import (
     KNOWLEDGE_GITIGNORE_FILE,
     PENDING_DIR,
     knowledge_root,
+    parse_entry,
+    serialize_entry,
 )
 
 CAPTURE_DIR = "capture"
 LEGACY_CAPTURE_DIR = ".capture"
+CAPTURE_INBOX_DIR = "inbox"
 CAPTURE_ASSETS_DIR = "assets"
 CAPTURE_DISTILL_DIR = "distill"
 CAPTURE_SCOPES = ("personal", "project", "general")
@@ -128,12 +135,174 @@ def _ensure_capture_gitignored(kb_root: Path) -> None:
         gitignore.write_text("\n".join(out) + "\n", encoding="utf-8")
 
 
-def _note_path(root: Path, config: dict | None, note_id: str) -> Path:
-    return capture_dir(root, config) / f"{note_id}.json"
+def _safe_note_filename(title: str, note_id: str, created_at: str) -> str:
+    clean = re.sub(r'[<>:"/\\|?*\x00-\x1f]+', "-", str(title or "").strip())
+    clean = re.sub(r"\s+", "-", clean).strip(" .-")[:80] or note_id
+    stamp = re.sub(r"[^0-9]", "", str(created_at or "")[:19])[:14]
+    return f"{stamp + '-' if stamp else ''}{clean}-{note_id[-6:]}.md"
+
+
+def _new_note_path(target: Path, record: dict) -> Path:
+    inbox = target / CAPTURE_INBOX_DIR
+    inbox.mkdir(parents=True, exist_ok=True)
+    path = inbox / _safe_note_filename(
+        str(record.get("title") or ""),
+        str(record.get("id") or "capture"),
+        str(record.get("created_at") or ""),
+    )
+    if not path.exists():
+        return path
+    return inbox / f"{record.get('id') or uuid.uuid4().hex}.md"
+
+
+def _iter_markdown_note_paths(target: Path):
+    if not target.is_dir():
+        return
+    for path in target.rglob("*.md"):
+        try:
+            relative = path.relative_to(target)
+        except ValueError:
+            continue
+        if any(
+            part in {CAPTURE_ASSETS_DIR, CAPTURE_DISTILL_DIR} or part.startswith(".")
+            for part in relative.parts[:-1]
+        ):
+            continue
+        yield path
+
+
+def _fallback_note_id(target: Path, path: Path) -> str:
+    try:
+        identity = path.relative_to(target).as_posix()
+    except ValueError:
+        identity = str(path)
+    return "cap_" + hashlib.sha1(identity.encode("utf-8")).hexdigest()[:12]
+
+
+def _fallback_note_title(body: str, path: Path) -> str:
+    for line in str(body or "").splitlines():
+        clean = line.strip()
+        if clean.startswith("# ") and clean[2:].strip():
+            return clean[2:].strip()
+    return path.stem
+
+
+def _path_timestamp(path: Path) -> str:
+    try:
+        return datetime.fromtimestamp(path.stat().st_mtime, timezone.utc).isoformat()
+    except OSError:
+        return utc_now()
+
+
+def _read_markdown_note(target: Path, path: Path) -> dict:
+    raw = path.read_text(encoding="utf-8")
+    try:
+        meta, body = parse_entry(raw)
+    except (TypeError, ValueError):
+        meta, body = {}, raw.strip("\n")
+    now = _path_timestamp(path)
+    record = dict(meta)
+    record["id"] = str(record.get("id") or _fallback_note_id(target, path))
+    record["type"] = "capture"
+    record["title"] = str(record.get("title") or _fallback_note_title(body, path)).strip()
+    record["text"] = body
+    record["scope_hint"] = record.get("scope_hint") if record.get("scope_hint") in CAPTURE_SCOPES else "personal"
+    record["images"] = list(record.get("images") or [])
+    record["status"] = str(record.get("status") or "raw")
+    record["candidate_ids"] = list(record.get("candidate_ids") or [])
+    record["created_at"] = str(record.get("created_at") or now)
+    record["updated_at"] = str(record.get("updated_at") or now)
+    record["_path"] = str(path)
+    return record
+
+
+def _markdown_note_meta(record: dict) -> dict:
+    return {
+        key: value
+        for key, value in record.items()
+        if key not in {"_path", "text", "render_text"} and value is not None
+    }
+
+
+def _write_markdown_note(path: Path, record: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        serialize_entry(_markdown_note_meta(record), str(record.get("text") or "")),
+        encoding="utf-8",
+    )
+
+
+def _normalize_note_image_refs(record: dict, note_path: Path, target: Path) -> None:
+    note_id = str(record.get("id") or "")
+    text = str(record.get("text") or "")
+    normalized: list[dict] = []
+    for raw_image in list(record.get("images") or []):
+        image = dict(raw_image)
+        path_text = str(image.get("path") or "")
+        if path_text.startswith(f"{LEGACY_CAPTURE_DIR}/"):
+            path_text = f"{CAPTURE_DIR}/{path_text[len(LEGACY_CAPTURE_DIR) + 1:]}"
+            image["path"] = path_text
+        name = str(image.get("name") or "")
+        if name:
+            asset_path = target / CAPTURE_ASSETS_DIR / note_id / name
+            relative = Path(os.path.relpath(asset_path, note_path.parent)).as_posix()
+            api_ref = f"/api/kb/capture/image?id={note_id}&name={name}"
+            text = text.replace(f"]({api_ref})", f"]({relative})")
+        normalized.append(image)
+    record["images"] = normalized
+    record["text"] = text
+
+
+def migrate_legacy_capture_notes(root: Path, config: dict | None = None) -> list[Path]:
+    target = capture_dir(root, config)
+    target.mkdir(parents=True, exist_ok=True)
+    existing_ids: set[str] = set()
+    for path in _iter_markdown_note_paths(target) or []:
+        try:
+            existing_ids.add(str(_read_markdown_note(target, path).get("id") or ""))
+        except (OSError, ValueError):
+            continue
+    migrated: list[Path] = []
+    for base in _capture_dirs(root, config):
+        if not base.is_dir():
+            continue
+        for path in base.glob("*.json"):
+            try:
+                record = read_json(path)
+            except (OSError, ValueError):
+                continue
+            note_id = str(record.get("id") or path.stem)
+            if note_id in existing_ids:
+                continue
+            record["id"] = note_id
+            record.setdefault("type", "capture")
+            source_assets = base / CAPTURE_ASSETS_DIR / note_id
+            target_assets = target / CAPTURE_ASSETS_DIR / note_id
+            if base != target and source_assets.is_dir():
+                target_assets.mkdir(parents=True, exist_ok=True)
+                for asset in source_assets.iterdir():
+                    if asset.is_file() and not (target_assets / asset.name).exists():
+                        shutil.copy2(asset, target_assets / asset.name)
+            note_path = _new_note_path(target, record)
+            _normalize_note_image_refs(record, note_path, target)
+            _write_markdown_note(note_path, record)
+            path.unlink()
+            migrated.append(note_path)
+            existing_ids.add(note_id)
+    return migrated
 
 
 def _note_paths(root: Path, config: dict | None, note_id: str) -> list[Path]:
-    return [base / f"{note_id}.json" for base in _capture_dirs(root, config)]
+    paths: list[Path] = []
+    for target in _capture_dirs(root, config):
+        for path in _iter_markdown_note_paths(target) or []:
+            try:
+                if str(_read_markdown_note(target, path).get("id") or "") == note_id:
+                    paths.append(path)
+            except (OSError, ValueError):
+                continue
+        paths.append(target / f"{note_id}.json")
+    return paths
 
 
 def _existing_note_path(root: Path, config: dict | None, note_id: str) -> Path | None:
@@ -141,10 +310,17 @@ def _existing_note_path(root: Path, config: dict | None, note_id: str) -> Path |
 
 
 def _write_note_record(root: Path, config: dict | None, note_id: str, record: dict) -> None:
-    raw_path = record.pop("_path", None)
-    path = Path(str(raw_path)) if raw_path else _note_path(root, config, note_id)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    write_json(path, record)
+    target = capture_dir(root, config)
+    record["id"] = note_id
+    record["type"] = "capture"
+    raw_path = record.get("_path")
+    old_path = Path(str(raw_path)) if raw_path else None
+    path = old_path if old_path and old_path.suffix.lower() == ".md" else _new_note_path(target, record)
+    _normalize_note_image_refs(record, path, target)
+    _write_markdown_note(path, record)
+    if old_path and old_path != path and old_path.exists():
+        old_path.unlink()
+    record["_path"] = str(path)
 
 
 def _distill_log_dir(root: Path, config: dict | None, note_id: str) -> Path:
@@ -193,6 +369,7 @@ def create_note(
     note_id = "cap_" + uuid.uuid4().hex[:12]
     record = {
         "id": note_id,
+        "type": "capture",
         "title": (title or "").strip(),
         "text": text or "",
         "scope_hint": scope_hint,
@@ -202,24 +379,25 @@ def create_note(
         "created_at": now,
         "updated_at": now,
     }
-    write_json(_note_path(root, config, note_id), record)
+    path = _new_note_path(target, record)
+    _write_note_record(root, config, note_id, {**record, "_path": str(path)})
     return record
 
 
 def list_notes(root: Path, config: dict | None = None) -> list[dict]:
+    migrate_legacy_capture_notes(root, config)
     notes: list[dict] = []
     seen: set[str] = set()
     for target in _capture_dirs(root, config):
         if not target.is_dir():
             continue
-        for path in target.glob("*.json"):
+        for path in _iter_markdown_note_paths(target) or []:
             try:
-                record = read_json(path)
-                note_id = str(record.get("id") or path.stem)
+                record = _read_markdown_note(target, path)
+                note_id = str(record.get("id") or "")
                 if note_id in seen:
                     continue
                 seen.add(note_id)
-                record["_path"] = str(path)
                 notes.append(record)
             except (OSError, ValueError):
                 continue
@@ -228,11 +406,16 @@ def list_notes(root: Path, config: dict | None = None) -> list[dict]:
 
 
 def read_note(root: Path, config: dict | None, note_id: str) -> dict | None:
+    migrate_legacy_capture_notes(root, config)
     path = _existing_note_path(root, config, note_id)
     if path is None:
         return None
     try:
-        record = read_json(path)
+        target = next(
+            (base for base in _capture_dirs(root, config) if path.is_relative_to(base)),
+            capture_dir(root, config),
+        )
+        record = _read_markdown_note(target, path) if path.suffix.lower() == ".md" else read_json(path)
     except (OSError, ValueError):
         return None
     record["_path"] = str(path)
@@ -273,6 +456,7 @@ def update_note(
 
 
 def delete_note(root: Path, config: dict | None, note_id: str) -> bool:
+    migrate_legacy_capture_notes(root, config)
     deleted = False
     for path in _note_paths(root, config, note_id):
         if not path.exists():
@@ -432,23 +616,22 @@ def add_note_image(
         name = f"{uuid.uuid4().hex[:8]}-{name}"
     (assets / name).write_bytes(data)
     original = (filename or "").rsplit("/", 1)[-1]
-    image = {
+    stored_image = {
         "name": name,
         "original": original,
         "mime": mime,
         "size": len(data),
         "path": f"{CAPTURE_DIR}/{CAPTURE_ASSETS_DIR}/{note_id}/{name}",
     }
-    record["images"] = images + [image]
+    note_path = Path(str(record.get("_path") or ""))
+    src = Path(os.path.relpath(assets / name, note_path.parent)).as_posix()
+    markdown = f"![{original or name}]({src})"
+    record["images"] = images + [stored_image]
     if append_ref:
-        # Level B: embed the image inline in the note body (memo-style), so it
-        # renders in place. note.images stays as the asset registry for
-        # guardrails and approve-time promotion.
-        ref = f"![{original or name}](/api/kb/capture/image?id={note_id}&name={name})"
-        record["text"] = (str(record.get("text") or "").rstrip() + f"\n\n{ref}\n").lstrip("\n")
+        record["text"] = (str(record.get("text") or "").rstrip() + f"\n\n{markdown}\n").lstrip("\n")
     record["updated_at"] = utc_now()
     _write_note_record(root, config, note_id, record)
-    return image
+    return {**stored_image, "src": src, "markdown": markdown}
 
 
 def remove_note_image(root: Path, config: dict | None, note_id: str, name: str) -> bool:
@@ -533,11 +716,31 @@ def promote_assets_for_entry(
     return {"source_note_id": note_id, "assets": assets_meta, "body_suffix": body_suffix}
 
 
-def read_note_image(root: Path, config: dict | None, note_id: str, name: str) -> tuple[bytes, str] | None:
+def read_note_image(
+    root: Path,
+    config: dict | None,
+    note_id: str,
+    name: str = "",
+    relative_path: str = "",
+) -> tuple[bytes, str] | None:
     """Return (bytes, mime) for a stored note image, or None if absent."""
     record = read_note(root, config, note_id)
     if record is None:
         return None
+    if relative_path:
+        raw_path = str(record.get("_path") or "")
+        if not raw_path:
+            return None
+        try:
+            capture_root = capture_dir(root, config).resolve()
+            asset = (Path(raw_path).parent / unquote(relative_path)).resolve()
+            if not asset.is_relative_to(capture_root) or not asset.is_file():
+                return None
+            data = asset.read_bytes()
+        except OSError:
+            return None
+        mime = sniff_image_mime(data)
+        return (data, mime) if mime else None
     image = next((img for img in (record.get("images") or []) if img.get("name") == name), None)
     if image is None:
         return None
@@ -548,3 +751,29 @@ def read_note_image(root: Path, config: dict | None, note_id: str, name: str) ->
         return asset.read_bytes(), str(image.get("mime") or "application/octet-stream")
     except OSError:
         return None
+
+
+def note_text_for_web(root: Path, config: dict | None, note: dict) -> str:
+    text = str(note.get("text") or "")
+    raw_path = str(note.get("_path") or "")
+    if not raw_path:
+        return text
+    note_path = Path(raw_path)
+    note_id = str(note.get("id") or "")
+    capture_root = capture_dir(root, config).resolve()
+
+    def replace(match: re.Match[str]) -> str:
+        target = match.group(2).strip()
+        if not target or re.match(r"^(?:data:|https?:|/api/)", target, re.IGNORECASE):
+            return match.group(0)
+        clean = target[1:-1] if target.startswith("<") and target.endswith(">") else target
+        try:
+            asset = (note_path.parent / unquote(clean)).resolve()
+            if not asset.is_relative_to(capture_root) or not asset.is_file():
+                return match.group(0)
+        except OSError:
+            return match.group(0)
+        api_ref = f"/api/kb/capture/image?id={quote(note_id)}&path={quote(clean, safe='')}"
+        return f"{match.group(1)}{api_ref}{match.group(3)}"
+
+    return re.sub(r"(!\[[^\]]*\]\()([^)]+)(\))", replace, text)

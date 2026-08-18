@@ -77,6 +77,10 @@ _TYPE_TO_KIND = {
 NAVIGATION_SLUG = "index"
 NAVIGATION_MODULES_DIR = "modules"
 NAVIGATION_FLOWS_DIR = "flows"
+# Project knowledge area inside navigation: long-lived decisions, pitfalls,
+# components and topic notes, each under a stable category slug.
+NAVIGATION_KNOWLEDGE_DIR = "knowledge"
+NAVIGATION_KNOWLEDGE_CATEGORIES = ("decisions", "pitfalls", "components", "topic")
 
 
 def kind_for_type(entry_type: str | None) -> str:
@@ -234,12 +238,26 @@ def init_knowledge_base(root: Path, config: dict | None = None) -> dict:
     # Unreviewed candidates, distill logs, and navigation drafts are
     # review/runtime state. Raw capture notes/assets are user material and stay
     # syncable, so only the generated distill logs are ignored.
+    # Media extensions are always excluded from the KB git repo: large binaries
+    # (mp4/pdf over the sync threshold) would bloat the repo. They are stored
+    # local-only and referenced from entry frontmatter (see knowledge_assets).
     gitignore = kb_root / KNOWLEDGE_GITIGNORE_FILE
     required_ignores = [
         f"{PENDING_DIR}/",
         "capture/distill/",
         ".capture/distill/",
         f"{NAV_DRAFTS_DIR}/",
+        "**/assets/**/*.mp4",
+        "**/assets/**/*.mov",
+        "**/assets/**/*.avi",
+        "**/assets/**/*.mkv",
+        "**/assets/**/*.webm",
+        "**/assets/**/*.m4v",
+        "**/assets/**/*.mp3",
+        "**/assets/**/*.wav",
+        "**/assets/**/*.ogg",
+        "**/assets/**/*.flac",
+        "**/assets/**/*.zip",
     ]
     obsolete_ignores = {".capture/", "capture/"}
     existing = gitignore.read_text(encoding="utf-8").splitlines() if gitignore.exists() else []
@@ -273,14 +291,14 @@ def _render_readme() -> str:
         "- `projects/<project-key>/navigation/flows/*.md` — on-demand flow docs\n"
         "- `skills/<skill-id>/` — managed AHA task skills "
         "copied from legacy `AHA_HOME/skills` and edited through the Skills UI\n"
-        "- `capture/*.json` — raw user notes awaiting distill, kept syncable\n"
+        "- `capture/**/*.md` — normal Markdown capture notes awaiting distill, kept syncable and editable in Obsidian\n"
         "- `capture/assets/*` — raw note attachments, kept syncable\n\n"
         "Project navigation is incremental: read `navigation/index.md` first, then "
         "only the module/flow docs relevant to the task; each nav doc owns one "
         "link layer, and updates should touch only the docs affected by the task.\n\n"
         "`capture/distill/`, `.pending/`, and `.nav_drafts/` are review/runtime "
         "state and are ignored by git.\n\n"
-        "Entries are Markdown files with a JSON frontmatter block. Do not edit "
+        "Entries and AHA-managed capture notes are Markdown files with a JSON frontmatter block. Do not edit "
         "`aha-knowledge.json` by hand.\n"
     )
 
@@ -353,6 +371,13 @@ def write_entry(
             pass
 
     path.write_text(serialize_entry(full_meta, body), encoding="utf-8")
+    # Maintain Obsidian-style wikilinks: refresh this entry's links/backlinks so
+    # the link index stays current after every write. Failure-isolated.
+    try:
+        entry = {"meta": full_meta, "body": body, "path": str(path)}
+        refresh_entry_links(root, config, entry)
+    except (OSError, ValueError):
+        pass
     return path
 
 
@@ -994,6 +1019,88 @@ def _candidate_title_identity_key(title: object) -> str:
     return slug
 
 
+# Lightweight semantic dedup thresholds.
+_TITLE_SIMILARITY_THRESHOLD = 0.6
+# A shared tag plus a weaker (but non-trivial) title overlap still merges, so
+# two entries in the same category with near-identical titles collapse without
+# folding genuinely distinct solutions that merely share a generic tag.
+_TAG_TITLE_SIMILARITY_FLOOR = 0.35
+_TITLE_TOKEN_RE = re.compile(r"[^\w一-鿿]+")
+
+
+def _candidate_title_tokens(title: object) -> set[str]:
+    """Lowercased alnum/CJK token set from a candidate title."""
+    text = str(title or "").casefold()
+    tokens = {token for token in _TITLE_TOKEN_RE.split(text) if token}
+    # For CJK titles, keep character bigrams so short Chinese titles compare.
+    if tokens and all(len(token) <= 2 and any(ord(ch) > 127 for ch in token) for token in tokens):
+        bigrams: set[str] = set()
+        for token in tokens:
+            if len(token) == 1:
+                bigrams.add(token)
+            else:
+                bigrams.update(token[i:i + 2] for i in range(len(token) - 1))
+        return bigrams | tokens
+    return tokens
+
+
+def _candidate_title_similarity(left_title: object, right_title: object) -> float:
+    left = _candidate_title_tokens(left_title)
+    right = _candidate_title_tokens(right_title)
+    if not left or not right:
+        return 0.0
+    intersection = left & right
+    union = left | right
+    if not union:
+        return 0.0
+    return len(intersection) / len(union)
+
+
+def _candidate_tags_overlap(left: dict, right: dict) -> bool:
+    left_tags = {str(tag).casefold() for tag in (left.get("meta") or {}).get("tags") or []}
+    right_tags = {str(tag).casefold() for tag in (right.get("meta") or {}).get("tags") or []}
+    return bool(left_tags & right_tags)
+
+
+def _similar_pending_path(root: Path, config: dict | None, record: dict) -> Path | None:
+    """Find an existing pending candidate similar by title/tags to merge into.
+
+    Lightweight semantic dedup: same scope/kind/project_key, and either title
+    token Jaccard >= 0.6 or a shared tag with a non-empty title overlap. Returns
+    the existing candidate's path, or None when no merge target exists.
+    """
+    target = pending_dir(root, config)
+    if not target.is_dir():
+        return None
+    scope = str(record.get("scope") or "project")
+    kind = str(record.get("kind") or "solutions")
+    project_key = str(record.get("project_key") or "")
+    title = record.get("title")
+    record_tags = {str(tag).casefold() for tag in (record.get("meta") or {}).get("tags") or []}
+    for path in sorted(target.glob("*.json")):
+        try:
+            existing = read_json(path)
+        except (OSError, ValueError):
+            continue
+        if not isinstance(existing, dict):
+            continue
+        if str(existing.get("scope") or "project") != scope:
+            continue
+        if str(existing.get("kind") or "solutions") != kind:
+            continue
+        if str(existing.get("project_key") or "") != project_key:
+            continue
+        existing_title = existing.get("title")
+        if not existing_title or str(existing_title) == str(title):
+            continue
+        similarity = _candidate_title_similarity(title, existing_title)
+        existing_tags = {str(tag).casefold() for tag in (existing.get("meta") or {}).get("tags") or []}
+        shared_tag = bool(record_tags & existing_tags)
+        if similarity >= _TITLE_SIMILARITY_THRESHOLD or (shared_tag and similarity >= _TAG_TITLE_SIMILARITY_FLOOR):
+            return path
+    return None
+
+
 def candidate_identity(candidate: dict) -> str:
     """Stable review identity for final/report re-runs and source-order merge."""
     source_group = str(candidate.get("source_group") or _source_group(candidate.get("source")))
@@ -1101,6 +1208,14 @@ def enqueue_candidate(root: Path, config: dict | None, candidate: dict) -> Path:
                     path = legacy_path
             except (OSError, ValueError):
                 pass
+    # Lightweight semantic dedup: merge a similar pending candidate into the
+    # existing review item (same scope/kind/project_key, title/tag overlap).
+    if not explicit_cid and not path.exists():
+        similar_path = _similar_pending_path(root, config, record)
+        if similar_path is not None:
+            cid = similar_path.stem
+            path = similar_path
+            record["merged_into"] = cid
     record["id"] = cid
     record["identity"] = cid
     record["fingerprint"] = _candidate_fingerprint(record)
@@ -1112,6 +1227,18 @@ def enqueue_candidate(root: Path, config: dict | None, candidate: dict) -> Path:
             record["created_at"] = previous.get("created_at", record.get("created_at") or now)
             record["sources"] = _merge_sources(previous.get("sources") or [], record.get("source"))
             record["updated_from_fingerprint"] = previous.get("fingerprint")
+            # Semantic merge: preserve both bodies so a reviewer sees both
+            # versions instead of the newer one silently replacing the older.
+            if record.get("merged_into") and previous.get("body"):
+                previous_body = str(previous.get("body") or "").strip()
+                new_body = str(record.get("body") or "").strip()
+                if previous_body and new_body and previous_body != new_body:
+                    record["body"] = (
+                        previous_body
+                        + "\n\n---\n\n"
+                        + f"> 合并自相似候选（updated_at {previous.get('updated_at') or now}）：\n\n"
+                        + new_body
+                    )
         except (OSError, ValueError):
             pass
     else:
@@ -1319,3 +1446,148 @@ def approve_candidate(root: Path, config: dict | None, candidate_id_value: str) 
     )
     path.unlink()
     return entry_path
+
+
+# --------------------------------------------------------------------------- #
+# Wikilinks (Obsidian-style [[...]] backlinks)
+# --------------------------------------------------------------------------- #
+
+_WIKILINK_RE = re.compile(r"\[\[([^\[\]|#]+)(?:#[^\[\]|]+)?(?:\|([^\[\]]+))?\]\]")
+
+
+def extract_wikilinks(body: str) -> list[str]:
+    """Extract Obsidian-style ``[[target]]`` link targets from markdown body.
+
+    Supports ``[[slug]]``, ``[[Title]]`` and ``[[slug|alias]]`` (alias ignored for
+    identity). Returns de-duplicated, whitespace-stripped targets in order.
+    """
+    seen: set[str] = set()
+    targets: list[str] = []
+    for match in _WIKILINK_RE.finditer(body or ""):
+        target = (match.group(1) or "").strip()
+        if not target or target in seen:
+            continue
+        seen.add(target)
+        targets.append(target)
+    return targets
+
+
+def _wikilink_target_slug(root: Path, config: dict | None, target: str) -> str | None:
+    """Resolve a wikilink target (slug or title) to the entry's canonical slug."""
+    clean = str(target or "").strip()
+    if not clean:
+        return None
+    normalized = normalize_entry_slug(clean)
+    for entry in iter_all_entries(root, config):
+        meta = entry.get("meta", {})
+        if str(meta.get("slug") or "") == normalized:
+            return normalized
+    # Fall back to exact title match.
+    for entry in iter_all_entries(root, config):
+        meta = entry.get("meta", {})
+        if str(meta.get("title") or "").strip() == clean:
+            return normalize_entry_slug(str(meta.get("slug") or ""))
+    return None
+
+
+def entry_wikilink_targets(root: Path, config: dict | None, entry: dict) -> list[str]:
+    """Resolve the entry's wikilinks to canonical target slugs that exist.
+
+    Sources are the body's ``[[...]]`` links plus any explicitly declared
+    ``meta.links`` (so a candidate/agent can declare links without embedding
+    them in the body). Targets that do not resolve to an existing entry are
+    kept when explicitly declared (declared links may be forward refs) but
+    dropped when they came only from the body.
+    """
+    targets: list[str] = []
+    meta = entry.get("meta") if isinstance(entry.get("meta"), dict) else {}
+    declared = [str(slug) for slug in (meta.get("links") or []) if slug]
+    for target in extract_wikilinks(entry.get("body") or ""):
+        resolved = _wikilink_target_slug(root, config, target)
+        if resolved and resolved not in targets:
+            targets.append(resolved)
+    for slug in declared:
+        normalized = normalize_entry_slug(slug)
+        if normalized and normalized not in targets:
+            # Keep explicitly-declared links even if the target does not exist
+            # yet (forward references), but normalize the slug form.
+            targets.append(normalized)
+    return targets
+
+
+def entry_backlink_sources(root: Path, config: dict | None, entry: dict) -> list[str]:
+    """Return slugs of entries that link to ``entry`` (reverse links)."""
+    own_slug = normalize_entry_slug(str(entry.get("meta", {}).get("slug") or ""))
+    if not own_slug:
+        return []
+    sources: list[str] = []
+    for candidate in iter_all_entries(root, config):
+        candidate_meta = candidate.get("meta", {})
+        candidate_links = candidate_meta.get("links") if isinstance(candidate_meta.get("links"), list) else []
+        if own_slug in candidate_links:
+            sources.append(normalize_entry_slug(str(candidate_meta.get("slug") or "")))
+    return sources
+
+
+def refresh_entry_links(root: Path, config: dict | None, entry: dict) -> dict:
+    """Recompute an entry's ``links`` and ``backlinks`` and persist them.
+
+    Reads the current body, resolves wikilink targets to canonical slugs, and
+    updates ``meta.links``; ``meta.backlinks`` is the set of entries linking here.
+    Also refreshes the backlinks of every target this entry links to, so writing
+    one entry keeps the reverse-link index of its neighbours current.
+    Returns the updated entry dict (meta refreshed in place).
+    """
+    links = entry_wikilink_targets(root, config, entry)
+    backlinks = entry_backlink_sources(root, config, entry)
+    meta = dict(entry.get("meta") or {})
+    changed = (
+        (meta.get("links") or []) != links
+        or (meta.get("backlinks") or []) != backlinks
+    )
+    meta["links"] = links
+    meta["backlinks"] = backlinks
+    if changed:
+        meta["updated_at"] = utc_now()
+        path = Path(entry["path"])
+        body = entry.get("body") or ""
+        path.write_text(serialize_entry(meta, body), encoding="utf-8")
+        entry["meta"] = meta
+        entry["path"] = str(path)
+    # Propagate: targets this entry links to may have gained a backlink.
+    for target_slug in links:
+        target_entry = find_entry(root, config, target_slug)
+        if target_entry is None:
+            continue
+        target_backlinks = entry_backlink_sources(root, config, target_entry)
+        target_meta = dict(target_entry.get("meta") or {})
+        if (target_meta.get("backlinks") or []) != target_backlinks:
+            target_meta["backlinks"] = target_backlinks
+            target_meta["updated_at"] = utc_now()
+            Path(target_entry["path"]).write_text(
+                serialize_entry(target_meta, target_entry.get("body") or ""),
+                encoding="utf-8",
+            )
+            target_entry["meta"] = target_meta
+    return entry
+
+
+def rebuild_wikilinks(root: Path, config: dict | None = None) -> dict:
+    """Scan every entry and refresh links/backlinks. Returns counts.
+
+    Used by ``aha kb links`` to rebuild the link index after bulk edits (e.g.
+    importing notes or renaming slugs).
+    """
+    entries = iter_all_entries(root, config)
+    updated = 0
+    total = 0
+    for entry in entries:
+        total += 1
+        before = dict(entry.get("meta") or {})
+        refresh_entry_links(root, config, entry)
+        after = entry.get("meta") or {}
+        if (before.get("links") or []) != (after.get("links") or []) or (
+            before.get("backlinks") or []
+        ) != (after.get("backlinks") or []):
+            updated += 1
+    return {"total": total, "updated": updated}

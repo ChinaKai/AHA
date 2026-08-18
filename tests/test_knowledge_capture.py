@@ -19,6 +19,7 @@ from aha_cli.store.knowledge import (
     init_knowledge_base,
     knowledge_root,
     list_pending,
+    parse_entry,
     read_entry,
     write_entry,
 )
@@ -27,6 +28,7 @@ from aha_cli.store import knowledge_capture as cap_store
 from aha_cli.store.knowledge_capture import (
     CAPTURE_DIR,
     CAPTURE_DISTILL_DIR,
+    CAPTURE_INBOX_DIR,
     LEGACY_CAPTURE_DIR,
     ImageRejected,
     add_note_image,
@@ -35,6 +37,7 @@ from aha_cli.store.knowledge_capture import (
     delete_note,
     list_distill_logs,
     list_notes,
+    note_text_for_web,
     read_distill_log,
     read_note,
     read_note_image,
@@ -110,7 +113,12 @@ def test_capture_assets_are_syncable_and_distill_logs_are_ignored(tmp_path: Path
     note = create_note(home, cfg, text="raw user material")
     stored = read_note(home, cfg, note["id"])
     assert capture_dir(home, cfg).name == CAPTURE_DIR
-    assert Path(stored["_path"]).parent == capture_dir(home, cfg)
+    note_path = Path(stored["_path"])
+    assert note_path.parent == capture_dir(home, cfg) / CAPTURE_INBOX_DIR
+    assert note_path.suffix == ".md"
+    meta, body = parse_entry(note_path.read_text(encoding="utf-8"))
+    assert meta["id"] == note["id"] and meta["type"] == "capture"
+    assert body == "raw user material"
 
     kb_root = home / "knowledge"
     gitignore = (kb_root / ".gitignore").read_text(encoding="utf-8").splitlines()
@@ -155,8 +163,85 @@ def test_legacy_capture_dir_migrates_to_syncable_capture(tmp_path: Path):
 
     assert [note["id"] for note in notes] == ["cap_old"]
     assert not legacy.exists()
-    assert (kb_root / CAPTURE_DIR / "cap_old.json").is_file()
+    migrated = Path(notes[0]["_path"])
+    assert migrated.parent == kb_root / CAPTURE_DIR / CAPTURE_INBOX_DIR
+    assert migrated.suffix == ".md"
+    assert not (kb_root / CAPTURE_DIR / "cap_old.json").exists()
     assert read_note_image(home, cfg, "cap_old", "a.png") == (_PNG, "image/png")
+
+
+def test_legacy_capture_assets_migrate_when_current_directory_exists(tmp_path: Path):
+    home = _home(tmp_path)
+    cfg = _cfg()
+    create_note(home, cfg, text="current note")
+    kb_root = knowledge_root(home, cfg)
+    legacy = kb_root / LEGACY_CAPTURE_DIR
+    asset_dir = legacy / "assets" / "cap_legacy"
+    asset_dir.mkdir(parents=True)
+    (asset_dir / "legacy.png").write_bytes(_PNG)
+    write_json(
+        legacy / "cap_legacy.json",
+        {
+            "id": "cap_legacy",
+            "title": "legacy",
+            "text": "![legacy](/api/kb/capture/image?id=cap_legacy&name=legacy.png)",
+            "scope_hint": "personal",
+            "images": [{
+                "name": "legacy.png",
+                "original": "legacy.png",
+                "mime": "image/png",
+                "size": len(_PNG),
+                "path": f"{LEGACY_CAPTURE_DIR}/assets/cap_legacy/legacy.png",
+            }],
+            "status": "raw",
+            "candidate_ids": [],
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "updated_at": "2026-01-01T00:00:00+00:00",
+        },
+    )
+
+    notes = list_notes(home, cfg)
+    migrated = next(note for note in notes if note["id"] == "cap_legacy")
+    assert "../assets/cap_legacy/legacy.png" in migrated["text"]
+    assert (kb_root / CAPTURE_DIR / "assets" / "cap_legacy" / "legacy.png").read_bytes() == _PNG
+    assert read_note_image(home, cfg, "cap_legacy", "legacy.png") == (_PNG, "image/png")
+
+
+def test_plain_nested_capture_markdown_is_discovered_and_managed(tmp_path: Path):
+    home = _home(tmp_path)
+    cfg = _cfg()
+    path = capture_dir(home, cfg) / "hardware" / "串口异常.md"
+    path.parent.mkdir(parents=True)
+    path.write_text("# 串口异常\n\n设备重启后无输出。\n", encoding="utf-8")
+
+    [note] = list_notes(home, cfg)
+    assert note["title"] == "串口异常"
+    assert note["status"] == "raw"
+    original_id = note["id"]
+
+    updated = update_note(home, cfg, original_id, status="distilled", candidate_ids=["cand_1"])
+    assert updated["id"] == original_id
+    meta, body = parse_entry(path.read_text(encoding="utf-8"))
+    assert meta["type"] == "capture" and meta["status"] == "distilled"
+    assert meta["candidate_ids"] == ["cand_1"]
+    assert "设备重启后无输出" in body
+
+
+def test_plain_capture_markdown_relative_image_renders_through_safe_api(tmp_path: Path):
+    home = _home(tmp_path)
+    cfg = _cfg()
+    note_path = capture_dir(home, cfg) / "hardware" / "boot.md"
+    image_path = capture_dir(home, cfg) / "assets" / "manual" / "boot.png"
+    note_path.parent.mkdir(parents=True)
+    image_path.parent.mkdir(parents=True)
+    image_path.write_bytes(_PNG)
+    note_path.write_text("# Boot\n\n![boot](../assets/manual/boot.png)\n", encoding="utf-8")
+
+    [note] = list_notes(home, cfg)
+    rendered = note_text_for_web(home, cfg, note)
+    assert f"/api/kb/capture/image?id={note['id']}&path=..%2Fassets%2Fmanual%2Fboot.png" in rendered
+    assert read_note_image(home, cfg, note["id"], relative_path="../assets/manual/boot.png") == (_PNG, "image/png")
+    assert read_note_image(home, cfg, note["id"], relative_path="../../../outside.png") is None
 
 
 def test_cli_capture_add_list_show_rm(tmp_path: Path):
@@ -536,8 +621,9 @@ def test_add_note_image_embeds_markdown_ref_in_text(tmp_path: Path):
     img = add_note_image(home, cfg, note["id"], data=_PNG, filename="shot.png")
 
     updated = read_note(home, cfg, note["id"])
-    # Image is referenced inline in the note body (memo-style) AND registered.
-    assert f"](/api/kb/capture/image?id={note['id']}&name={img['name']})" in updated["text"]
+    assert f"](../assets/{note['id']}/{img['name']})" in updated["text"]
+    assert img["src"] == f"../assets/{note['id']}/{img['name']}"
+    assert img["markdown"] in updated["text"]
     assert "see this:" in updated["text"]
     assert len(updated["images"]) == 1
 

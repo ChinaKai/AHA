@@ -498,7 +498,8 @@ class ChatPromptTests(unittest.TestCase):
         delivered = session["delivered_context_fingerprints"]
         self.assertTrue(delivered["hardware_debug"])
         self.assertTrue(delivered["task_skills"])
-        self.assertEqual(delivered["knowledge_enabled"], "disabled")
+        # Knowledge base is enabled by default now.
+        self.assertEqual(delivered["knowledge_enabled"], "enabled")
         self.assertTrue(delivered["attachment_output_guidance"])
 
     def test_codex_chat_surfaces_backend_error_to_browser_chat(self) -> None:
@@ -2253,6 +2254,11 @@ class ChatPromptTests(unittest.TestCase):
                 code, plan_output = self.run_cli("--home", str(aha_root), "plan", "Sticky prompt", "--agents", "1")
                 self.assertEqual(code, 0)
                 run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                # This test exercises the sticky-delta mechanics in isolation; disable
+                # the KB so its enabled-by-default fingerprint delta is not injected.
+                cfg = read_json(config_path(aha_root))
+                cfg["knowledge"]["enabled"] = False
+                write_json(config_path(aha_root), cfg)
                 session_file = run_dir(aha_root, run_id) / "tasks" / "task-001" / "sessions" / "main.json"
                 session = read_json(session_file)
                 session["backend_session_id"] = "backend-session-1"

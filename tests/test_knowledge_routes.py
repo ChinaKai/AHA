@@ -111,6 +111,53 @@ def test_status_and_entries(tmp_path: Path):
     assert by_kind["entries"][0]["size_bytes"] > 0
 
 
+def test_graph_reuses_wikilink_index_and_bounds_nodes(tmp_path: Path):
+    home = _setup(tmp_path)
+    cfg = load_config(home)
+    write_entry(home, config=cfg, scope="project", kind="solutions",
+                project_key_value="git-abc", title="Cross OS", body="check pid",
+                meta={
+                    "tags": ["backend"],
+                    "links": ["wsl-backend"],
+                    "assets": [{"path": "assets/cross-os/diagram.png", "name": "diagram.png", "mime": "image/png"}],
+                })
+    write_entry(home, config=cfg, scope="project", kind="solutions",
+                project_key_value="git-abc", title="WSL backend", body="in distro",
+                meta={"tags": ["wsl"]})
+    write_entry(home, config=cfg, scope="general", kind="wiki", title="Standalone", body="...")
+
+    graph = _get(home, "/api/kb/graph")
+    assert graph["total_entries"] == 3
+    assert graph["shown"] == 3
+    assert not graph["truncated"]
+    # Both linked entries appear as nodes; the wikilink edge is present.
+    slugs = {node["id"] for node in graph["nodes"]}
+    assert "cross-os" in slugs and "wsl-backend" in slugs
+    cross_os = next(node for node in graph["nodes"] if node["id"] == "cross-os")
+    assert cross_os["tags"] == ["backend"]
+    assert cross_os["attachments"] == [
+        {"path": "assets/cross-os/diagram.png", "name": "diagram.png", "mime": "image/png"}
+    ]
+    assert any(link["source"] == "cross-os" and link["target"] == "wsl-backend" and link["type"] == "wikilink"
+               for link in graph["links"])
+
+    # Bounded: max_nodes=1 returns only the first node and marks truncation.
+    small = _get(home, "/api/kb/graph", {"max_nodes": ["1"]})
+    assert small["shown"] == 1
+    assert small["truncated"] is True
+
+    # max_nodes=0 returns the complete graph and relative paths for the file tree.
+    complete = _get(home, "/api/kb/graph", {"max_nodes": ["0"]})
+    assert complete["shown"] == 3
+    assert complete["truncated"] is False
+    assert all(node.get("path") and not Path(node["path"]).is_absolute() for node in complete["nodes"])
+
+    # Project-scoped filter excludes general entries.
+    proj = _get(home, "/api/kb/graph", {"project_key": ["git-abc"]})
+    assert proj["total_entries"] == 2
+    assert all(node.get("scope") == "project" for node in proj["nodes"])
+
+
 def test_project_identity_api_binds_workspace_to_existing_synced_project(tmp_path: Path):
     home = _setup(tmp_path)
     cfg = load_config(home)
@@ -724,6 +771,53 @@ def test_capture_image_upload_serve_and_delete(tmp_path: Path):
     assert note["text"] == "insert here"
     assert len(note["images"]) == 1
 
+
+def test_capture_relative_markdown_image_is_rendered_and_served(tmp_path: Path):
+    home = _setup(tmp_path)
+    cfg = load_config(home)
+    png = b"\x89PNG\r\n\x1a\n" + b"body"
+    capture_root = knowledge_root(home, cfg) / "capture"
+    note_path = capture_root / "hardware" / "boot.md"
+    image_path = capture_root / "assets" / "manual" / "boot.png"
+    note_path.parent.mkdir(parents=True)
+    image_path.parent.mkdir(parents=True)
+    note_path.write_text("# Boot\n\n![boot](../assets/manual/boot.png)\n", encoding="utf-8")
+    image_path.write_bytes(png)
+
+    payload = _get(home, "/api/kb/capture")
+    note = payload["notes"][0]
+    assert "/api/kb/capture/image?id=" in note["render_text"]
+    raw = knowledge_route_response(
+        home,
+        "GET",
+        "/api/kb/capture/image",
+        {"id": [note["id"]], "path": ["../assets/manual/boot.png"]},
+        b"",
+        {},
+    )
+    assert raw.split(b"\r\n\r\n", 1)[1] == png
+
+    rejected = knowledge_route_response(
+        home,
+        "GET",
+        "/api/kb/capture/image",
+        {"id": [note["id"]], "path": ["../../../outside.png"]},
+        b"",
+        {},
+    )
+    assert b"404 Not Found" in rejected.split(b"\r\n", 1)[0]
+
+
+def test_capture_api_exposes_markdown_path_for_file_navigation(tmp_path: Path):
+    home = _setup(tmp_path)
+    created = json_response_body(
+        _post(home, "/api/kb/capture", {"title": "Obsidian inbox", "text": "# Obsidian inbox\n"})
+    )["note"]
+
+    assert created["path"].startswith("capture/inbox/")
+    assert created["path"].endswith(".md")
+    [listed] = _get(home, "/api/kb/capture")["notes"]
+    assert listed["path"] == created["path"]
 
 def test_capture_svg_image_upload_and_serve(tmp_path: Path):
     import base64
@@ -1585,7 +1679,8 @@ def test_config_get_and_patch(tmp_path: Path):
     home = _setup(tmp_path)
     cfg = _get(home, "/api/kb/config")
     assert cfg["enabled"] is True
-    assert cfg["git"]["auto_push"] is False
+    # auto_push is enabled by default now; proxy stays off by default.
+    assert cfg["git"]["auto_push"] is True
     assert cfg["git"]["proxy_enabled"] is False
 
     resp = knowledge_route_response(

@@ -27,6 +27,8 @@ from pathlib import Path
 from aha_cli.store.knowledge import (
     NAVIGATION_FLOWS_DIR,
     NAVIGATION_MODULES_DIR,
+    NAVIGATION_KNOWLEDGE_DIR,
+    NAVIGATION_KNOWLEDGE_CATEGORIES,
     NAVIGATION_SLUG,
     auto_commit_message_for,
     enqueue_candidate,
@@ -280,13 +282,60 @@ def _sidecar_kind(candidate: dict) -> str:
         return "wiki"
     if raw in {"navigation", "nav", "map"}:
         return "navigation"
+    if raw in {"worklog", "log", "changelog"}:
+        return "worklog"
+    # Project knowledge categories (decisions/pitfalls/components/topic) become
+    # navigation entries so they link into the project nav "知识区".
+    if _normalize_knowledge_category(raw) or _normalize_knowledge_category(candidate.get("category")):
+        return "navigation"
     return "solutions"
+
+
+_NAVIGATION_KNOWLEDGE_CATEGORY_SET = set(NAVIGATION_KNOWLEDGE_CATEGORIES)
+# Accept singular aliases for the plural categories (kind="pitfall" -> pitfalls).
+_NAVIGATION_KNOWLEDGE_CATEGORY_ALIASES = {
+    "decision": "decisions",
+    "pitfall": "pitfalls",
+    "pitfalls": "pitfalls",
+    "component": "components",
+    "topic": "topic",
+    "topics": "topic",
+}
+
+
+def _normalize_knowledge_category(value: object) -> str | None:
+    raw = str(value or "").strip().lower()
+    if not raw:
+        return None
+    if raw in _NAVIGATION_KNOWLEDGE_CATEGORY_SET:
+        return raw
+    return _NAVIGATION_KNOWLEDGE_CATEGORY_ALIASES.get(raw)
+
+
+def _navigation_knowledge_category(slug: str) -> str | None:
+    """Return the knowledge category for a knowledge slug, or None."""
+    slug = normalize_entry_slug(str(slug or "").strip())
+    parts = slug.split("/")
+    if parts[0] != NAVIGATION_KNOWLEDGE_DIR or len(parts) < 2:
+        return None
+    return _normalize_knowledge_category(parts[1])
 
 
 def _navigation_slug(candidate: dict) -> str:
     raw_slug = str(candidate.get("slug") or candidate.get("nav_path") or candidate.get("doc_path") or "").strip()
     if raw_slug:
         return normalize_entry_slug(raw_slug)
+    # Project knowledge entries land under knowledge/<category>/<slug>. The
+    # category may come from an explicit field or from the raw kind itself
+    # (e.g. kind="pitfall").
+    category = _normalize_knowledge_category(
+        candidate.get("category")
+        or candidate.get("knowledge_area")
+        or candidate.get("kind")
+    )
+    if category:
+        tail = slugify(str(candidate.get("title") or candidate.get("name") or "topic"))
+        return f"{NAVIGATION_KNOWLEDGE_DIR}/{category}/{tail}"
     module = str(candidate.get("module") or "").strip()
     if module:
         return f"{NAVIGATION_MODULES_DIR}/{slugify(module)}"
@@ -303,6 +352,11 @@ def _navigation_role_for_slug(slug: str) -> str:
         return "module"
     if slug.startswith(f"{NAVIGATION_FLOWS_DIR}/"):
         return "flow"
+    category = _navigation_knowledge_category(slug)
+    if category:
+        return f"knowledge_{category}"
+    if slug == NAVIGATION_KNOWLEDGE_DIR:
+        return "knowledge"
     return "navigation"
 
 
@@ -311,9 +365,12 @@ def _navigation_parent_slug(slug: str) -> str | None:
     if not slug or slug == NAVIGATION_SLUG:
         return None
     parts = slug.split("/")
-    if len(parts) <= 2 and parts[0] in {NAVIGATION_MODULES_DIR, NAVIGATION_FLOWS_DIR}:
+    root_dirs = {NAVIGATION_MODULES_DIR, NAVIGATION_FLOWS_DIR, NAVIGATION_KNOWLEDGE_DIR}
+    if parts[0] not in root_dirs:
         return NAVIGATION_SLUG
-    if len(parts) > 2 and parts[0] in {NAVIGATION_MODULES_DIR, NAVIGATION_FLOWS_DIR}:
+    # knowledge/<category>/<slug> nests under knowledge/<category>, and
+    # modules/<a>/<b> nests under modules/<a>; otherwise nest under the index.
+    if len(parts) > 2:
         return "/".join(parts[:-1])
     return NAVIGATION_SLUG
 
@@ -482,12 +539,20 @@ def _navigation_parent_title(parent_slug: str, project_key_value: str | None) ->
         return f"{project_key_value or '项目'} 导航入口"
     label = _navigation_link_label(parent_slug)
     role = _navigation_role_for_slug(parent_slug)
+    if role.startswith("knowledge_"):
+        return f"{label} 知识区"
+    if role == "knowledge":
+        return f"{label} 项目知识"
     return f"{label} {'流程' if role == 'flow' else '模块'}导航"
 
 
 def _navigation_section_for(parent_slug: str, child_slug: str) -> str:
     if parent_slug == NAVIGATION_SLUG:
-        return "### 入口 / 关键流程" if child_slug.startswith(f"{NAVIGATION_FLOWS_DIR}/") else "### 模块索引"
+        if child_slug.startswith(f"{NAVIGATION_FLOWS_DIR}/"):
+            return "### 入口 / 关键流程"
+        if child_slug.startswith(f"{NAVIGATION_KNOWLEDGE_DIR}/"):
+            return "### 项目知识"
+        return "### 模块索引"
     return "## 下级入口"
 
 
@@ -520,6 +585,7 @@ def _new_navigation_parent_body(parent_slug: str, child_slug: str, child_title: 
         section = _navigation_section_for(parent_slug, child_slug)
         module_lines = f"- [{label}]({href})" if section == "### 模块索引" else "-"
         flow_lines = f"- [{label}]({href})" if section == "### 入口 / 关键流程" else "-"
+        knowledge_lines = f"- [{label}]({href})" if section == "### 项目知识" else "-"
         return "\n".join([
             "## 项目介绍",
             "- 待补充：项目目标、技术栈和运行形态。",
@@ -528,8 +594,8 @@ def _new_navigation_parent_body(parent_slug: str, child_slug: str, child_title: 
             "- 待补充：安装、运行、构建、测试或常用调试命令。",
             "",
             "## 注意事项",
-            "- 本入口只列第一层模块/流程；更深层入口由对应父文档维护。",
-            "- 开工先读本入口，再按任务命中的模块/流程链接读取少量文档；不要全量扫描 navigation。",
+            "- 本入口只列第一层模块/流程/知识区；更深层入口由对应父文档维护。",
+            "- 开工先读本入口，再按任务命中的模块/流程/知识链接读取少量文档；不要全量扫描 navigation。",
             "",
             "## 编码规范",
             "- 待补充：项目内命名、测试、目录、生成物、协议或 UI 约定。",
@@ -541,11 +607,29 @@ def _new_navigation_parent_body(parent_slug: str, child_slug: str, child_title: 
             "",
             "### 入口 / 关键流程",
             flow_lines,
+            "",
+            "### 项目知识",
+            knowledge_lines,
+        ]).strip() + "\n"
+    parent_role = _navigation_role_for_slug(parent_slug)
+    if parent_role.startswith("knowledge_"):
+        category = parent_role.split("_", 1)[1]
+        return "\n".join([
+            f"# {_navigation_link_label(parent_slug)} · {category}",
+            "",
+            "## 知识区",
+            "- 本页汇总该项目的架构决策 / 踩坑 / 组件 / 主题条目。",
+            "",
+            "## 下级入口",
+            f"- [{label}]({href})",
+            "",
+            "## 维护注意",
+            "- 只记录长期有效、跨任务可复用的项目知识；流水账放 worklog。",
         ]).strip() + "\n"
     return "\n".join([
         f"# {_navigation_link_label(parent_slug)}",
         "",
-        "## 模块职责" if _navigation_role_for_slug(parent_slug) == "module" else "## 流程职责",
+        "## 模块职责" if parent_role == "module" else "## 流程职责",
         "-",
         "",
         "## 关键源文件",
@@ -709,6 +793,42 @@ def _sidecar_navigation_body(candidate: dict) -> str:
             or candidate.get("diagnostics")
         )
     )
+    category = _navigation_knowledge_category(slug)
+    if category:
+        # Project knowledge entry: long-lived decision / pitfall / component /
+        # topic note. Rendered from the sidecar's structured fields.
+        summary = str(candidate.get("summary") or candidate.get("conclusion") or "").strip()
+        decision = str(candidate.get("decision") or candidate.get("choice") or "").strip()
+        alternatives = str(candidate.get("alternatives") or "").strip()
+        background = str(candidate.get("background") or candidate.get("context") or "").strip()
+        rule = str(candidate.get("rule") or candidate.get("rule_of_thumb") or "").strip()
+        symptom = str(candidate.get("symptom") or candidate.get("trigger") or "").strip()
+        solution = str(candidate.get("solution") or candidate.get("fix") or candidate.get("workaround") or "").strip()
+        files = "\n".join(f"- `{item}`" for item in _as_list(candidate.get("related_files") or candidate.get("files")))
+        when = str(candidate.get("invalid_when") or candidate.get("update_when") or "").strip()
+        parts = [
+            f"# {str(candidate.get('title') or candidate.get('name') or category).strip()}",
+            "",
+            f"## {category.capitalize()}",
+            summary or decision or solution or "-",
+            "",
+            "## 背景 / 触发条件",
+            background or symptom or "-",
+            "",
+            "## 结论 / 解法",
+            decision or solution or rule or "-",
+            "",
+            "## 备选方案",
+            alternatives or "-",
+            "",
+            "## 涉及文件",
+            files or "-",
+            "",
+            "## 失效条件 / 维护规则",
+            when or "- 只在决策反转、方案失效或组件重构时更新本文。",
+        ]
+        return "\n".join(parts).strip() + "\n"
+
     if slug.startswith(f"{NAVIGATION_MODULES_DIR}/"):
         module = str(candidate.get("module") or candidate.get("title") or "").strip()
         role = str(candidate.get("role") or candidate.get("responsibility") or candidate.get("summary") or "").strip()
@@ -817,6 +937,31 @@ def _sidecar_body(candidate: dict, kind: str) -> str:
         return body.rstrip() + "\n"
     if kind == "navigation":
         return _sidecar_navigation_body(candidate)
+    if kind == "worklog":
+        # Flow/worklog entry: a dated, per-task run record. Not reusable
+        # knowledge — it is kept for traceability, not injected into prompts.
+        summary = str(candidate.get("summary") or candidate.get("conclusion") or "").strip()
+        steps = "\n".join(f"- {item}" for item in _as_list(candidate.get("steps") or candidate.get("actions")))
+        result_text = str(candidate.get("result") or candidate.get("outcome") or "").strip()
+        files = "\n".join(f"- `{item}`" for item in _as_list(candidate.get("related_files") or candidate.get("files")))
+        issues = str(candidate.get("issues") or candidate.get("risks") or "").strip()
+        parts = [
+            "## 任务流水",
+            summary or "-",
+            "",
+            "## 执行步骤",
+            steps or "-",
+            "",
+            "## 结果",
+            result_text or "-",
+            "",
+            "## 涉及文件",
+            files or "-",
+            "",
+            "## 遗留问题",
+            issues or "-",
+        ]
+        return "\n".join(parts).strip() + "\n"
     if kind == "wiki":
         conclusion = str(candidate.get("conclusion") or candidate.get("summary") or "").strip()
         scope = str(candidate.get("applicability") or candidate.get("scope_note") or "").strip()
@@ -947,6 +1092,12 @@ def normalize_sidecar_candidates(context: dict, raw_candidates: list[dict]) -> l
         scope = raw_scope if raw_scope in ("general", "personal", "project") else "project"
         if kind == "wiki" and scope == "project":
             scope = "general"
+        # Navigation (including the project knowledge area) is project-only. A
+        # knowledge category without a project binding must not become an
+        # invalid general-scope navigation entry; downgrade it to a solution.
+        if kind == "navigation" and scope != "project":
+            kind = "solutions"
+            meta["type"] = type_for_kind(kind)
         # Only project-scoped knowledge carries a project_key. General (shared)
         # and personal (user scratch) knowledge must never inherit the current
         # project's key, or they would be filed/retrieved as one project's
@@ -1056,9 +1207,9 @@ def distill_and_enqueue(
             "validation": navigation_validation,
         }
 
-    if gate == "auto":
+    def _write_all(cands: list[dict]) -> list[str]:
         written = []
-        for cand in candidates:
+        for cand in cands:
             path = write_entry_preserving_navigation(
                 root,
                 config=config,
@@ -1071,15 +1222,33 @@ def distill_and_enqueue(
                 slug=cand.get("slug"),
             )
             written.append(str(path))
+            # Link a written project solution into its nav index "相关解法"
+            # section so the project nav routes to reusable solutions.
+            if cand.get("kind") == "solutions" and cand.get("scope") == "project" and cand.get("project_key"):
+                try:
+                    from aha_cli.services.knowledge_navigation import link_solution_into_nav_index
+
+                    link_solution_into_nav_index(
+                        root,
+                        config,
+                        project_key_value=cand["project_key"],
+                        solution_slug=path.stem,
+                        solution_title=cand.get("title") or "",
+                    )
+                except Exception:  # noqa: BLE001 - nav linking is best-effort
+                    pass
+        return written
+
+    def _auto_result(written: list[str], cands: list[dict], gate_label: str) -> dict:
         result = {
             "ok": True,
-            "gate": "auto",
+            "gate": gate_label,
             "written": written,
             "candidates": len(written),
         }
         if has_navigation_candidates or skipped_navigation:
             result["navigation"] = navigation_distill_summary(
-                candidates, gate="auto", written=written, skipped=skipped_navigation
+                cands, gate=gate_label, written=written, skipped=skipped_navigation
             )
             result["navigation"]["validation"] = navigation_validation
             result["validation"] = navigation_validation
@@ -1087,8 +1256,43 @@ def distill_and_enqueue(
         from aha_cli.services.knowledge_git import auto_commit_after_change
 
         result["git"] = auto_commit_after_change(
-            root, auto_commit_message_for(candidates), config
+            root, auto_commit_message_for(cands), config
         )
+        return result
+
+    if gate == "auto":
+        written = _write_all(candidates)
+        return _auto_result(written, candidates, "auto")
+
+    if gate == "agent-auto":
+        # 质量门控：高置信候选自动 approved 入库，低置信进 pending 待人工审批。
+        thresholds = _quality_thresholds(cfg)
+        auto_cands = [c for c in candidates if _quality_gate(c, thresholds)]
+        pending_cands = [c for c in candidates if c not in auto_cands]
+        result: dict = {"ok": True, "gate": "agent-auto", "candidates": len(candidates)}
+        if auto_cands:
+            written = _write_all(auto_cands)
+            auto_result = _auto_result(written, auto_cands, "agent-auto")
+            result["written"] = auto_result.get("written", [])
+            result["git"] = auto_result.get("git")
+        else:
+            result["written"] = []
+        if pending_cands:
+            enqueued = [str(enqueue_candidate(root, config, cand)) for cand in pending_cands]
+            result["enqueued"] = enqueued
+            result["pending_count"] = len(enqueued)
+        else:
+            result["enqueued"] = []
+            result["pending_count"] = 0
+        if has_navigation_candidates or skipped_navigation:
+            result["navigation"] = navigation_distill_summary(
+                candidates, gate="agent-auto",
+                written=result["written"],
+                enqueued=result.get("enqueued") or [],
+                skipped=skipped_navigation,
+            )
+            result["navigation"]["validation"] = navigation_validation
+            result["validation"] = navigation_validation
         return result
 
     # Default: manual gate -> queue for review, never touches the tracked tree.
@@ -1106,6 +1310,42 @@ def distill_and_enqueue(
         result["navigation"]["validation"] = navigation_validation
         result["validation"] = navigation_validation
     return result
+
+
+def _quality_thresholds(cfg: dict) -> dict:
+    """Quality-gate thresholds for ``agent-auto`` curation.
+
+    Pulled from ``knowledge.auto_distill`` (confidence/relevance) so operators can
+    tune how strict automatic approval is.
+    """
+    auto_distill = cfg.get("auto_distill") if isinstance(cfg.get("auto_distill"), dict) else {}
+    return {
+        "confidence": float(auto_distill.get("confidence_threshold", 0.8) or 0.8),
+        "relevance": float(auto_distill.get("relevance_threshold", 0.7) or 0.7),
+    }
+
+
+def _quality_gate(candidate: dict, thresholds: dict | None = None) -> bool:
+    """True when a candidate clears the agent-auto quality gate.
+
+    A candidate is auto-approved when its confidence and relevance meet the
+    thresholds. Candidates without explicit scores are treated conservatively
+    (not auto-approved) so the low-quality path goes to human review.
+    """
+    thresholds = thresholds or {"confidence": 0.8, "relevance": 0.7}
+    meta = candidate.get("meta") if isinstance(candidate.get("meta"), dict) else candidate
+    try:
+        confidence = float(meta.get("confidence") or candidate.get("confidence") or 0.0)
+    except (TypeError, ValueError):
+        confidence = 0.0
+    try:
+        relevance = float(meta.get("relevance") or candidate.get("relevance") or 0.0)
+    except (TypeError, ValueError):
+        relevance = 0.0
+    return (
+        confidence >= float(thresholds.get("confidence") or 0.8)
+        and relevance >= float(thresholds.get("relevance") or 0.7)
+    )
 
 
 def distill_after_finalize(
@@ -1149,12 +1389,21 @@ def distill_after_finalize(
                 texts=[task_title, final_body, final_context.get("summary", "") if isinstance(final_context, dict) else ""],
             ),
         )
-        candidates = [
-            candidate
-            for candidate in normalize_sidecar_candidates(context, sidecar_candidates or [])
-            if candidate.get("kind") == "navigation"
-        ]
-        return distill_and_enqueue(root, config, context, distiller=distiller, candidates=candidates)
+        # Merge explicit sidecar candidates (navigation + solutions/wiki) with the
+        # heuristic solutions extractor so a finalized task both updates project
+        # navigation and automatically distills reusable solutions. The merged set
+        # flows through distill_and_enqueue's curation gate (agent-auto by default).
+        sidecar = normalize_sidecar_candidates(context, sidecar_candidates or [])
+        heuristic = heuristic_solution_candidate(context) if distiller is None else []
+        seen_titles: set[str] = set()
+        merged: list[dict] = []
+        for cand in [*heuristic, *sidecar]:
+            title = str(cand.get("title") or "").strip()
+            if not title or title in seen_titles:
+                continue
+            seen_titles.add(title)
+            merged.append(cand)
+        return distill_and_enqueue(root, config, context, distiller=distiller, candidates=merged)
     except Exception as exc:  # noqa: BLE001 - distillation must never break finalize
         return {"ok": False, "error": f"distill failed: {exc}"}
 

@@ -27,6 +27,7 @@ AHA 的所有 LLM 提示词集中在此目录，通过 `aha_cli.services.prompt_
 | `action_` | 动作 schema 校验 | `action_invalid_schema.md` |
 | `hardware_debug_` | 硬件调试 | `hardware_debug_context.md` |
 | `browser_control_` | 浏览器控制 | `browser_control_context.md` |
+| `skill_creation_guide` | 技能创建 | `skill_creation_guide.md` |
 
 ## 占位符命名约定
 
@@ -88,4 +89,4 @@ AHA 的所有 LLM 提示词集中在此目录，通过 `aha_cli.services.prompt_
 
 ### 其他
 - mode_instruction_default, mode_instruction_final, mode_instruction_memo_report, commit_policy, compact_summary, action_invalid_schema
-- hardware_debug_context, browser_control_context
+- hardware_debug_context, browser_control_context, skill_creation_guide

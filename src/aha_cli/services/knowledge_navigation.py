@@ -25,12 +25,16 @@ from aha_cli.services.prompt_templates import render_prompt_template
 from aha_cli.store.knowledge import (
     NAVIGATION_MODULES_DIR,
     NAVIGATION_FLOWS_DIR,
+    NAVIGATION_KNOWLEDGE_DIR,
+    NAVIGATION_KNOWLEDGE_CATEGORIES,
     NAVIGATION_SLUG,
     entry_path_for,
     knowledge_config,
     normalize_entry_slug,
+    read_entry,
     resolved_project_identity,
     slugify,
+    write_entry_preserving_navigation,
 )
 
 # Directories that are never project modules worth mapping.
@@ -42,7 +46,25 @@ _IGNORE_DIRS = {
 _DOCSTRING_RE = re.compile(r'^\s*(?:[rRbBuU]{0,2})("""|\'\'\')(.*?)\1', re.DOTALL)
 _NAVIGATION_LINK_RE = re.compile(r"!?\[[^\]]*\]\(([^)]*)\)")
 _JSON_FENCE_RE = re.compile(r"```(?:json)?\s*(.*?)```", re.IGNORECASE | re.DOTALL)
-_NAVIGATION_ROOT_DIRS = {NAVIGATION_MODULES_DIR, NAVIGATION_FLOWS_DIR}
+_NAVIGATION_ROOT_DIRS = {NAVIGATION_MODULES_DIR, NAVIGATION_FLOWS_DIR, NAVIGATION_KNOWLEDGE_DIR}
+_NAVIGATION_KNOWLEDGE_CATEGORY_SET = set(NAVIGATION_KNOWLEDGE_CATEGORIES)
+# Accept singular aliases for the plural categories (kind="pitfall" -> pitfalls).
+_NAVIGATION_KNOWLEDGE_CATEGORY_ALIASES = {
+    "decision": "decisions",
+    "pitfall": "pitfalls",
+    "component": "components",
+    "topic": "topic",
+    "topics": "topic",
+}
+
+
+def _normalize_knowledge_category(value: object) -> str | None:
+    raw = str(value or "").strip().lower()
+    if not raw:
+        return None
+    if raw in _NAVIGATION_KNOWLEDGE_CATEGORY_SET:
+        return raw
+    return _NAVIGATION_KNOWLEDGE_CATEGORY_ALIASES.get(raw)
 NavigationAgent = Callable[[dict], str]
 
 
@@ -154,8 +176,93 @@ def _entry_points(workspace: Path) -> list[str]:
     return points
 
 
+_KNOWLEDGE_CATEGORY_PATHS = {
+    "decisions": ("docs/decisions", "docs/adr", "decisions", "docs/decisions.md", "DECISIONS.md"),
+    "pitfalls": ("docs/pitfalls", "pitfalls", "docs/pitfalls.md", "PITFALLS.md"),
+    "components": ("docs/components", "components", "docs/components.md", "COMPONENTS.md"),
+}
+
+
+def _knowledge_candidates(workspace: Path) -> list[dict]:
+    """Detect architecture decision / pitfall / component knowledge candidates.
+
+    Looks for conventional documentation locations and README sections, and
+    returns candidate descriptors the nav bootstrap agent can promote into the
+    project "知识区". Best-effort; an empty list means no obvious candidates.
+    """
+    candidates: list[dict] = []
+    for category, rels in _KNOWLEDGE_CATEGORY_PATHS.items():
+        files: list[Path] = []
+        for rel in rels:
+            path = workspace / rel
+            if path.is_file():
+                files.append(path)
+            elif path.is_dir():
+                files.extend(sorted(p for p in path.glob("*.md") if p.is_file()))
+        for path in files[:8]:
+            try:
+                title_line = next(
+                    (line.lstrip("# ").strip() for line in path.read_text(encoding="utf-8", errors="replace").splitlines()
+                     if line.strip().startswith("# ") and not line.lstrip("# ").startswith(" ")),
+                    "",
+                )
+            except OSError:
+                continue
+            rel = path.relative_to(workspace).as_posix()
+            candidates.append({
+                "category": category,
+                "title": title_line or path.stem,
+                "source_file": rel,
+                "reason": f"found {rel} in workspace",
+            })
+    return candidates
+
+
+def _knowledge_readme_sections(workspace: Path) -> list[dict]:
+    """Detect 决策/踩坑/组件 sections inside the README as knowledge candidates."""
+    readme = next((workspace / name for name in ("README.md", "README.rst", "README.txt", "README") if (workspace / name).is_file()), None)
+    if not readme:
+        return []
+    try:
+        text = readme.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return []
+    section_names = {
+        "decisions": ("决策", "architecture decision", "architecture-decision", "adr"),
+        "pitfalls": ("踩坑", "pitfall", "pitfalls", "坑", "troubleshooting", "known issues", "注意事项"),
+        "components": ("组件", "component", "components", "模块结构"),
+    }
+    found: list[dict] = []
+    current: str | None = None
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("##") or stripped.startswith("###"):
+            lowered = stripped.lstrip("#").strip().lower()
+            current = None
+            for category, needles in section_names.items():
+                if any(needle in lowered for needle in needles):
+                    current = category
+                    break
+            continue
+        if current and stripped:
+            found.append({
+                "category": current,
+                "title": f"README: {current}",
+                "source_file": readme.name,
+                "reason": f"README has a {current} section",
+            })
+            current = None  # one candidate per section
+    return found
+
+
 def scan_workspace(workspace_path: str | Path) -> dict:
-    """Deterministically extract a project navigation skeleton from a workspace tree."""
+    """Deterministically extract a project navigation skeleton from a workspace tree.
+
+    Besides code structure (modules / entry points), the scan detects candidate
+    project-knowledge areas (architecture decisions, pitfalls, components) from
+    conventional doc locations and README sections, so the nav bootstrap can
+    promote them into the project "知识区".
+    """
     workspace = Path(workspace_path).expanduser()
     modules: list[dict] = []
     for mod in _candidate_module_dirs(workspace):
@@ -165,11 +272,22 @@ def scan_workspace(workspace_path: str | Path) -> dict:
             "role": _module_docstring(mod) or "(待补充职责)",
             "files": rel,
         })
+    knowledge_candidates = _knowledge_candidates(workspace) + _knowledge_readme_sections(workspace)
+    # Dedupe identical (category, title, source_file) candidates.
+    seen: set[tuple[str, str, str]] = set()
+    deduped: list[dict] = []
+    for cand in knowledge_candidates:
+        key = (cand["category"], cand["title"], cand["source_file"])
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(cand)
     return {
         "project_name": workspace.name,
         "overview": _overview(workspace),
         "modules": modules,
         "entry_points": _entry_points(workspace),
+        "knowledge_candidates": deduped,
     }
 
 
@@ -215,6 +333,9 @@ def render_navigation_body(scan: dict, *, link_modules: bool = True) -> str:
         "",
         "### 入口 / 关键流程",
         "\n".join(entry_lines) if entry_lines else "- (暂无)",
+        "",
+        "### 项目知识",
+        "- (架构决策 / 踩坑 / 组件 / 主题 条目在沉淀后自动挂到本项目知识区)",
     ]
     return "\n".join(parts).strip() + "\n"
 
@@ -239,6 +360,70 @@ def render_module_navigation_body(project_name: str, module: dict) -> str:
         "- 不要为无关 bug fix 全量重写模块文档；新增模块/流程时再补直接父入口链接。",
     ]
     return "\n".join(parts).strip() + "\n"
+
+
+def link_solution_into_nav_index(
+    root: Path,
+    config: dict | None,
+    *,
+    project_key_value: str,
+    solution_slug: str,
+    solution_title: str,
+) -> Path | None:
+    """Append a project solution link into the nav index "相关解法" section.
+
+    Returns the nav index path when the link was applied, or None when the
+    project has no nav index yet (nothing to update). Called after a reusable
+    solution is written so the project nav routes to its solutions.
+    """
+    if not project_key_value:
+        return None
+    index_path = entry_path_for(root, config, "project", "navigation", project_key_value, NAVIGATION_SLUG)
+    if not index_path:
+        return None
+    try:
+        existing = read_entry(index_path)
+    except (OSError, ValueError):
+        return None
+    body = existing.get("body") or ""
+    normalized_slug = normalize_entry_slug(str(solution_slug or "").strip())
+    if not normalized_slug:
+        return None
+    href = f"{normalized_slug}.md"
+    if href in body:
+        return index_path
+    label = (solution_title or _navigation_link_label(normalized_slug)).strip()
+    line = f"- [{label}]({href})"
+    section = "### 相关解法"
+    lines = body.splitlines() if body else []
+    try:
+        section_index = next(i for i, item in enumerate(lines) if item.strip() == section)
+    except StopIteration:
+        body = body.rstrip()
+        body += f"\n\n{section}\n{line}\n"
+    else:
+        insert_at = len(lines)
+        for idx in range(section_index + 1, len(lines)):
+            if lines[idx].lstrip().startswith("#"):
+                insert_at = idx
+                break
+        while insert_at > section_index + 1 and not lines[insert_at - 1].strip():
+            insert_at -= 1
+        lines.insert(insert_at, line)
+        body = "\n".join(lines).rstrip() + "\n"
+    meta = dict(existing.get("meta") or {})
+    write_entry_preserving_navigation(
+        root,
+        config=config,
+        scope="project",
+        kind="navigation",
+        project_key_value=project_key_value,
+        title=existing.get("title") or f"{project_key_value} 导航入口",
+        body=body,
+        meta=meta,
+        slug=NAVIGATION_SLUG,
+    )
+    return index_path
 
 
 def build_navigation_candidate(
@@ -329,14 +514,25 @@ def build_navigation_candidates(
     return candidates
 
 
+def _navigation_knowledge_category(slug: str) -> str | None:
+    """Return the knowledge category for a knowledge slug, or None."""
+    slug = normalize_entry_slug(str(slug or "").strip())
+    parts = slug.split("/")
+    if parts[0] != NAVIGATION_KNOWLEDGE_DIR or len(parts) < 2:
+        return None
+    return _normalize_knowledge_category(parts[1])
+
+
 def _navigation_parent_slug(slug: str) -> str | None:
     slug = normalize_entry_slug(str(slug or "").strip())
     if not slug or slug == NAVIGATION_SLUG:
         return None
     parts = slug.split("/")
-    if len(parts) <= 2 and parts[0] in _NAVIGATION_ROOT_DIRS:
+    if parts[0] not in _NAVIGATION_ROOT_DIRS:
         return NAVIGATION_SLUG
-    if len(parts) > 2 and parts[0] in _NAVIGATION_ROOT_DIRS:
+    # knowledge/<category>/<slug> nests under knowledge/<category>, and
+    # modules/<a>/<b> nests under modules/<a>; otherwise nest under the index.
+    if len(parts) > 2:
         return "/".join(parts[:-1])
     return NAVIGATION_SLUG
 
@@ -348,6 +544,11 @@ def _navigation_role_for_slug(slug: str) -> str:
         return "module"
     if slug.startswith(f"{NAVIGATION_FLOWS_DIR}/"):
         return "flow"
+    category = _navigation_knowledge_category(slug)
+    if category:
+        return f"knowledge_{category}"
+    if slug == NAVIGATION_KNOWLEDGE_DIR:
+        return "knowledge"
     return "navigation"
 
 
@@ -368,7 +569,12 @@ def _is_valid_navigation_slug(raw_slug: str) -> tuple[bool, str, str | None]:
         return True, normalized, None
     parts = slug.split("/")
     if parts[0] not in _NAVIGATION_ROOT_DIRS or len(parts) < 2:
-        return False, normalized, "navigation slug must be index, modules/<name>, or flows/<name>"
+        return False, normalized, "navigation slug must be index, modules/<name>, flows/<name>, or knowledge/<category>/<name>"
+    if parts[0] == NAVIGATION_KNOWLEDGE_DIR:
+        if parts[1] not in _NAVIGATION_KNOWLEDGE_CATEGORY_SET:
+            return False, normalized, f"knowledge slug must use a valid category: {', '.join(NAVIGATION_KNOWLEDGE_CATEGORIES)}"
+        if len(parts) < 3:
+            return True, normalized, None
     return True, normalized, None
 
 

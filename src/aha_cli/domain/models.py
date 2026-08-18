@@ -84,21 +84,23 @@ def default_retention_policy_config() -> dict:
 
 def default_knowledge_config() -> dict:
     return {
-        "enabled": False,
+        # 知识库是默认必填的核心功能：任务越多知识越丰富、知识越丰富任务越轻松。
+        "enabled": True,
         "path": None,
         "git": {
-            "enabled": False,
+            "enabled": True,
             "proxy_enabled": False,
             "remote": None,
             "branch": "main",
-            "auto_commit": False,
-            "auto_push": False,
-            "auto_pull": False,
+            "auto_commit": True,
+            "auto_push": True,
+            "auto_pull": True,
             "author_name": "AHA",
             "author_email": "aha@local",
         },
         "curation": {
-            "gate": "manual",
+            # agent-auto: 高置信候选自动 approved 入库，低置信进 pending 待人工审批。
+            "gate": "agent-auto",
         },
         "project_nav": {
             "enabled": True,
@@ -109,6 +111,21 @@ def default_knowledge_config() -> dict:
             "max_chars": 4000,
             "inject_mode": "references",
             "summary_chars": 120,
+        },
+        "auto_distill": {
+            "enabled": True,
+            "on": ["agent_finished", "task_result_written"],
+            "gate": "agent-auto",
+            "max_candidates_per_turn": 3,
+            "link_similar_entries": True,
+            "confidence_threshold": 0.8,
+            "relevance_threshold": 0.7,
+        },
+        "sync": {
+            "interval_minutes": 60,
+            "mode": "auto",
+            "resolve_conflicts": "agent",
+            "user_priority": True,
         },
     }
 

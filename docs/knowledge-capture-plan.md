@@ -16,7 +16,7 @@
 ## 已锁定的设计决策
 
 - **新 scope `personal`**：默认落点；**不进任务开工注入**（`retrieve_for_task` 不收集 personal），只通过 `kb search` / `kb list` / Web 按需检索召回。
-- **raw note（capture inbox）**：独立存储 `capture/`（每条 JSON），图片等附件放 `capture/assets/`，这属于用户资料，默认可随知识库同步；只有整理过程日志 `capture/distill/` 与 `.pending/` 一类流程态内容进 `.gitignore`。
+- **raw note（capture inbox）**：以普通 Markdown 递归存储在 `capture/**/*.md`，AHA 新建默认进入 `capture/inbox/`，用户可用 Obsidian 自由编辑、改名和分类；图片放 `capture/assets/` 并使用相对 Markdown 链接。只有整理过程日志 `capture/distill/` 与 `.pending/` 一类流程态内容进 `.gitignore`。
 - **agent 整理**：one-shot 调用（非完整 task 编排），可选 backend/model；输出沿用 `<aha_knowledge_candidates>` JSON，复用 `split_knowledge_sidecar` 解析 → 入 pending。
 - **图片**：raw 阶段在 `capture/assets/` 保留并同步；approve 时复制到正式条目的 `assets/`；护栏=大小上限+降采样；agent 标注每图 `transcribed`（转录后弃）/ `keep-as-asset`（留原图、正文 `![]()` 引用）；有图必须多模态模型。
 - **Web Capture tab**：类 Entries 的列表，每条 raw note 可查看/编辑/删除/「整理为候选」；慢 LLM 调用走 job + 轮询，不阻塞。
@@ -24,12 +24,12 @@
 ## 分期计划（依赖链：scope → inbox → distill → web → images）
 
 - [x] **Phase 1 — `personal` scope**：store `SCOPES`/`scope_dir`/`init`/`iter_all_entries`/`status` 支持 personal；retrieval 注入天然排除 personal；CLI/Web scope 筛选加 personal。focused tests：personal 条目不被注入、能被 search/list/iter 召回。
-- [x] **Phase 2 — capture inbox 存储 + CLI**：`capture/` raw note CRUD（id/text/images/scope_hint/created_at/status/candidate_ids）；`aha kb capture add|list|show|edit|rm`。当前规则：raw note 和 `capture/assets/` 可同步，`capture/distill/` 忽略。focused tests：CRUD、gitignore 边界。
+- [x] **Phase 2 — capture inbox 存储 + CLI**：`capture/**/*.md` raw note CRUD（id/text/images/scope_hint/created_at/status/candidate_ids）；`aha kb capture add|list|show|edit|rm`。支持读取无 frontmatter 的普通 Markdown，AHA 首次更新时补齐稳定元数据；旧 `capture/*.json` 自动无损迁移。raw note 和 `capture/assets/` 可同步，`capture/distill/` 忽略。
 - [x] **Phase 3 — distill-on-demand（完成）**：`aha kb capture distill <id>` → one-shot agent distiller（可选 backend/model）→ 解析 sidecar → 入 pending；note 标 `distilled` 并记 `candidate_ids`，重跑替换上次候选。
   - 核对结论：AHA **无稳定 in-process「prompt→reply」API**——backends 是子进程 CLI（`run_claude_exec`/`run_codex_exec`，返回 `(exit_code, reply, session)`，仅 prompt/cwd/output_file 必填）。故按预案抽**窄 service seam**：`knowledge_capture_distill.CaptureAgent`（`ctx→reply_text`），默认实现 `default_capture_agent` 薄封装 run_claude_exec/run_codex_exec（无新依赖、best-effort、可替换），测试注入 deterministic stub。
   - 复用：`split_knowledge_sidecar` 解析 + `normalize_sidecar_candidates`（已扩展支持 personal scope 和 navigation 分类）+ `enqueue_candidate` 始终入 pending（raw 必经人工审核）。Wiki 仅用于非项目通用/个人文档；项目结构、模块职责、入口、约束进入 navigation；project 候选无 key 时降级 personal。
   - 新增 `tests/test_knowledge_capture.py` Phase 3 用例（5）：入队+标 distilled、重跑替换、project 降级 personal、空候选、note 不存在。
-- [x] **Phase 4 — Web Capture tab（完成）**：知识页第 4 个 tab，raw note 列表 + 查看/编辑/删除 + 新建 + 「整理为候选」（后台 job + 轮询，不阻塞）→ 跳 Pending 审批。
+- [x] **Phase 4 — Web Capture workspace（完成）**：Capture 作为左侧特殊目录进入 raw note 列表，保留查看/编辑/删除 + 新建 + 「整理为候选」（后台 job + 轮询，不阻塞）→ 跳 Pending 审批；主编辑入口推荐使用 Obsidian。
   - 核对结论：Web 无可复用的「一次性 job + 轮询」框架（`start_backend` 是 run/task 绑定的完整 agent 进程，太重）。故做**窄接口**：note 自身 `status`（raw→distilling→distilled|error）即 job 记录，distill 用 daemon thread 跑共享的 `run_distill_job`，前端轮询 note status；无新 job store、无新依赖。
   - 实现：API `GET/POST/PATCH/DELETE /api/kb/capture` + `POST /api/kb/capture/distill`（同步置 distilling 后台跑，立即返回）；dispatch 经 `knowledge_routes.dispatch_distill_job` seam（测试替换为同步 stub）。前端 Capture tab（列表/新建/内联编辑/删除/整理+轮询）+ i18n 中英。复用 CLI 同一 `distill_note`/`run_distill_job` service。
   - 测试：route CRUD+distill（同步 seam+stub agent，断言 distilling→distilled、入 pending）、distill 缺失 note 404、create 需 text；service `run_distill_job` 状态机成功+失败（error+last_error）。`node --check` i18n.js 与 knowledge.html 内联 JS 通过。
@@ -79,6 +79,8 @@
 ## 进度日志
 
 - 2026-06-25：**知识库目录归属优化**。`navigation` 收敛为 project-only 分类，`general`/`personal` 只保留 `wiki` 与 `solutions`；raw capture 从 `.capture/` 调整为可同步的 `capture/`，`capture/assets/` 不再被忽略，只有 `capture/distill/`、`.pending/`、`.nav_drafts/` 等流程态目录进 `.gitignore`；旧 `.capture` 自动迁移/兼容读取。
+- 2026-08-18：**Capture Markdown 文件化 + KB 单工作区**。Capture 改为递归读取 `capture/**/*.md`，新建默认写入 `capture/inbox/`，旧 JSON 自动迁移；图片引用改为相对路径，Web API 仅在渲染 payload 中转换为可访问 URL。Knowledge 页面移除顶部标题与 Tab 条，左侧常驻目录树并放置 Sync/Settings、Graph/Pending/Capture 特殊入口，右侧显示当前内容；图谱节点单击可打开对应知识详情或 Skill。
+- 2026-08-18：**KB 文件工作区第二轮收敛**。Capture 作为普通可折叠目录展示，顶部 New 直接创建带标题/内容/待整理章节的 `capture/inbox/*.md` 模板；Graph/Pending 移到 Sync/Settings 同一操作区。Skills 目录默认折叠并支持真实展开/收起；侧栏宽度支持 220–520px 拖拽和整体收起，状态写入 localStorage。知识条目与 Capture 详情由全屏 modal 改为右侧工作区内嵌面板，随侧栏宽度同步变化。
 - 2026-06-20：计划成文。开始 Phase 1（personal scope）。
 - 2026-06-20：**Phase 1 完成**。store 新增 `personal` scope（`PERSONAL_DIR`/`SCOPES`/`scope_dir`/`init`/`iter_all_entries`/`status`）；retrieval 注入天然排除 personal（`retrieve_for_task` 只收集 project/general）；CLI `kb add`/`kb list` `--scope` 加 personal；Web scope 筛选下拉 + i18n（个人/Personal）。新增 `tests/test_knowledge_personal.py`（3 项：存储+status、不注入但可 search 召回、CLI add/list）。验证：`pytest tests/ -q` → 695 passed；`node --check i18n.js` OK。改动未提交。
 - 2026-06-20：**Phase 2 完成**。新增 `store/knowledge_capture.py`（`.capture/` raw note CRUD：create/list/read/update/delete，id=`cap_<uuid>`，字段 text/title/scope_hint/images/status/candidate_ids/时间戳）；`.capture/` 自动写入 KB `.gitignore`（保留既有 `.pending/`）。CLI 新增 `aha kb capture add|list|show|edit|rm`（支持 `--text-file -` 读 stdin）。新增 `tests/test_knowledge_capture.py`（5 项：CRUD、非法 scope 回落 personal、gitignore、CLI 增删查、add 需文本）。验证：`pytest tests/ -q` → 700 passed；端到端 add(stdin)/edit/list/gitignore OK。改动未提交。下一步 Phase 3。

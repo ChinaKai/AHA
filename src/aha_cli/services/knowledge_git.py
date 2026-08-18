@@ -18,6 +18,11 @@ Design rules:
   config.
 - **Conflict safety.** A pull that hits a rebase conflict is aborted so the
   repo is never left mid-rebase; the conflict is reported for the UI to surface.
+- **Agent conflict resolution.** When ``knowledge.sync.resolve_conflicts ==
+  "agent"``, ``sync`` can leave the rebase in progress so a KB maintenance
+  agent can resolve the unmerged paths (user-priority), then ``rebase
+  --continue`` and push. The maintenance plumbing lives here; the agent
+  orchestration lives in :mod:`aha_cli.services.knowledge_maintenance`.
 """
 
 from __future__ import annotations
@@ -34,6 +39,9 @@ from aha_cli.store.knowledge import PROJECTS_DIR, init_knowledge_base, knowledge
 _GIT_TIMEOUT = 120
 _PROJECT_APPROVED_KINDS = ("navigation", "solutions", "worklog")
 
+# Porcelain XY codes for unmerged paths (index and worktree both non-space).
+_UNMERGED_CODES = {"AA", "DD", "AU", "UA", "DU", "UD", "UU"}
+
 
 def git_available() -> bool:
     return shutil.which("git") is not None
@@ -43,6 +51,17 @@ def _git_cfg(config: dict | None) -> dict:
     cfg = knowledge_config(config)
     git = cfg.get("git")
     return git if isinstance(git, dict) else {}
+
+
+def _sync_cfg(config: dict | None) -> dict:
+    cfg = knowledge_config(config)
+    sync = cfg.get("sync")
+    return sync if isinstance(sync, dict) else {}
+
+
+def _resolve_conflicts_mode(config: dict | None, explicit: str | None = None) -> str:
+    value = explicit or _sync_cfg(config).get("resolve_conflicts", "manual")
+    return str(value or "manual").strip()
 
 
 def _author_flags(git_cfg: dict) -> list[str]:
@@ -112,6 +131,58 @@ def is_repo(repo: Path) -> bool:
     return (repo / ".git").is_dir()
 
 
+def rebase_in_progress(repo: Path) -> bool:
+    """True when the repo is mid-rebase (a pull left it in a conflict state)."""
+    git_dir = repo / ".git"
+    return (git_dir / "rebase-merge").exists() or (git_dir / "rebase-apply").exists()
+
+
+def unmerged_paths(repo: Path) -> list[str]:
+    """Return the paths with unresolved merge conflicts (porcelain XY conflict codes)."""
+    if not is_repo(repo):
+        return []
+    res = _run_git(repo, ["status", "--porcelain"])
+    if not res["ok"]:
+        return []
+    paths: list[str] = []
+    for raw in (res["stdout"] or "").splitlines():
+        if len(raw) < 4:
+            continue
+        code = raw[:2].replace(" ", "")
+        if code not in _UNMERGED_CODES:
+            continue
+        path = raw[3:].strip()
+        if " -> " in path:
+            path = path.rsplit(" -> ", 1)[-1]
+        paths.append(path)
+    return _dedupe(paths)
+
+
+# Rebase conflict stages: while replaying a local commit onto the upstream,
+# git stages the upstream tip as :2: and the replayed (local) commit as :3:.
+# The semantics are the reverse of a merge, so we label sides semantically as
+# ``local`` (this device's work, :3:) and ``remote`` (upstream, :2:).
+_REBASE_STAGES = {"local": "3", "remote": "2"}
+
+
+def _take_stage(repo: Path, path: str, side: str) -> dict:
+    """Resolve an unmerged path by taking a side (``local`` or ``remote``)."""
+    stage = _REBASE_STAGES.get(str(side).strip())
+    if stage is None:
+        stage = "3"
+    res = _run_git(repo, ["show", f":{stage}:{path}"])
+    if res["ok"]:
+        target = repo / path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(res["stdout"], encoding="utf-8")
+        return _run_git(repo, ["add", "--", path])
+    # The side is a deletion (file absent there): record the removal.
+    removed = _run_git(repo, ["rm", "--", path])
+    if removed["ok"]:
+        return removed
+    return _run_git(repo, ["rm", "--cached", "--", path])
+
+
 def _current_remote(repo: Path) -> str | None:
     res = _run_git(repo, ["remote", "get-url", "origin"])
     return res["stdout"] if res["ok"] and res["stdout"] else None
@@ -172,6 +243,8 @@ def _sync_status_state(status: dict) -> str:
         return "no_remote"
     if status.get("remote_error"):
         return "remote_error"
+    if status.get("unmerged") or status.get("rebase_in_progress"):
+        return "conflict"
     if status.get("ahead", 0) and status.get("behind", 0):
         return "diverged"
     if status.get("dirty"):
@@ -223,6 +296,14 @@ def sync_status(root: Path, config: dict | None = None, *, check_remote: bool = 
     else:
         status["ok"] = False
         status["remote_error"] = f"git status failed: {dirty['stderr']}"
+
+    # Conflict state: a prior agent-resolution pull may have left a rebase in
+    # progress with unmerged paths. Report them so the UI can surface them and
+    # the maintenance flow can resume.
+    status["rebase_in_progress"] = rebase_in_progress(repo)
+    unmerged = unmerged_paths(repo)
+    status["unmerged"] = unmerged
+    status["conflict_files"] = unmerged
 
     local = _run_git(repo, ["rev-parse", "HEAD"])
     if local["ok"]:
@@ -418,8 +499,14 @@ def commit_project_approved_entries(root: Path, message: str, project_keys: list
     }
 
 
-def pull(root: Path, config: dict | None = None) -> dict:
-    """Rebase the local branch onto the remote. Aborts cleanly on conflict."""
+def pull(root: Path, config: dict | None = None, *, keep_rebase_on_conflict: bool = False) -> dict:
+    """Rebase the local branch onto the remote. Aborts cleanly on conflict.
+
+    When ``keep_rebase_on_conflict`` is true and a rebase conflict occurs, the
+    rebase is left in progress (with unmerged paths) so a KB maintenance agent
+    can resolve it and ``rebase --continue``. This is used by the agent conflict
+    resolution flow; plain pulls keep the historic abort-on-conflict behavior.
+    """
     git_cfg = _git_cfg(config)
     remote = (git_cfg.get("remote") or "").strip()
     if not remote:
@@ -430,6 +517,11 @@ def pull(root: Path, config: dict | None = None) -> dict:
     repo = knowledge_root(root, config)
     branch = git_cfg.get("branch") or "main"
     network_env = _network_git_env(config)
+
+    # A rebase left in progress by a previous agent-resolution pull must not
+    # block a fresh pull: abort it (local commits are intact) and retry.
+    if rebase_in_progress(repo):
+        _run_git(repo, ["rebase", "--abort"])
 
     # Distinguish an unreachable remote (a real failure) from an empty remote
     # that simply has no branch yet (safe to skip). `ls-remote` exits 0 with
@@ -448,6 +540,18 @@ def pull(root: Path, config: dict | None = None) -> dict:
     onto = f"origin/{branch}"
     rebase = _run_git(repo, ["rebase", onto], author=git_cfg)
     if not rebase["ok"]:
+        # Agent resolution: leave the rebase in progress so a maintenance agent
+        # can resolve the unmerged paths. Only when there are actual unmerged
+        # paths — otherwise fall through to the abort/adopt path below.
+        if keep_rebase_on_conflict and unmerged_paths(repo):
+            return {
+                "ok": False,
+                "pulled": False,
+                "conflict": True,
+                "rebase_in_progress": True,
+                "unmerged": unmerged_paths(repo),
+                "error": "rebase conflict with remote; left in progress for agent resolution",
+            }
         _run_git(repo, ["rebase", "--abort"])
         # Unrelated histories (e.g. a prior sync committed the local skeleton
         # before the remote existed): rebase has no common base to replay onto.
@@ -514,6 +618,197 @@ def push(root: Path, config: dict | None = None) -> dict:
 
 
 # --------------------------------------------------------------------------- #
+# Conflict resolution plumbing (used by the KB maintenance agent)
+# --------------------------------------------------------------------------- #
+_AGENT_VALUE_MARKERS = {
+    "agent", "aha", "auto", "assistant", "generated", "llm", "distill",
+    "claude", "codex", "gpt",
+}
+
+
+def _frontmatter_marker(marker: str, text: str, agent_values: set[str] | None = None) -> bool:
+    """Case-insensitive frontmatter key=value or key: value marker match.
+
+    When ``agent_values`` is None, presence of the key with a non-false value
+    matches (used for ``distilled_by``, which AHA only writes on agent output).
+    Otherwise the value must be one of ``agent_values``.
+    """
+    if not text:
+        return False
+    needle = marker.lower()
+    for line in text.splitlines()[:80]:
+        lowered = line.strip().lower()
+        if not (lowered.startswith(f"{needle}:") or lowered.startswith(f"{needle}=")):
+            continue
+        value = lowered.split(":", 1)[-1].split("=", 1)[-1].strip().strip("'\"")
+        if value in {"", "false", "0", "no", "none", "null", "undefined", "unknown"}:
+            return False
+        if agent_values is None:
+            return True
+        if value in agent_values:
+            return True
+    return False
+
+
+def _agent_authored(content: str) -> bool:
+    """Best-effort detection that an entry body/frontmatter is agent-distilled."""
+    if _frontmatter_marker("distilled_by", content):
+        return True
+    for marker in ("created_by", "source", "origin"):
+        if _frontmatter_marker(marker, content, agent_values=_AGENT_VALUE_MARKERS):
+            return True
+    return False
+
+
+def conflict_detail(root: Path, config: dict | None = None) -> dict:
+    """Return base/local/remote content for each unmerged path.
+
+    During a rebase conflict ``local`` is the replayed commit (this device's
+    work) and ``remote`` is the upstream tip. Used to build the maintenance
+    agent's resolution prompt. Contents are returned in full so a small KB fits
+    in the prompt; callers may truncate.
+    """
+    repo = knowledge_root(root, config)
+    unmerged = unmerged_paths(repo)
+    conflicts: list[dict] = []
+    for path in unmerged:
+        entry: dict = {"path": path}
+        for stage, label in (("1", "base"), ("2", "remote"), ("3", "local")):
+            res = _run_git(repo, ["show", f":{stage}:{path}"])
+            content = res["stdout"] if res["ok"] else ""
+            entry[label] = content
+            entry[f"{label}_len"] = len(content)
+            entry[f"{label}_agent"] = _agent_authored(content)
+        entry["base_agent"] = bool(entry.get("base_agent"))
+        conflicts.append(entry)
+    return {"ok": True, "repo": str(repo), "unmerged": unmerged, "conflicts": conflicts}
+
+
+def resolve_unmerged(
+    root: Path,
+    config: dict | None = None,
+    *,
+    decisions: dict | None = None,
+) -> dict:
+    """Resolve every unmerged path and stage the result.
+
+    ``decisions`` maps path -> {"action": "local"|"remote"|"merge", "content": str}
+    (legacy "ours"/"theirs" are mapped to local/remote). Default for a path
+    without a decision honors ``knowledge.sync.user_priority``: take the side
+    that is not agent-authored when exactly one side is, otherwise keep the
+    local (this device's) side.
+    """
+    repo = knowledge_root(root, config)
+    unmerged = unmerged_paths(repo)
+    if not unmerged:
+        return {"ok": True, "resolved": []}
+    cfg = _sync_cfg(config)
+    user_priority = bool(cfg.get("user_priority", True))
+    decisions = decisions or {}
+    detail = conflict_detail(root, config)
+    by_path = {c["path"]: c for c in detail.get("conflicts", [])}
+    resolved: list[str] = []
+    for path in unmerged:
+        dec = decisions.get(path)
+        if isinstance(dec, dict):
+            action = _normalize_action(str(dec.get("action") or "merge"))
+            content = dec.get("content")
+            # A merge decision without content (e.g. an agent produced a plan
+            # object without body) is unsafe: fall back to the default rather
+            # than clobber the file with an empty string.
+            if action == "merge" and content is None:
+                action, content = _default_resolution(by_path.get(path), user_priority)
+        else:
+            action, content = _default_resolution(by_path.get(path), user_priority)
+        if action == "local":
+            result = _take_stage(repo, path, "local")
+        elif action == "remote":
+            result = _take_stage(repo, path, "remote")
+        else:
+            target = repo / path
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(str(content or ""), encoding="utf-8")
+            result = _run_git(repo, ["add", "--", path])
+        if result["ok"]:
+            resolved.append(path)
+    return {"ok": True, "resolved": resolved}
+
+
+def _normalize_action(action: str) -> str:
+    normalized = str(action or "merge").strip().lower()
+    if normalized in {"local", "remote", "merge"}:
+        return normalized
+    if normalized in {"ours", "keep_local"}:
+        return "local"
+    if normalized in {"theirs", "keep_remote"}:
+        return "remote"
+    return "merge"
+
+
+def default_resolutions(root: Path, config: dict | None = None) -> dict:
+    """Map every unmerged path to its default user-priority resolution.
+
+    Used as the deterministic baseline the maintenance agent plan is layered
+    on top of, so paths the agent does not mention still resolve sanely.
+    """
+    cfg = _sync_cfg(config)
+    user_priority = bool(cfg.get("user_priority", True))
+    detail = conflict_detail(root, config)
+    decisions: dict[str, dict] = {}
+    for conflict in detail.get("conflicts", []):
+        action, _ = _default_resolution(conflict, user_priority)
+        decisions[conflict["path"]] = {"action": action}
+    return decisions
+
+
+def _default_resolution(conflict: dict | None, user_priority: bool) -> tuple[str, str | None]:
+    """Pick a deterministic resolution honoring user-priority when no agent plan exists."""
+    if not conflict:
+        return "local", None
+    local_agent = bool(conflict.get("local_agent"))
+    remote_agent = bool(conflict.get("remote_agent"))
+    if user_priority and local_agent and not remote_agent:
+        # The remote side is user-authored and the local side is agent-written.
+        return "remote", None
+    if user_priority and remote_agent and not local_agent:
+        # The local side is user-authored and the remote side is agent-written.
+        return "local", None
+    return "local", None
+
+
+def rebase_abort(root: Path, config: dict | None = None) -> dict:
+    """Abort an in-progress rebase, restoring the pre-rebase HEAD (no-op if idle)."""
+    repo = knowledge_root(root, config)
+    if not rebase_in_progress(repo):
+        return {"ok": True, "aborted": False}
+    res = _run_git(repo, ["rebase", "--abort"])
+    return {"ok": res["ok"], "aborted": res["ok"]}
+
+
+def rebase_continue(root: Path, config: dict | None = None, *, skip: bool = False) -> dict:
+    """Stage any remaining changes and finish the in-progress rebase.
+
+    Uses an editor override so the replayed commit message is kept as-is. On a
+    hard failure the rebase is aborted so the repo is never left mid-rebase.
+    """
+    repo = knowledge_root(root, config)
+    if not rebase_in_progress(repo):
+        return {"ok": True, "continued": False, "reason": "no rebase in progress"}
+    add = _run_git(repo, ["add", "-A"])
+    if not add["ok"]:
+        _run_git(repo, ["rebase", "--abort"])
+        return {"ok": False, "continued": False, "error": f"git add failed: {add['stderr']}"}
+    env = os.environ.copy()
+    env["GIT_EDITOR"] = "true"
+    cmd = ["rebase", "--skip"] if skip else ["rebase", "--continue"]
+    cont = _run_git(repo, cmd, author=_git_cfg(config), env=env)
+    if cont["ok"]:
+        return {"ok": True, "continued": True}
+    _run_git(repo, ["rebase", "--abort"])
+    return {"ok": False, "continued": False, "error": f"rebase --continue failed: {cont['stderr']}"}
+
+
+# --------------------------------------------------------------------------- #
 # Config-gated lifecycle hooks
 # --------------------------------------------------------------------------- #
 def _enabled(config: dict | None) -> bool:
@@ -568,10 +863,15 @@ def sync(
     message: str,
     do_pull: bool = True,
     do_push: bool | None = None,
+    resolve_conflicts: str | None = None,
 ) -> dict:
     """Manual end-to-end sync: ensure repo -> pull -> commit -> push.
 
     Each step is failure-isolated; ``do_push=None`` defers to ``git.auto_push``.
+    When ``knowledge.sync.resolve_conflicts == "agent"`` and the pull rebase
+    conflicts, the rebase is left in progress and the result carries
+    ``conflict=True`` + ``unmerged`` so the caller can dispatch a KB maintenance
+    agent to resolve it.
     """
     steps: dict[str, dict] = {}
     steps["ensure"] = ensure_repo(root, config)
@@ -593,8 +893,18 @@ def sync(
     if not steps["commit"]["ok"]:
         return {"ok": False, "steps": steps}
     if do_pull:
-        steps["pull"] = pull(root, config)
+        agent_resolve = _resolve_conflicts_mode(config, resolve_conflicts) == "agent"
+        steps["pull"] = pull(root, config, keep_rebase_on_conflict=agent_resolve)
         if not steps["pull"]["ok"]:
+            if steps["pull"].get("rebase_in_progress"):
+                # Agent resolution path: leave the rebase in progress for the
+                # maintenance job; do not push anything until it resolves.
+                return {
+                    "ok": False,
+                    "conflict": True,
+                    "unmerged": steps["pull"].get("unmerged", []),
+                    "steps": steps,
+                }
             # Conflict (already aborted) or unreachable remote: stop before push
             # so we never push a half-synced or divergent history.
             return {"ok": False, "steps": steps}

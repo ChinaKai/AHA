@@ -53,7 +53,57 @@ def _score(entry: dict, terms: list[str]) -> int:
     haystack = " ".join(
         [str(meta.get("title", "")), " ".join(str(t) for t in (meta.get("tags") or [])), entry.get("body", "")]
     ).lower()
-    return sum(1 for term in terms if term in haystack)
+    base = sum(1 for term in terms if term in haystack)
+    # Backlink weighting: entries referenced by more others are treated as more
+    # trusted/central (Obsidian graph intuition). A small multiplier avoids
+    # overwhelming term relevance.
+    backlinks = meta.get("backlinks") if isinstance(meta.get("backlinks"), list) else []
+    if base > 0 and backlinks:
+        return base * (1 + 0.1 * min(len(backlinks), 10))
+    return base
+
+
+def _wikilink_neighbors(entry: dict) -> list[str]:
+    """Return the canonical slugs of entries this entry links to (out-links).
+
+    ``meta.links`` is maintained by the wikilink index (Phase 2); reuse it for
+    graph propagation without re-parsing bodies.
+    """
+    links = entry.get("meta", {}).get("links") if isinstance(entry.get("meta", {}).get("links"), list) else []
+    return [str(slug) for slug in links if slug]
+
+
+def _wikilink_backlink_slugs(entry: dict) -> list[str]:
+    """Return the canonical slugs of entries that link to this one (in-links)."""
+    backlinks = entry.get("meta", {}).get("backlinks") if isinstance(entry.get("meta", {}).get("backlinks"), list) else []
+    return [str(slug) for slug in backlinks if slug]
+
+
+def _expand_by_wikilinks(entries: list[dict], all_entries: list[dict], *, max_expansion: int = 4) -> list[dict]:
+    """Expand the ranked hit set by one wikilink hop.
+
+    For each ranked entry, pull its out-links and in-links that exist in the KB
+    and are not already in the result, up to ``max_expansion``. This lets a term
+    hit bring related notes into the injected context (Obsidian graph spread).
+    """
+    by_slug = {str(e.get("meta", {}).get("slug") or ""): e for e in all_entries}
+    seen = {str(e.get("meta", {}).get("slug") or "") for e in entries}
+    expanded: list[dict] = []
+    for entry in entries:
+        for slug in [*_wikilink_neighbors(entry), *_wikilink_backlink_slugs(entry)]:
+            if slug in seen:
+                continue
+            neighbor = by_slug.get(slug)
+            if neighbor is None:
+                continue
+            neighbor_meta = neighbor.get("meta", {})
+            if neighbor_meta.get("status") == "deprecated":
+                continue
+            seen.add(slug)
+            expanded.append(neighbor)
+            if len(expanded) >= max_expansion:
+                return expanded
+    return expanded
 
 
 def _is_navigation_entry(entry: dict) -> bool:
@@ -141,6 +191,11 @@ def retrieve_for_task(
         # Fallback: non-navigation project knowledge by recency. Navigation
         # details remain on-demand: read them only when the task matches them.
         ordered = [e for _, _, e in rank([e for e in rankable_project if not _is_navigation_detail(e)])]
+    # Wikilink propagation: when term hits exist, bring one-hop related notes
+    # into the context (Obsidian graph spread) up to the entry budget.
+    all_scoped = project_entries + general_entries
+    if ordered and len(ordered) < max_entries:
+        ordered += _expand_by_wikilinks(ordered, all_scoped, max_expansion=max_entries - len(ordered))
     ordered = nav_entries + [e for e in ordered if e not in nav_entries]
     return ordered[: max(0, max_entries)]
 

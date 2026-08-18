@@ -79,6 +79,46 @@ def test_retrieve_ranks_by_overlap_then_recency_fallback(tmp_path: Path):
     assert retrieve_for_task(root, cfg, project_key="git-OTHER", terms=["flaky"], max_entries=5) == []
 
 
+def test_retrieve_expands_hit_by_outlink_neighbor(tmp_path: Path):
+    """A term hit brings a one-hop wikilink neighbor into the result set."""
+    root = tmp_path / ".aha"
+    cfg = _cfg()
+    init_knowledge_base(root, cfg)
+    write_entry(root, config=cfg, scope="project", kind="solutions", project_key_value="git-abc",
+                title="Cross OS liveness", body="check pid via os.kill",
+                meta={"tags": ["backend"], "links": ["wsl-backend"]})
+    write_entry(root, config=cfg, scope="project", kind="solutions", project_key_value="git-abc",
+                title="WSL backend", body="runs inside the distro",
+                meta={"tags": ["wsl"]})
+
+    # Terms hit the first entry; the second is only reachable via the wikilink.
+    hits = retrieve_for_task(root, cfg, project_key="git-abc", terms=["liveness", "os", "kill"], max_entries=5)
+    titles = [hit["meta"]["title"] for hit in hits]
+    assert "Cross OS liveness" in titles
+    assert "WSL backend" in titles
+
+
+def test_retrieve_backlink_weighted_hit_ranks_higher(tmp_path: Path):
+    """Entries referenced by others rank above otherwise-equal term matches."""
+    root = tmp_path / ".aha"
+    cfg = _cfg()
+    init_knowledge_base(root, cfg)
+    # Write the referenced entry first, then a linker that points to it.
+    write_entry(root, config=cfg, scope="project", kind="solutions", project_key_value="git-abc",
+                title="USB reset fix", body="cycle power via gpio",
+                meta={"tags": ["usb"]})
+    write_entry(root, config=cfg, scope="project", kind="solutions", project_key_value="git-abc",
+                title="Camera reset note", body="references the USB reset fix [[usb-reset-fix]]",
+                meta={"tags": ["camera"]})
+
+    hits = retrieve_for_task(root, cfg, project_key="git-abc", terms=["reset"], max_entries=5)
+    titles = [hit["meta"]["title"] for hit in hits]
+    # Both contain "reset"; the linked entry gets backlink weighting and should
+    # appear (and rank above the non-linked one when scores tie).
+    assert "USB reset fix" in titles
+    assert "Camera reset note" in titles
+
+
 def test_retrieve_skips_deprecated_entries(tmp_path: Path):
     root = tmp_path / ".aha"
     cfg = _cfg()

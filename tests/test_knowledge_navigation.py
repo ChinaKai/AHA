@@ -558,3 +558,131 @@ def test_navigation_validation_rejects_invalid_slug(tmp_path: Path):
     assert validation["ok"] is False
     assert validation["errors"][0]["code"] == "invalid_slug"
     assert validation["errors"][0]["normalized_slug"] == "modules/web-routes"
+
+
+# --------------------------------------------------------------------------- #
+# Phase 2b: nav project knowledge area (decisions/pitfalls/components/topic)
+# --------------------------------------------------------------------------- #
+def test_scan_workspace_detects_knowledge_candidates(tmp_path: Path):
+    ws = tmp_path / "proj"
+    (ws / "docs" / "decisions").mkdir(parents=True)
+    (ws / "docs" / "decisions" / "001-wsl.md").write_text("# Use WSL backend\nDecision: distro\n", encoding="utf-8")
+    (ws / "docs" / "pitfalls").mkdir(parents=True)
+    (ws / "docs" / "pitfalls" / "shim.md").write_text("# Python3 shim trap\n", encoding="utf-8")
+    (ws / "README.md").write_text("# Proj\n\n## 踩坑\n\n- shim\n", encoding="utf-8")
+
+    scan = scan_workspace(ws)
+    categories = {c["category"] for c in scan["knowledge_candidates"]}
+    assert "decisions" in categories
+    assert "pitfalls" in categories
+    assert any(c["source_file"] == "README.md" for c in scan["knowledge_candidates"])
+
+
+def test_sidecar_knowledge_category_routes_to_navigation(tmp_path: Path):
+    home = tmp_path / ".aha"
+    cfg = _cfg(gate="manual")
+    init_knowledge_base(home, cfg)
+    raw = [
+        {"kind": "pitfall", "title": "WSL python3 shim", "summary": "shim", "solution": "distro path"},
+        {"kind": "decision", "title": "Use WSL backend", "decision": "distro"},
+    ]
+    cands = normalize_sidecar_candidates({"project_key": "git-abc"}, raw)
+    assert all(c["kind"] == "navigation" for c in cands)
+    slugs = {c["slug"] for c in cands}
+    assert "knowledge/pitfalls/wsl-python3-shim" in slugs
+    assert "knowledge/decisions/use-wsl-backend" in slugs
+    roles = {c["meta"]["navigation_role"] for c in cands}
+    assert roles == {"knowledge_pitfalls", "knowledge_decisions"}
+
+
+def test_sidecar_worklog_routes_to_worklog_kind(tmp_path: Path):
+    home = tmp_path / ".aha"
+    cfg = _cfg(gate="manual")
+    init_knowledge_base(home, cfg)
+    raw = [{"kind": "worklog", "title": "2026-08-17 fix bridge", "summary": "fixed", "steps": ["repro"]}]
+    cands = normalize_sidecar_candidates({"project_key": "git-abc"}, raw)
+    assert cands[0]["kind"] == "worklog"
+    assert cands[0]["scope"] == "project"
+    assert cands[0]["project_key"] == "git-abc"
+
+
+def test_knowledge_parent_backfill_links_index_and_category(tmp_path: Path):
+    home = tmp_path / ".aha"
+    cfg = _cfg(gate="auto")
+    init_knowledge_base(home, cfg)
+    write_entry(home, config=cfg, scope="project", kind="navigation", project_key_value="git-abc",
+                title="项目导航", body="## 模块索引\n\n### 入口 / 关键流程\n\n### 项目知识\n",
+                slug="index", meta={"type": "navigation"})
+    raw = [{"kind": "pitfall", "title": "WSL shim", "summary": "shim", "solution": "distro"}]
+    cands = normalize_sidecar_candidates({"project_key": "git-abc"}, raw)
+    result = distill_and_enqueue(home, cfg, {"project_key": "git-abc"}, candidates=cands)
+    assert result["ok"] is True
+
+    # The category parent and the child entry exist.
+    category_path = _entry_path(home, cfg, "git-abc", "knowledge/pitfalls")
+    assert category_path is not None
+    child_path = _entry_path(home, cfg, "git-abc", "knowledge/pitfalls/wsl-shim")
+    assert child_path is not None
+    # The index links the knowledge category under 项目知识.
+    index = read_entry(_entry_path(home, cfg, "git-abc", NAVIGATION_SLUG))
+    assert "### 项目知识" in index["body"]
+    assert "knowledge/pitfalls.md" in index["body"]
+
+
+def test_solution_write_links_into_nav_index(tmp_path: Path):
+    home = tmp_path / ".aha"
+    cfg = _cfg(gate="auto")
+    init_knowledge_base(home, cfg)
+    write_entry(home, config=cfg, scope="project", kind="navigation", project_key_value="git-abc",
+                title="项目导航", body="## 模块索引\n\n### 入口 / 关键流程\n\n### 项目知识\n",
+                slug="index", meta={"type": "navigation"})
+    raw = [{"kind": "solutions", "title": "Fix serial PDEATHSIG", "summary": "add PDEATHSIG", "related_files": ["src/bridge.py"]}]
+    cands = normalize_sidecar_candidates({"project_key": "git-abc"}, raw)
+    result = distill_and_enqueue(home, cfg, {"project_key": "git-abc"}, candidates=cands)
+    assert result["ok"] is True
+    index = read_entry(_entry_path(home, cfg, "git-abc", NAVIGATION_SLUG))
+    assert "### 相关解法" in index["body"]
+    assert "fix-serial-pdeathsig.md" in index["body"]
+
+
+def _entry_path(root, config, project_key_value, slug) -> Path | None:
+    from aha_cli.store.knowledge import entry_path_for
+
+    return entry_path_for(root, config, "project", "navigation", project_key_value, slug)
+
+
+def test_navigation_validation_accepts_knowledge_slug(tmp_path: Path):
+    home = tmp_path / ".aha"
+    cfg = _cfg(gate="manual")
+    init_knowledge_base(home, cfg)
+    # The parent category entry must exist (as distill's parent backfill creates).
+    write_entry(home, config=cfg, scope="project", kind="navigation", project_key_value="k",
+                title="坑知识区", body="## 知识区\n", slug="knowledge/pitfalls",
+                meta={"type": "navigation"})
+    candidates = [{
+        "kind": "navigation",
+        "scope": "project",
+        "project_key": "k",
+        "slug": "knowledge/pitfalls/wsl-shim",
+        "title": "WSL shim",
+        "body": "## Pitfalls\nshim\n",
+    }]
+    validation = validate_navigation_candidates(home, cfg, candidates)
+    assert validation["ok"] is True
+
+
+def test_navigation_validation_rejects_bad_knowledge_category(tmp_path: Path):
+    home = tmp_path / ".aha"
+    cfg = _cfg(gate="manual")
+    init_knowledge_base(home, cfg)
+    candidates = [{
+        "kind": "navigation",
+        "scope": "project",
+        "project_key": "k",
+        "slug": "knowledge/nonsense/thing",
+        "title": "bad",
+        "body": "x",
+    }]
+    validation = validate_navigation_candidates(home, cfg, candidates)
+    assert validation["ok"] is False
+    assert any(error["code"] == "invalid_slug" for error in validation["errors"])

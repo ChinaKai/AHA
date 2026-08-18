@@ -17,6 +17,7 @@ from aha_cli.services.run_retention_policy import (
 )
 from aha_cli.services.feishu_runtime import run_feishu_channel
 from aha_cli.services.service_runtime import write_service_runtime
+from aha_cli.services.knowledge_sync_loop import run_knowledge_sync_loop
 from aha_cli.services.managed_processes import reconcile_managed_processes, stop_all_managed_processes
 from aha_cli.services.network_terminal import stop_all_network_terminals
 from aha_cli.services.weixin import WeixinError, fetch_updates, load_account, notify_channel_start, notify_channel_stop
@@ -352,6 +353,7 @@ async def run_ui_server(root: Path, run_id: str, host: str, port: int, _poll_int
     retention_policy_reporter = None
     managed_process_reconciler = None
     agent_watchdog = None
+    knowledge_syncer = None
     try:
         server = await asyncio.start_server(lambda r, w: handle_ui_client(root, run_id, r, w, auth_token, host, port), host, port)
         write_service_runtime(root, host=host, port=port, auth_required=bool(auth_token), status="running")
@@ -360,6 +362,7 @@ async def run_ui_server(root: Path, run_id: str, host: str, port: int, _poll_int
         retention_policy_reporter = asyncio.create_task(retention_policy_report_loop(root, run_id))
         managed_process_reconciler = asyncio.create_task(managed_process_reconcile_loop(root))
         agent_watchdog = asyncio.create_task(agent_watchdog_loop(root))
+        knowledge_syncer = asyncio.create_task(run_knowledge_sync_loop(root))
         addresses = ", ".join(str(sock.getsockname()) for sock in server.sockets or [])
         if run_id:
             print(f"AHA dashboard for run {run_id}: http://{host}:{port}")
@@ -393,7 +396,7 @@ async def run_ui_server(root: Path, run_id: str, host: str, port: int, _poll_int
             feishu_channel.cancel()
         if retention_policy_reporter is not None:
             retention_policy_reporter.cancel()
-        for task in (weixin_keepalive, feishu_channel, retention_policy_reporter, managed_process_reconciler, agent_watchdog):
+        for task in (weixin_keepalive, feishu_channel, retention_policy_reporter, managed_process_reconciler, agent_watchdog, knowledge_syncer):
             if task is None:
                 continue
             with contextlib.suppress(asyncio.CancelledError):
