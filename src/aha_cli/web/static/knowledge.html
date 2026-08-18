@@ -2,7 +2,7 @@
 <html lang="en-US">
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <title>AHA Knowledge Base</title>
   <link rel="stylesheet" href="/static/styles.css" />
   <style>
@@ -567,6 +567,9 @@
       background: var(--color-surface, #fff);
       cursor: grab;
       display: block;
+      touch-action: none;
+      user-select: none;
+      -webkit-user-select: none;
     }
     .kb-graph-canvas.dragging { cursor: grabbing; }
     .kb-graph-controls-toggle {
@@ -633,17 +636,73 @@
     .kb-graph-play { justify-self: end; }
     #graph-status { margin-top: 6px; min-height: 1.2em; }
     @media (max-width: 820px) {
-      body { overflow: auto; }
-      .kb-wrap { height: auto; min-height: 100dvh; }
-      .kb-shell { grid-template-columns: 1fr; height: auto; min-height: 100dvh; }
-      .kb-graph-sidebar { max-height: 38vh; border-right: 0; border-bottom: 1px solid var(--color-border-subtle); }
+      html, body { width: 100%; height: 100%; overflow: hidden; overscroll-behavior: none; }
+      .kb-wrap { height: 100dvh; min-height: 0; }
+      .kb-shell { position: relative; display: block; height: 100%; min-height: 0; overflow: hidden; }
+      .kb-graph-sidebar {
+        position: absolute; z-index: 20; top: 0; left: 0; right: 0;
+        height: min(46dvh, 360px); max-height: calc(100dvh - env(safe-area-inset-bottom));
+        padding-top: env(safe-area-inset-top);
+        border-right: 0; border-bottom: 1px solid var(--color-border-subtle);
+        box-shadow: 0 10px 28px rgba(0, 0, 0, .18);
+      }
+      .kb-graph-sidebar-head {
+        min-height: 48px;
+        padding: 8px calc(8px + env(safe-area-inset-right)) 8px calc(8px + env(safe-area-inset-left));
+      }
+      .kb-sidebar-actions { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; }
+      .kb-sidebar-actions::-webkit-scrollbar { display: none; }
+      .kb-sidebar-actions button, .kb-sidebar-toggle { min-height: 40px; }
+      .kb-graph-file-folder, .kb-graph-file-entry { min-height: 40px; }
       .kb-sidebar-resizer { display: none; }
-      .kb-wrap.kb-sidebar-collapsed .kb-graph-sidebar { max-height: 42px; }
-      .kb-workspace-main { min-height: 62vh; overflow: hidden; }
-      .kb-graph-main { min-height: 62vh; }
-      .kb-graph-canvas { min-height: 52vh; }
-      .kb-graph-controls-panel { top: 8px; right: 8px; width: min(300px, calc(100% - 16px)); }
-      .kb-graph-controls-toggle { top: 8px; right: 8px; }
+      .kb-wrap.kb-sidebar-collapsed .kb-graph-sidebar {
+        height: calc(48px + env(safe-area-inset-top)); max-height: none;
+        box-shadow: none;
+      }
+      .kb-wrap.kb-sidebar-collapsed .kb-graph-sidebar-head { padding-inline: calc(8px + env(safe-area-inset-left)) calc(8px + env(safe-area-inset-right)); }
+      .kb-workspace-main {
+        height: 100%; min-height: 0; overflow: hidden;
+        padding: calc(56px + env(safe-area-inset-top)) calc(8px + env(safe-area-inset-right)) calc(8px + env(safe-area-inset-bottom)) calc(8px + env(safe-area-inset-left));
+      }
+      .kb-workspace-main > section[id^="tab-"] { height: 100%; min-height: 0; }
+      #tab-graph { min-height: 0; overflow: hidden; }
+      .kb-graph-main { height: 100%; min-height: 0; }
+      .kb-graph-stage { min-height: 0; }
+      .kb-graph-canvas { min-height: 0; }
+      .kb-graph-controls-toggle {
+        top: 8px; right: 8px;
+        width: 44px; min-height: 44px;
+      }
+      .kb-graph-controls-panel {
+        position: fixed; top: auto;
+        right: calc(8px + env(safe-area-inset-right));
+        bottom: calc(8px + env(safe-area-inset-bottom));
+        left: calc(8px + env(safe-area-inset-left));
+        width: auto;
+        max-height: min(74dvh, calc(100dvh - 72px - env(safe-area-inset-top) - env(safe-area-inset-bottom)));
+        overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain;
+        -webkit-overflow-scrolling: touch;
+        border-radius: 14px;
+      }
+      .kb-graph-controls-head { min-height: 52px; padding-left: 16px; }
+      .kb-graph-controls-icon { width: 44px; min-height: 44px; }
+      .kb-graph-control-group summary { min-height: 48px; }
+      .kb-graph-control-body { padding: 0 16px 16px; }
+      .kb-graph-switch-row { min-height: 44px; }
+      .kb-graph-range-control input[type="range"] { min-height: 36px; }
+    }
+    @media (max-width: 820px) and (orientation: landscape) and (max-height: 600px) {
+      .kb-wrap:not(.kb-sidebar-collapsed) .kb-graph-sidebar {
+        right: auto; width: min(360px, 48vw); height: 100%; max-height: none;
+        border-right: 1px solid var(--color-border-subtle); border-bottom: 0;
+      }
+      .kb-wrap.kb-sidebar-collapsed .kb-graph-sidebar { width: 100%; }
+      .kb-graph-controls-panel {
+        top: calc(8px + env(safe-area-inset-top));
+        right: calc(8px + env(safe-area-inset-right));
+        bottom: calc(8px + env(safe-area-inset-bottom));
+        left: auto; width: min(340px, 48vw); max-height: none;
+      }
     }
   </style>
 </head>
@@ -659,7 +718,7 @@
           <button class="button-ghost" type="button" data-kb-view="pending"><span data-i18n="knowledge.tab_pending">Pending</span><span id="pending-badge" class="kb-sidebar-count"></span></button>
           <button class="button-ghost" id="kb-settings-open" type="button" data-i18n="common.settings">Settings</button>
         </div>
-        <button class="button-ghost kb-sidebar-toggle" id="kb-sidebar-toggle" type="button" aria-label="Collapse sidebar" data-i18n-aria-label="common.collapse_sidebar">‹</button>
+        <button class="button-ghost kb-sidebar-toggle" id="kb-sidebar-toggle" type="button" aria-controls="graph-file-tree" aria-expanded="true" aria-label="Collapse sidebar" data-i18n-aria-label="common.collapse_sidebar">‹</button>
       </div>
       <div id="graph-file-tree" class="kb-graph-file-tree"></div>
       <div class="kb-sidebar-footer">
@@ -1024,6 +1083,8 @@
     const KB_ACTIVE_TAB_KEY = "aha:kb:active-tab";
     const KB_SIDEBAR_WIDTH_KEY = "aha:kb:sidebar-width";
     const KB_SIDEBAR_COLLAPSED_KEY = "aha:kb:sidebar-collapsed";
+    const compactGraphMedia = window.matchMedia?.("(max-width: 820px)") || null;
+    let compactSidebarExpanded = false;
     const GRAPH_SETTINGS_KEY = "aha:kb:graph-settings:v1";
     const KB_TABS = ["entries", "navigation", "graph", "pending", "skills", "settings"];
     const ENTRIES_PAGE_LIMIT = 120;
@@ -1116,24 +1177,62 @@
       }
     }
 
+    function isCompactGraphViewport() {
+      return compactGraphMedia ? compactGraphMedia.matches : window.innerWidth <= 820;
+    }
+
+    function sidebarIsCollapsed() {
+      return isCompactGraphViewport() ? !compactSidebarExpanded : readStoredSidebarCollapsed();
+    }
+
     function applySidebarLayout() {
       const wrap = $(".kb-wrap");
       if (!wrap) return;
       wrap.style.setProperty("--kb-sidebar-width", `${readStoredSidebarWidth()}px`);
-      const collapsed = readStoredSidebarCollapsed();
+      const collapsed = sidebarIsCollapsed();
       wrap.classList.toggle("kb-sidebar-collapsed", collapsed);
       const toggle = $("#kb-sidebar-toggle");
       if (toggle) {
         toggle.textContent = collapsed ? "›" : "‹";
+        toggle.setAttribute("aria-expanded", String(!collapsed));
         toggle.setAttribute("aria-label", collapsed ? t("common.expand_sidebar", "Expand sidebar") : t("common.collapse_sidebar", "Collapse sidebar"));
       }
     }
 
     function setSidebarCollapsed(collapsed) {
-      try { window.localStorage?.setItem(KB_SIDEBAR_COLLAPSED_KEY, collapsed ? "1" : "0"); }
-      catch (_err) { /* Sidebar state is best-effort. */ }
+      if (isCompactGraphViewport()) {
+        compactSidebarExpanded = !collapsed;
+        if (!collapsed) setGraphControlsOpen(false);
+      } else {
+        try { window.localStorage?.setItem(KB_SIDEBAR_COLLAPSED_KEY, collapsed ? "1" : "0"); }
+        catch (_err) { /* Sidebar state is best-effort. */ }
+      }
       applySidebarLayout();
-      if (state.activeTab === "graph") setTimeout(restartGraphLayout, 0);
+      scheduleGraphLayoutRestart();
+    }
+
+    function collapseCompactSidebar() {
+      if (!isCompactGraphViewport() || !compactSidebarExpanded) return;
+      compactSidebarExpanded = false;
+      applySidebarLayout();
+      scheduleGraphLayoutRestart();
+    }
+
+    function scheduleGraphLayoutRestart() {
+      if (state.activeTab !== "graph") return;
+      setTimeout(() => {
+        if (state.activeTab === "graph") restartGraphLayout();
+      }, 0);
+    }
+
+    function bindResponsiveGraphLayout() {
+      const sync = () => {
+        compactSidebarExpanded = false;
+        applySidebarLayout();
+        scheduleGraphLayoutRestart();
+      };
+      compactGraphMedia?.addEventListener?.("change", sync);
+      window.addEventListener("orientationchange", sync);
     }
 
     function bindSidebarResize() {
@@ -1194,6 +1293,7 @@
 
     function showTab(name) {
       const tab = normalizedTabName(name);
+      collapseCompactSidebar();
       clearWorkspaceDetails();
       state.activeTab = tab;
       writeStoredActiveTab(tab);
@@ -1466,6 +1566,7 @@
       const panel = $("#graph-controls-panel");
       const toggle = $("#graph-controls-toggle");
       if (!panel || !toggle) return;
+      if (open) collapseCompactSidebar();
       panel.hidden = !open;
       toggle.hidden = open;
       toggle.setAttribute("aria-expanded", String(open));
@@ -1676,20 +1777,24 @@
     };
 
     window.openGraphEntry = async (encodedId) => {
+      collapseCompactSidebar();
       await openEntryReference(encodedId);
     };
 
     window.openGraphCapture = async (encodedId) => {
+      collapseCompactSidebar();
       await window.openCaptureNote(encodedId);
     };
 
     window.openGraphSkill = async (encodedId) => {
+      collapseCompactSidebar();
       const id = decodeURIComponent(String(encodedId || ""));
       await showTab("skills");
       if (id) await loadSkill(id);
     };
 
     window.openGraphSkills = async () => {
+      collapseCompactSidebar();
       await showTab("skills");
     };
 
@@ -1933,6 +2038,40 @@
       return { x: (x - graphState.panX) / graphState.scale, y: (y - graphState.panY) / graphState.scale };
     }
 
+    function setGraphScaleAt(canvas, nextScale, clientX, clientY) {
+      const rect = canvas.getBoundingClientRect();
+      const viewportX = clientX - rect.left;
+      const viewportY = clientY - rect.top;
+      const worldX = (viewportX - graphState.panX) / graphState.scale;
+      const worldY = (viewportY - graphState.panY) / graphState.scale;
+      graphState.scale = Math.min(4, Math.max(0.2, nextScale));
+      graphState.panX = viewportX - worldX * graphState.scale;
+      graphState.panY = viewportY - worldY * graphState.scale;
+    }
+
+    function graphPointerDistance(left, right) {
+      return Math.hypot(right.x - left.x, right.y - left.y);
+    }
+
+    function graphPointerMidpoint(left, right) {
+      return { x: (left.x + right.x) / 2, y: (left.y + right.y) / 2 };
+    }
+
+    function graphNodeIndexAt(canvas, clientX, clientY, pointerType = "mouse") {
+      const point = graphCanvasPoint(canvas, clientX, clientY);
+      const screenHitPadding = pointerType === "touch" ? 16 : pointerType === "pen" ? 10 : 6;
+      const hitPadding = screenHitPadding / Math.max(graphState.scale, 0.2);
+      for (let index = graphState.nodes.length - 1; index >= 0; index--) {
+        const node = graphState.nodes[index];
+        const position = graphState.positions.get(node.id);
+        if (!position) continue;
+        const dx = point.x - position.x;
+        const dy = point.y - position.y;
+        if (dx * dx + dy * dy <= (graphNodeRadius(node) + hitPadding) ** 2) return index;
+      }
+      return -1;
+    }
+
     async function openGraphNode(node) {
       if (!node?.id) return;
       if (node.kind === "tag") {
@@ -1959,44 +2098,69 @@
       const canvas = $("#graph-canvas");
       if (!canvas || canvas.dataset.bound) return;
       canvas.dataset.bound = "1";
+      const activePointers = new Map();
       let dragNode = -1;
       let panning = false;
+      let primaryPointerId = null;
+      let pinchDistance = 0;
+      let pinchMidpoint = null;
       let lastX = 0;
       let lastY = 0;
       let startX = 0;
       let startY = 0;
+      let moveTolerance = 4;
       let moved = false;
 
       canvas.addEventListener("pointerdown", (ev) => {
+        ev.preventDefault();
+        activePointers.set(ev.pointerId, { x: ev.clientX, y: ev.clientY });
+        canvas.setPointerCapture?.(ev.pointerId);
+        canvas.classList.add("dragging");
+        if (activePointers.size > 1) {
+          const pointers = [...activePointers.values()].slice(0, 2);
+          pinchDistance = graphPointerDistance(pointers[0], pointers[1]);
+          pinchMidpoint = graphPointerMidpoint(pointers[0], pointers[1]);
+          dragNode = -1;
+          graphState.dragIndex = -1;
+          panning = false;
+          moved = true;
+          return;
+        }
+        primaryPointerId = ev.pointerId;
         startX = ev.clientX;
         startY = ev.clientY;
+        lastX = ev.clientX;
+        lastY = ev.clientY;
+        moveTolerance = ev.pointerType === "touch" ? 10 : 4;
         moved = false;
-        const point = graphCanvasPoint(canvas, ev.clientX, ev.clientY);
-        dragNode = -1;
-        for (let i = graphState.nodes.length - 1; i >= 0; i--) {
-          const node = graphState.nodes[i];
-          const p = graphState.positions.get(node.id);
-          if (!p) continue;
-          const dx = point.x - p.x;
-          const dy = point.y - p.y;
-          if (dx * dx + dy * dy <= (graphNodeRadius(node) + 6) ** 2) {
-            dragNode = i;
-            break;
-          }
-        }
+        dragNode = graphNodeIndexAt(canvas, ev.clientX, ev.clientY, ev.pointerType);
         if (dragNode >= 0) {
           graphState.dragIndex = dragNode;
-          canvas.classList.add("dragging");
         } else {
           panning = true;
-          lastX = ev.clientX;
-          lastY = ev.clientY;
-          canvas.classList.add("dragging");
         }
       });
 
       canvas.addEventListener("pointermove", (ev) => {
-        if (Math.abs(ev.clientX - startX) > 4 || Math.abs(ev.clientY - startY) > 4) moved = true;
+        if (activePointers.has(ev.pointerId)) activePointers.set(ev.pointerId, { x: ev.clientX, y: ev.clientY });
+        if (activePointers.size > 1) {
+          const pointers = [...activePointers.values()].slice(0, 2);
+          const distance = graphPointerDistance(pointers[0], pointers[1]);
+          const midpoint = graphPointerMidpoint(pointers[0], pointers[1]);
+          if (pinchMidpoint) {
+            graphState.panX += midpoint.x - pinchMidpoint.x;
+            graphState.panY += midpoint.y - pinchMidpoint.y;
+          }
+          if (pinchDistance > 0 && distance > 0) {
+            setGraphScaleAt(canvas, graphState.scale * (distance / pinchDistance), midpoint.x, midpoint.y);
+          }
+          pinchDistance = distance;
+          pinchMidpoint = midpoint;
+          moved = true;
+          return;
+        }
+        if (activePointers.size && ev.pointerId !== primaryPointerId) return;
+        if (Math.abs(ev.clientX - startX) > moveTolerance || Math.abs(ev.clientY - startY) > moveTolerance) moved = true;
         if (dragNode >= 0) {
           const point = graphCanvasPoint(canvas, ev.clientX, ev.clientY);
           const node = graphState.nodes[dragNode];
@@ -2024,24 +2188,50 @@
         graphState.hover = hover;
       });
 
-      const endDrag = (openNode = false) => {
-        const node = openNode && dragNode >= 0 && !moved ? graphState.nodes[dragNode] : null;
+      const endPointer = (ev, openNode = false) => {
+        const wasPrimary = ev.pointerId === primaryPointerId;
+        const node = openNode && activePointers.size === 1 && wasPrimary && dragNode >= 0 && !moved
+          ? graphState.nodes[dragNode]
+          : null;
+        activePointers.delete(ev.pointerId);
+        try { canvas.releasePointerCapture?.(ev.pointerId); }
+        catch (_err) { /* Pointer capture may already be released by the browser. */ }
+        if (activePointers.size) {
+          const [pointerId, point] = activePointers.entries().next().value;
+          primaryPointerId = pointerId;
+          startX = point.x;
+          startY = point.y;
+          lastX = point.x;
+          lastY = point.y;
+          dragNode = -1;
+          graphState.dragIndex = -1;
+          panning = true;
+          pinchDistance = 0;
+          pinchMidpoint = null;
+          moved = true;
+          return;
+        }
+        primaryPointerId = null;
+        pinchDistance = 0;
+        pinchMidpoint = null;
         dragNode = -1;
         graphState.dragIndex = -1;
         panning = false;
         canvas.classList.remove("dragging");
-        if (node) {
-          graphState.selectedNodeId = node.id;
-          void openGraphNode(node);
-        }
+        if (!node) return;
+        graphState.selectedNodeId = node.id;
+        void openGraphNode(node);
       };
-      canvas.addEventListener("pointerup", () => endDrag(true));
-      canvas.addEventListener("pointerleave", () => endDrag(false));
+      canvas.addEventListener("pointerup", (ev) => endPointer(ev, true));
+      canvas.addEventListener("pointercancel", (ev) => endPointer(ev, false));
+      canvas.addEventListener("pointerleave", () => {
+        if (!activePointers.size) graphState.hover = -1;
+      });
 
       canvas.addEventListener("wheel", (ev) => {
         ev.preventDefault();
         const factor = ev.deltaY < 0 ? 1.1 : 0.9;
-        graphState.scale = Math.min(4, Math.max(0.2, graphState.scale * factor));
+        setGraphScaleAt(canvas, graphState.scale * factor, ev.clientX, ev.clientY);
       }, { passive: false });
 
       $("#graph-search")?.addEventListener("input", (ev) => {
@@ -5134,8 +5324,9 @@
       button.addEventListener("click", () => showTab(button.dataset.kbView));
     }
     $("#kb-settings-open").addEventListener("click", () => showTab("settings"));
-    $("#kb-sidebar-toggle").addEventListener("click", () => setSidebarCollapsed(!readStoredSidebarCollapsed()));
+    $("#kb-sidebar-toggle").addEventListener("click", () => setSidebarCollapsed(!sidebarIsCollapsed()));
     bindSidebarResize();
+    bindResponsiveGraphLayout();
     bindGraphCanvas();
     bindGraphSettingsControls();
     $("#graph-controls-toggle").addEventListener("click", () => setGraphControlsOpen(true));
