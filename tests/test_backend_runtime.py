@@ -18,14 +18,17 @@ from aha_cli.services import backend_runtime as backend_runtime_module
 from aha_cli.services.backend_runtime import (
     _agent_chat_command,
     _claude_session_jsonl_path,
+    _current_wsl_runtime_context,
     _process_matches_home,
     _provider_id_for_model,
     _resolve_wsl_target,
     _state_wsl_context,
+    _task_wsl_context,
     _wsl_backend_process_env,
     _wsl_session_paths,
     backend_status,
     detect_runtime_context_compaction,
+    ensure_backend_wsl_state,
     start_backend,
     stop_all_backends,
     stop_task_backends,
@@ -34,6 +37,49 @@ from aha_cli.store.filesystem import add_agent, append_event, read_json, session
 
 
 class BackendRuntimeTests(unittest.TestCase):
+    def test_current_wsl_runtime_context_uses_forwarded_or_native_distro(self) -> None:
+        self.assertEqual(
+            _current_wsl_runtime_context(
+                environ={"AHA_WSL_DISTRO": "Ubuntu-24.04", "WSL_DISTRO_NAME": "ignored"},
+                home=Path("/home/kaikai"),
+            ),
+            ("Ubuntu-24.04", "/home/kaikai"),
+        )
+        self.assertEqual(
+            _current_wsl_runtime_context(
+                environ={"WSL_DISTRO_NAME": "Debian"},
+                home=Path("/home/user"),
+            ),
+            ("Debian", "/home/user"),
+        )
+
+    def test_task_wsl_context_uses_cached_home_for_existing_worker(self) -> None:
+        with (
+            mock.patch(
+                "aha_cli.services.backend_runtime._task_workspace_path",
+                return_value=r"\\wsl.localhost\Ubuntu-24.04\home\kaikai\project",
+            ),
+            mock.patch(
+                "aha_cli.services.wsl_backend.cached_wsl_backends",
+                return_value={"home": "/home/kaikai"},
+            ),
+        ):
+            context = _task_wsl_context(Path("C:/Users/toope/.aha"), "run-1", "task-004")
+
+        self.assertEqual(context, ("Ubuntu-24.04", "/home/kaikai"))
+
+    def test_task_wsl_context_infers_home_from_workspace_without_cache(self) -> None:
+        with (
+            mock.patch(
+                "aha_cli.services.backend_runtime._task_workspace_path",
+                return_value=r"\\wsl.localhost\Ubuntu-24.04\home\kaikai\project",
+            ),
+            mock.patch("aha_cli.services.wsl_backend.cached_wsl_backends", return_value=None),
+        ):
+            context = _task_wsl_context(Path("C:/Users/toope/.aha"), "run-1", "task-004")
+
+        self.assertEqual(context, ("Ubuntu-24.04", "/home/kaikai"))
+
     def test_provider_id_for_model_resolves_env_group_provider(self) -> None:
         cfg = {
             "codex": {
@@ -197,6 +243,68 @@ class BackendRuntimeTests(unittest.TestCase):
         self.assertEqual(env["AHA_WSL_AHA_HOME"], "/mnt/c/Users/toope/.aha")
         self.assertIn("AHA_WSL_DISTRO", env["WSLENV"])
         self.assertIn("AHA_WSL_AHA_HOME", env["WSLENV"])
+
+    def test_start_backend_inside_wsl_records_session_lookup_context(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "WSL local backend", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+
+            class FakeProcess:
+                pid = 4242
+
+            with (
+                mock.patch.dict(
+                    os.environ,
+                    {"AHA_WSL_DISTRO": "Ubuntu-24.04", "HOME": "/home/kaikai"},
+                    clear=True,
+                ),
+                mock.patch("aha_cli.services.backend_runtime.Path.home", return_value=Path("/home/kaikai")),
+                mock.patch("aha_cli.services.backend_runtime._resolve_wsl_target", return_value=None),
+                mock.patch("aha_cli.services.backend_runtime.subprocess.Popen", return_value=FakeProcess()),
+                mock.patch("aha_cli.services.backend_runtime.pid_is_running", side_effect=lambda pid: bool(pid)),
+            ):
+                start_backend(root / ".aha", run_id, "main", task_id="task-001")
+
+            state = read_json(
+                backend_runtime_module.backend_state_path(root / ".aha", run_id, "main", "task-001")
+            )
+
+        self.assertEqual(state["wsl_distro"], "Ubuntu-24.04")
+        self.assertEqual(state["wsl_native_home"], "/home/kaikai")
+        self.assertNotEqual(state["command"][0], "wsl.exe")
+
+    def test_worker_self_heals_missing_wsl_session_lookup_context(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / ".aha"
+            run_id = "run-1"
+            state_path = backend_runtime_module.backend_state_path(root, run_id, "main", "task-004")
+            write_json(
+                state_path,
+                {
+                    "target": "main",
+                    "task_id": "task-004",
+                    "status": "running",
+                    "pid": 4242,
+                    "command": ["/usr/bin/python3", "aha", "claude-chat"],
+                },
+            )
+
+            with (
+                mock.patch.dict(os.environ, {"WSL_DISTRO_NAME": "Ubuntu-24.04"}, clear=True),
+                mock.patch("aha_cli.services.backend_runtime.Path.home", return_value=Path("/home/kaikai")),
+            ):
+                updated = ensure_backend_wsl_state(root, run_id, "main", task_id="task-004")
+
+            persisted = read_json(state_path)
+
+        self.assertEqual(updated["wsl_distro"], "Ubuntu-24.04")
+        self.assertEqual(updated["wsl_native_home"], "/home/kaikai")
+        self.assertEqual(persisted["pid"], 4242)
+        self.assertEqual(persisted["command"], ["/usr/bin/python3", "aha", "claude-chat"])
 
     def test_start_backend_wsl_launch_forwards_task_proxy_via_wslenv(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1121,6 +1229,8 @@ class BackendRuntimeTests(unittest.TestCase):
                         "managed": True,
                         "started_at": "2026-08-17T00:00:00+00:00",
                         "stopped_at": None,
+                        "wsl_distro": "Ubuntu-24.04",
+                        "command": ["/usr/bin/python3", "-m", "aha_cli"],
                     },
                 )
                 # A turn is in flight: agent_started without agent_finished.
@@ -1128,6 +1238,7 @@ class BackendRuntimeTests(unittest.TestCase):
                 append_event(aha_root, run_id, "agent_usage", {"task_id": "task-001", "target": "main", "usage": {"input_tokens": 10}})
 
                 with (
+                    mock.patch("aha_cli.services.backend_runtime._WINDOWS", True),
                     mock.patch("aha_cli.services.backend_runtime.pid_is_running", return_value=False),
                     mock.patch("aha_cli.services.backend_runtime._discover_backend_process", return_value=None),
                 ):
@@ -1136,6 +1247,43 @@ class BackendRuntimeTests(unittest.TestCase):
         # Cross-OS fallback keeps the backend alive while a turn is running.
         self.assertEqual(status["status"], "busy")
         self.assertEqual(status.get("last_pid"), None)  # treated as live, not stale
+
+    def test_backend_status_does_not_resurrect_dead_wsl_host_pid_from_busy_activity(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Dead WSL host", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                aha_root = root / ".aha"
+                write_json(
+                    backend_runtime_module.backend_state_path(aha_root, run_id, "main", "task-001"),
+                    {
+                        "target": "main",
+                        "task_id": "task-001",
+                        "backend": "codex-chat",
+                        "status": "running",
+                        "pid": 70_548,
+                        "managed": True,
+                        "started_at": "2026-08-17T00:00:00+00:00",
+                        "stopped_at": None,
+                        "wsl_distro": "Ubuntu-24.04",
+                        "command": ["wsl.exe", "-d", "Ubuntu-24.04", "--", "bash", "-c", "python -m aha_cli"],
+                    },
+                )
+                append_event(aha_root, run_id, "agent_started", {"task_id": "task-001", "target": "main"})
+
+                with (
+                    mock.patch("aha_cli.services.backend_runtime._WINDOWS", True),
+                    mock.patch("aha_cli.services.backend_runtime.pid_is_running", return_value=False),
+                    mock.patch("aha_cli.services.backend_runtime._discover_backend_process", return_value=None),
+                ):
+                    status = backend_status(aha_root, run_id, "main", task_id="task-001")
+
+        self.assertEqual(status["status"], "stopped")
+        self.assertIsNone(status["pid"])
+        self.assertEqual(status["last_pid"], 70_548)
 
     def test_backend_status_cross_os_fallback_not_applied_when_explicitly_stopped(self) -> None:
         """The cross-OS fallback must not resurrect an explicitly-stopped backend

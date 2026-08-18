@@ -15,6 +15,7 @@ from aha_cli.domain.models import is_feishu_group_task, is_service_assistant_tas
 from aha_cli.services.auto_context_compact import auto_compact_agent_context_after_turn
 from aha_cli.services.backend_runtime import (
     detect_runtime_context_compaction,
+    ensure_backend_wsl_state,
     mark_backend_stopped,
     start_backend,
     stop_task_backends,
@@ -867,6 +868,7 @@ def agent_chat(root: Path, run_id: str, args, *, backend_name: str) -> int:
     # spawned by this watcher (aha send / aha commit / runs guards) behave
     # identically on both host flavors; the wsl.exe hop drops the service env.
     _ensure_runtime_context_env(root, run_id, args.target, backend_name, worker_task_id)
+    ensure_backend_wsl_state(root, run_id, args.target, task_id=worker_task_id)
     inbox = inbox_path(root, run_id, args.target, worker_task_id)
     run = run_dir(root, run_id)
     events_file = event_path(root, run_id)
@@ -907,12 +909,6 @@ def agent_chat(root: Path, run_id: str, args, *, backend_name: str) -> int:
                         message_records = [(batch_item, batch_offset)]
                         next_offset = batch_offset
                         if int(batch_stats.get("merged_count") or 0) > 1:
-                            save_chat_turn_preparation(
-                                turn_checkpoint_file,
-                                offset,
-                                batch_offset,
-                                batch_item,
-                            )
                             merged_event = (
                                 "backend_switch_merged"
                                 if bool(batch_stats.get("handoff_merged"))
@@ -1035,6 +1031,13 @@ def agent_chat(root: Path, run_id: str, args, *, backend_name: str) -> int:
                         },
                     )
                     continue
+                if turn_checkpoint is None:
+                    turn_checkpoint = save_chat_turn_preparation(
+                        turn_checkpoint_file,
+                        offset,
+                        item_offset,
+                        item,
+                    )
                 session = ensure_session(
                     root,
                     run_id,

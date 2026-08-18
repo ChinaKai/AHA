@@ -344,6 +344,36 @@ def advance_chat_offset_to_inbox_end(root: Path, run_id: str, target: str, task_
     save_chat_offset(offset_file, inbox.stat().st_size if inbox.exists() else 0)
 
 
+def chat_inbox_has_pending(root: Path, run_id: str, target: str, task_id: str | None = None) -> bool:
+    inbox = inbox_path(root, run_id, target, task_id)
+    if not inbox.exists():
+        return False
+    offset_file = chat_offset_path(run_dir(root, run_id), target, task_id)
+    offset = load_chat_offset(inbox, offset_file, from_start=False)
+    return inbox.stat().st_size > offset
+
+
+def chat_inbox_has_inflight_turn(root: Path, run_id: str, target: str, task_id: str | None = None) -> bool:
+    inbox = inbox_path(root, run_id, target, task_id)
+    if not inbox.exists():
+        return False
+    offset = load_chat_offset(inbox, chat_offset_path(run_dir(root, run_id), target, task_id), from_start=False)
+    if inbox.stat().st_size <= offset:
+        return False
+    checkpoint_path = chat_turn_checkpoint_path(run_dir(root, run_id), target, task_id)
+    try:
+        checkpoint = read_json(checkpoint_path)
+        source_offset = int(checkpoint.get("source_offset"))
+        item_offset = int(checkpoint.get("item_offset"))
+    except (OSError, TypeError, ValueError):
+        return False
+    return (
+        checkpoint.get("phase") in {"prepared", "executed"}
+        and source_offset == offset
+        and offset < item_offset <= inbox.stat().st_size
+    )
+
+
 def worker_backend_should_exit_after_turn(
     root: Path,
     run_id: str,
@@ -386,6 +416,8 @@ __all__ = [
     "acquire_chat_consumer",
     "advance_chat_offset_to_inbox_end",
     "chat_consumer_lock_path",
+    "chat_inbox_has_inflight_turn",
+    "chat_inbox_has_pending",
     "chat_offset_path",
     "chat_turn_checkpoint_path",
     "chat_turn_identity",

@@ -4,7 +4,7 @@ from contextlib import contextmanager
 from aha_cli import locking, platform, process_control
 import hashlib
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import shlex
 import signal
 import subprocess
@@ -49,6 +49,7 @@ CODEX_CONTEXT_DROP_MAX_CURRENT_PERCENT = 60.0
 CODEX_CONTEXT_DROP_MIN_DELTA_PERCENT = 20.0
 CODEX_CONTEXT_DROP_MIN_DELTA_TOKENS = 30_000
 PROCESS_AGENT_BACKENDS = {"codex", "claude"}
+_WINDOWS = os.name == "nt"
 
 # Platform-layer public interface (L4 分层固化): the backend process lifecycle
 # is a stable platform capability. Business modules consume these entrypoints;
@@ -64,6 +65,7 @@ __all__ = [
     "pid_is_running",
     "detect_runtime_context_compaction",
     "backend_status",
+    "ensure_backend_wsl_state",
     "mark_backend_stopped",
     "stop_all_backends",
     "stop_task_backends",
@@ -124,6 +126,42 @@ def _read_state(root: Path, run_id: str, target: str, task_id: str | None = None
 def _write_state(root: Path, run_id: str, target: str, state: dict, task_id: str | None = None) -> dict:
     write_json(backend_state_path(root, run_id, target, task_id), state)
     return state
+
+
+def _current_wsl_runtime_context(
+    *,
+    environ: Mapping[str, str] | None = None,
+    home: Path | None = None,
+) -> tuple[str | None, str | None]:
+    env = os.environ if environ is None else environ
+    distro = str(env.get("AHA_WSL_DISTRO") or env.get("WSL_DISTRO_NAME") or "").strip() or None
+    if not distro:
+        return None, None
+    native_home = str(home if home is not None else Path.home()).strip()
+    return distro, native_home if native_home.startswith("/") else None
+
+
+def ensure_backend_wsl_state(
+    root: Path,
+    run_id: str,
+    target: str = "main",
+    *,
+    task_id: str | None = None,
+) -> dict:
+    distro, native_home = _current_wsl_runtime_context()
+    if not distro:
+        return _read_state(root, run_id, target, task_id)
+    with locked_backend(root, run_id, target, task_id):
+        state = _read_state(root, run_id, target, task_id)
+        if not state:
+            return state
+        updated = dict(state)
+        updated["wsl_distro"] = distro
+        if native_home:
+            updated["wsl_native_home"] = native_home
+        if updated != state:
+            _write_state(root, run_id, target, updated, task_id)
+        return updated
 
 
 def _event_time(event: dict) -> str:
@@ -648,6 +686,39 @@ def _state_wsl_context(state: dict) -> tuple[str | None, str | None]:
     return distro, native_home
 
 
+def _state_pid_is_cross_os_uncheckable(state: dict) -> bool:
+    if not _WINDOWS:
+        return False
+    command = state.get("command")
+    executable = str(command[0] if isinstance(command, list) and command else "").replace("\\", "/")
+    executable_name = executable.rsplit("/", 1)[-1].lower()
+    if executable_name in {"wsl", "wsl.exe"}:
+        return False
+    return bool(str(state.get("wsl_distro") or "").strip() or executable.startswith("/"))
+
+
+def _task_wsl_context(root: Path, run_id: str, task_id: str | None) -> tuple[str | None, str | None]:
+    if not task_id:
+        return None, None
+    workspace = _task_workspace_path(root, run_id, task_id)
+    from aha_cli.services.wsl_backend import cached_wsl_backends
+    from aha_cli.store.ws_target import wsl_distro_and_path
+
+    distro, native_workspace = wsl_distro_and_path(workspace)
+    if not distro:
+        return None, None
+    cached = cached_wsl_backends(root, distro) or {}
+    native_home = str(cached.get("home") or "").strip() or None
+    if native_home:
+        return distro, native_home
+    parts = PurePosixPath(str(native_workspace or "")).parts
+    if len(parts) >= 3 and parts[0] == "/" and parts[1] == "home":
+        native_home = str(PurePosixPath(*parts[:3]))
+    elif parts[:2] == ("/", "root"):
+        native_home = "/root"
+    return distro, native_home
+
+
 def backend_status(root: Path, run_id: str, target: str = "main", task_id: str | None = None) -> dict:
     require_plan(root, run_id)
     target = target or "main"
@@ -669,7 +740,13 @@ def backend_status(root: Path, run_id: str, target: str = "main", task_id: str |
     # Linux pid that a Windows-side Web service cannot resolve with OpenProcess.
     # When the state is not explicitly stopped and a turn is in flight, the
     # backend is alive even though the pid is not checkable from this OS.
-    if not running and pid and str(state.get("status") or "").strip().lower() != "stopped" and activity.get("busy"):
+    if (
+        not running
+        and pid
+        and str(state.get("status") or "").strip().lower() != "stopped"
+        and activity.get("busy")
+        and _state_pid_is_cross_os_uncheckable(state)
+    ):
         running = True
     status = "busy" if running and activity["busy"] else "running" if running else "stopped"
     backend_name = _backend_name_from_state(state, discovered_backend or "unknown")
@@ -680,6 +757,10 @@ def backend_status(root: Path, run_id: str, target: str = "main", task_id: str |
     cfg = load_config(root)
     normalized_backend_name = str(backend_name).removesuffix("-chat")
     wsl_distro, wsl_native_home = _state_wsl_context(state)
+    if not wsl_distro or not wsl_native_home:
+        task_wsl_distro, task_wsl_native_home = _task_wsl_context(root, run_id, task_id)
+        wsl_distro = wsl_distro or task_wsl_distro
+        wsl_native_home = wsl_native_home or task_wsl_native_home
     if normalized_backend_name == "codex":
         runtime_context = _codex_runtime_context(
             root,
@@ -1371,9 +1452,13 @@ def start_backend(
                 "from_start": from_start,
                 "proxy_enabled": proxy_env is not None and bool(proxy_env),
             }
-            if launch_wsl:
-                state["wsl_distro"] = str(launch_wsl.get("distro") or "").strip() or None
-                state["wsl_native_home"] = str(launch_wsl.get("native_home") or "").strip() or None
+            current_wsl_distro, current_wsl_home = _current_wsl_runtime_context()
+            state_wsl_distro = str((launch_wsl or {}).get("distro") or "").strip() or current_wsl_distro
+            state_wsl_home = str((launch_wsl or {}).get("native_home") or "").strip() or current_wsl_home
+            if state_wsl_distro:
+                state["wsl_distro"] = state_wsl_distro
+            if state_wsl_home:
+                state["wsl_native_home"] = state_wsl_home
             _write_state(root, run_id, target, state, task_id)
             append_event(
                 root,

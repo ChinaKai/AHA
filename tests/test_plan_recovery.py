@@ -36,6 +36,23 @@ def plan_data(run_id: str, *, goal: str = "Recoverable run", counter: int = 0) -
 
 
 class PlanRecoveryTests(unittest.TestCase):
+    def test_verified_json_write_retries_transient_missing_path_after_replace(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "plan.json"
+            previous = {"id": "run-1", "status": "previous"}
+            updated = {"id": "run-1", "status": "next"}
+            write_json(path, previous)
+
+            with mock.patch(
+                "aha_cli.store.io.read_json",
+                side_effect=[FileNotFoundError(path), updated],
+            ) as read_mock:
+                write_json(path, updated, backup=True, verify=True)
+
+            self.assertEqual(read_mock.call_count, 2)
+            self.assertEqual(read_json(path), updated)
+            self.assertEqual(read_json(json_backup_path(path)), previous)
+
     def test_verified_json_write_restores_previous_value_after_verification_failure(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "plan.json"

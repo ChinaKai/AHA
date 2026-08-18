@@ -7,6 +7,7 @@ from aha_cli.domain.models import utc_now
 from aha_cli.services.agent_lifecycle import record_agent_interrupt
 from aha_cli.services.app_version import aha_version
 from aha_cli.services.backend_runtime import backend_status
+from aha_cli.services.chat_offsets import chat_inbox_has_inflight_turn
 from aha_cli.services.prompt_templates import render_prompt_template
 from aha_cli.store.filesystem import (
     append_event,
@@ -317,6 +318,9 @@ def recover_stale_running_agent(root: Path, run_id: str, task: dict, agent: dict
         or str(persisted_task.get("status") or "") not in STALE_RECOVERABLE_TASK_STATUSES
         or str(persisted_agent.get("status") or "") != "running"
     ):
+        return False
+
+    if chat_inbox_has_inflight_turn(root, run_id, agent_id, task_id):
         return False
 
     recovery_reason = "backend_process_stopped"

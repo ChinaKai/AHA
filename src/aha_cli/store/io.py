@@ -241,6 +241,17 @@ def _valid_json_bytes(path: Path) -> bytes | None:
     return payload if isinstance(value, dict) else None
 
 
+def _read_json_after_replace(path: Path) -> dict:
+    for attempt in range(len(_REPLACE_RETRY_DELAYS) + 1):
+        try:
+            return read_json(path)
+        except (OSError, ValueError):
+            if attempt >= len(_REPLACE_RETRY_DELAYS):
+                raise
+            time.sleep(_REPLACE_RETRY_DELAYS[attempt])
+    raise AssertionError("unreachable")
+
+
 def write_json(
     path: Path,
     data: dict,
@@ -254,7 +265,7 @@ def write_json(
             _write_bytes_atomically(json_backup_path(path), previous)
         try:
             _write_bytes_atomically(path, _json_payload(data))
-            if verify and read_json(path) != data:
+            if verify and _read_json_after_replace(path) != data:
                 raise OSError(f"JSON verification failed after writing {path}")
         except Exception:
             if previous is not None:

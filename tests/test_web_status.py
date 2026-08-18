@@ -9,10 +9,12 @@ from unittest import mock
 
 from aha_cli.cli import append_message, main, task_snapshot
 from aha_cli.services.chat import chat_offset_path, save_chat_offset
+from aha_cli.services.chat_offsets import chat_turn_checkpoint_path, load_chat_offset, save_chat_turn_preparation
 from aha_cli.store.event_views import conversation_events_page
 from aha_cli.store.filesystem import (
     add_agent,
     add_task,
+    append_jsonl,
     append_event,
     complete_task,
     event_path,
@@ -494,6 +496,47 @@ class WebStatusTests(unittest.TestCase):
         self.assertEqual(persisted["status"], "running")
         self.assertEqual(persisted["agents"][0]["status"], "running")
         self.assertNotIn("agent_status_recovered", event_log)
+
+    def test_stale_recovery_preserves_pending_inflight_message_for_watchdog(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Preserve inflight", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                set_task_status(root, run_id, "task-001", "running")
+                set_agent_status(root, run_id, "task-001", "main", "running")
+                inbox = inbox_path(root, run_id, "main", "task-001")
+                item = {"sender": "browser", "message": "pending", "task_id": "task-001"}
+                item_offset = append_jsonl(inbox, item)
+                offset_file = chat_offset_path(run_dir(root, run_id), "main", "task-001")
+                save_chat_offset(offset_file, 0)
+                save_chat_turn_preparation(
+                    chat_turn_checkpoint_path(run_dir(root, run_id), "main", "task-001"),
+                    0,
+                    item_offset,
+                    item,
+                )
+                task = status_snapshot(root, run_id)["tasks"][0]
+                agent = task["agents"][0]
+
+                with mock.patch("aha_cli.web.status.backend_status", return_value={"status": "stopped", "pid": None}):
+                    recovered = recover_stale_running_agent(
+                        root,
+                        run_id,
+                        task,
+                        agent,
+                        {"status": "stopped", "pid": None},
+                    )
+
+                persisted = task_snapshot(root, run_id, "task-001")["task"]
+                persisted_offset = load_chat_offset(inbox, offset_file, from_start=False)
+
+        self.assertFalse(recovered)
+        self.assertEqual(persisted["status"], "running")
+        self.assertEqual(persisted["agents"][0]["status"], "running")
+        self.assertEqual(persisted_offset, 0)
 
     def test_stale_recovery_does_not_reopen_terminal_task_from_old_snapshot(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

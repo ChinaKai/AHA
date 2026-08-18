@@ -8,8 +8,9 @@ that jumped past the pending messages — leaves every new message unanswered
 until a user manually resets the session.
 
 This module is the L3 self-healing layer: a periodic scan finds agents whose
-backend reports ``running`` while their inbox holds pending messages with no
-recent activity, and force-restarts them so the pending work is consumed.
+backend is not consuming pending inbox messages with no recent activity, and
+force-restarts them so the pending work is consumed. This includes a worker
+that crashed before changing its lifecycle from ``pending`` to ``running``.
 """
 from __future__ import annotations
 
@@ -18,10 +19,10 @@ from pathlib import Path
 
 from aha_cli.domain.models import utc_now
 from aha_cli.services.backend_runtime import backend_status, start_backend, stop_backend
-from aha_cli.services.chat_offsets import chat_offset_path, load_chat_offset
+from aha_cli.services.chat_offsets import chat_inbox_has_inflight_turn, chat_inbox_has_pending
 from aha_cli.store.agents import update_agent_runtime
 from aha_cli.store.filesystem import append_event, status_snapshot
-from aha_cli.store.paths import inbox_path, run_dir
+from aha_cli.store.paths import inbox_path
 from aha_cli.store.runs import list_run_summaries
 
 
@@ -57,17 +58,16 @@ def _seconds_since(ts: datetime | None, *, now: datetime | None = None) -> float
     return (_coerce_aware(reference) - _coerce_aware(ts)).total_seconds()
 
 
-def _agent_has_pending_inbox(root: Path, run_id: str, task_id: str, target: str) -> bool:
+def _pending_inbox_mtime(root: Path, run_id: str, task_id: str, target: str) -> datetime | None:
     inbox = inbox_path(root, run_id, target, task_id)
-    if not inbox.exists():
-        return False
-    offset_file = chat_offset_path(run_dir(root, run_id), target, task_id)
-    offset = load_chat_offset(inbox, offset_file, from_start=False)
-    return inbox.stat().st_size > offset
+    try:
+        return datetime.fromtimestamp(inbox.stat().st_mtime, tz=timezone.utc)
+    except OSError:
+        return None
 
 
 def _backend_last_activity(state: dict) -> datetime | None:
-    activity = state.get("activity") if isinstance(state.get("activity"), dict) else {}
+    activity = state.get("activity") if isinstance(state.get("activity"), dict) else state
     candidates = (
         activity.get("last_started_at"),
         activity.get("last_finished_at"),
@@ -90,28 +90,45 @@ def stuck_agent_reason(
 ) -> str | None:
     """Return a recovery reason when ``agent``'s backend is stuck, else None.
 
-    Stuck means the backend reports ``running`` (the process is alive) but the
-    inbox has pending messages that have not been consumed for longer than
-    ``WATCHDOG_STUCK_SECONDS``. A ``busy`` backend is actively working (an
-    ``agent_started`` without a matching ``agent_finished``) and is left alone.
+    Stuck means the inbox has pending messages that have not been consumed for
+    longer than ``WATCHDOG_STUCK_SECONDS`` and either a ``running`` lifecycle
+    has an idle ``running`` backend, or a ``pending`` lifecycle has a stopped
+    backend after a failed launch. A ``busy`` backend is left alone.
     """
     task_id = str(task.get("id") or "")
     agent_id = str(agent.get("id") or "main")
     if not task_id or not agent_id:
         return None
-    if str(agent.get("status") or "") != "running":
+    if str(task.get("status") or "") != "running":
+        return None
+    agent_status = str(agent.get("status") or "")
+    if agent_status not in {"pending", "running"}:
         return None
     backend_status_value = str(state.get("status") or "stopped").lower()
     if backend_status_value == "busy":
         return None
-    if backend_status_value != "running":
+    if agent_status == "running" and backend_status_value not in {"running", "stopped"}:
         return None
-    if not _agent_has_pending_inbox(root, run_id, task_id, agent_id):
+    if agent_status == "pending" and backend_status_value != "stopped":
+        return None
+    if not chat_inbox_has_pending(root, run_id, agent_id, task_id):
+        return None
+    if (
+        agent_status == "running"
+        and backend_status_value == "stopped"
+        and not chat_inbox_has_inflight_turn(root, run_id, agent_id, task_id)
+    ):
         return None
     last_activity = _backend_last_activity(state)
+    if last_activity is None and agent_status == "pending":
+        last_activity = _pending_inbox_mtime(root, run_id, task_id, agent_id)
     idle = _seconds_since(last_activity, now=now)
     if idle is None or idle < WATCHDOG_STUCK_SECONDS:
         return None
+    if agent_status == "pending":
+        return "backend_stopped_with_pending_inbox"
+    if backend_status_value == "stopped":
+        return "backend_stopped_with_inflight_inbox"
     return "backend_running_but_not_consuming_inbox"
 
 
@@ -199,7 +216,7 @@ def _recent_watchdog_recoveries(root: Path, run_id: str, *, limit: int = 200) ->
 
 
 def scan_run(root: Path, run_id: str, *, now: datetime | None = None) -> dict:
-    """Scan one run's running agents and recover stuck backends.
+    """Scan one run's active agents and recover stuck backends.
 
     Returns a summary with ``checked`` and ``recovered`` entries. ``now`` is
     injectable for tests; defaults to the current wall clock.
@@ -214,7 +231,7 @@ def scan_run(root: Path, run_id: str, *, now: datetime | None = None) -> dict:
         task_id = str(task.get("id") or "")
         for agent in task.get("agents", []):
             agent_id = str(agent.get("id") or "main")
-            if str(agent.get("status") or "") != "running":
+            if str(agent.get("status") or "") not in {"pending", "running"}:
                 continue
             checked += 1
             state = backend_status(root, run_id, agent_id, task_id=task_id)

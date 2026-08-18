@@ -22,6 +22,7 @@ from aha_cli.services.chat import (
     load_chat_offset,
     save_chat_offset,
 )
+from aha_cli.services.chat_offsets import chat_inbox_has_inflight_turn, chat_turn_checkpoint_path
 from aha_cli.services.context_planner import (
     _project_kind_reference,
     _related_project_references,
@@ -145,6 +146,40 @@ class ChatPromptTests(unittest.TestCase):
                 scoped_offset = chat_offset_path(run_dir(root, run_id), "main", "task-001")
                 self.assertTrue(scoped_offset.exists())
                 self.assertFalse(chat_offset_path(run_dir(root, run_id), "main", "task-002").exists())
+
+    def test_single_message_persists_prepared_checkpoint_before_backend_execution(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Prepare single message", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                inbox = inbox_path(root, run_id, "main", "task-001")
+                offset_file = chat_offset_path(run_dir(root, run_id), "main", "task-001")
+                source_offset = inbox.stat().st_size if inbox.exists() else 0
+                save_chat_offset(offset_file, source_offset)
+                append_message(root, run_id, "main", "single request", sender="browser", task_id="task-001", role="main")
+                item_offset = inbox.stat().st_size
+                checkpoint_file = chat_turn_checkpoint_path(run_dir(root, run_id), "main", "task-001")
+
+                def terminate_backend(*_args, **_kwargs):
+                    checkpoint = read_json(checkpoint_file)
+                    self.assertEqual(checkpoint["phase"], "prepared")
+                    self.assertEqual(checkpoint["source_offset"], source_offset)
+                    self.assertEqual(checkpoint["item_offset"], item_offset)
+                    self.assertEqual(checkpoint["item"]["message"], "single request")
+                    raise SystemExit(77)
+
+                with mock.patch("aha_cli.services.chat.run_codex_exec", side_effect=terminate_backend):
+                    with self.assertRaises(SystemExit) as raised:
+                        self.run_cli("codex-chat", run_id, "main", "--task-id", "task-001", "--once")
+
+                checkpoint = read_json(checkpoint_file)
+                self.assertEqual(raised.exception.code, 77)
+                self.assertEqual(checkpoint["phase"], "prepared")
+                self.assertEqual(read_json(offset_file)["offset"], source_offset)
+                self.assertTrue(chat_inbox_has_inflight_turn(root, run_id, "main", "task-001"))
 
     def test_chat_turn_reuses_agent_result_after_crash_before_reply(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
