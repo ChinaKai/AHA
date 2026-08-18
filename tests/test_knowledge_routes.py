@@ -131,14 +131,14 @@ def test_graph_reuses_wikilink_index_and_bounds_nodes(tmp_path: Path):
     assert graph["shown"] == 3
     assert not graph["truncated"]
     # Both linked entries appear as nodes; the wikilink edge is present.
-    slugs = {node["id"] for node in graph["nodes"]}
-    assert "cross-os" in slugs and "wsl-backend" in slugs
-    cross_os = next(node for node in graph["nodes"] if node["id"] == "cross-os")
+    cross_os = next(node for node in graph["nodes"] if node["slug"] == "cross-os")
+    wsl_backend = next(node for node in graph["nodes"] if node["slug"] == "wsl-backend")
+    assert cross_os["id"] != wsl_backend["id"]
     assert cross_os["tags"] == ["backend"]
     assert cross_os["attachments"] == [
         {"path": "assets/cross-os/diagram.png", "name": "diagram.png", "mime": "image/png"}
     ]
-    assert any(link["source"] == "cross-os" and link["target"] == "wsl-backend" and link["type"] == "wikilink"
+    assert any(link["source"] == cross_os["id"] and link["target"] == wsl_backend["id"] and link["type"] == "wikilink"
                for link in graph["links"])
 
     # Bounded: max_nodes=1 returns only the first node and marks truncation.
@@ -156,6 +156,43 @@ def test_graph_reuses_wikilink_index_and_bounds_nodes(tmp_path: Path):
     proj = _get(home, "/api/kb/graph", {"project_key": ["git-abc"]})
     assert proj["total_entries"] == 2
     assert all(node.get("scope") == "project" for node in proj["nodes"])
+
+
+def test_graph_uses_unique_node_ids_for_duplicate_project_slugs(tmp_path: Path):
+    home = _setup(tmp_path)
+    cfg = load_config(home)
+    first_path = write_entry(
+        home,
+        config=cfg,
+        scope="project",
+        kind="navigation",
+        project_key_value="project-one",
+        title="Project One",
+        body="one",
+        slug="index",
+    )
+    write_entry(
+        home,
+        config=cfg,
+        scope="project",
+        kind="navigation",
+        project_key_value="project-two",
+        title="Project Two",
+        body="two",
+        slug="index",
+    )
+    first_meta, first_body = parse_entry(first_path.read_text(encoding="utf-8"))
+    first_meta.pop("id", None)
+    first_path.write_text(serialize_entry(first_meta, first_body), encoding="utf-8")
+
+    graph = _get(home, "/api/kb/graph", {"max_nodes": ["0"]})
+    indexes = [node for node in graph["nodes"] if node.get("slug") == "index"]
+    assert len(indexes) == 2
+    assert len({node["id"] for node in indexes}) == 2
+    assert any(str(node["id"]).startswith("path:projects/project-one/") for node in indexes)
+    legacy_node = next(node for node in indexes if str(node["id"]).startswith("path:"))
+    entry = _get(home, "/api/kb/entry", {"id": [legacy_node["id"]]})
+    assert entry["meta"]["title"] == "Project One"
 
 
 def test_project_identity_api_binds_workspace_to_existing_synced_project(tmp_path: Path):

@@ -651,13 +651,18 @@ def _prefer_full_entry(existing: dict, candidate: dict) -> dict:
 def _find_entry_for_read(root: Path, cfg: dict, identifier: str) -> dict | None:
     slug_match: dict | None = None
     id_match: dict | None = None
+    path_match: dict | None = None
+    repo = knowledge_root(root, cfg)
     for entry in iter_all_entries(root, cfg):
         meta = entry.get("meta", {})
         if identifier == meta.get("slug"):
             slug_match = entry if slug_match is None else _prefer_full_entry(slug_match, entry)
         if identifier == meta.get("id"):
             id_match = entry if id_match is None else _prefer_full_entry(id_match, entry)
-    return slug_match or id_match
+        relative_path = _entry_relative_path(entry, repo)
+        if relative_path and identifier in {relative_path, f"path:{relative_path}"}:
+            path_match = entry if path_match is None else _prefer_full_entry(path_match, entry)
+    return id_match or path_match or slug_match
 
 
 def _navigation_summaries(root: Path, cfg: dict, project_key_value: str | None = None) -> list[dict]:
@@ -1023,14 +1028,43 @@ def _kb_graph_payload(root: Path, cfg: dict, *, max_nodes: int = 300, project_ke
 
     filtered.sort(key=priority)
     bounded = filtered if max_nodes <= 0 else filtered[:max_nodes]
-    bounded_slugs = {str(e.get("meta", {}).get("slug") or "") for e in bounded}
     repo = knowledge_root(root, cfg)
 
     nodes = []
+    graph_entries: list[tuple[dict, str]] = []
+    node_id_by_scope_slug: dict[tuple[str, str, str], str] = {}
+    node_ids_by_slug: dict[str, list[str]] = {}
+    used_node_ids: set[str] = set()
     for entry in bounded:
         meta = entry.get("meta", {})
+        slug = str(meta.get("slug") or "")
+        relative_path = _entry_relative_path(entry, repo)
+        node_id = str(meta.get("id") or "").strip()
+        if not node_id or node_id in used_node_ids:
+            node_id = f"path:{relative_path}" if relative_path else ":".join([
+                "entry",
+                str(meta.get("scope") or ""),
+                str(meta.get("project_key") or ""),
+                str(meta.get("type") or ""),
+                slug,
+            ])
+        base_node_id = node_id
+        suffix = 2
+        while node_id in used_node_ids:
+            node_id = f"{base_node_id}:{suffix}"
+            suffix += 1
+        used_node_ids.add(node_id)
+        graph_entries.append((entry, node_id))
+        identity_key = (
+            str(meta.get("scope") or ""),
+            str(meta.get("project_key") or "") if meta.get("scope") == "project" else "",
+            slug,
+        )
+        node_id_by_scope_slug.setdefault(identity_key, node_id)
+        node_ids_by_slug.setdefault(slug, []).append(node_id)
         nodes.append({
-            "id": str(meta.get("slug") or ""),
+            "id": node_id,
+            "slug": slug,
             "title": meta.get("title") or "",
             "kind": meta.get("type") or "",
             "scope": meta.get("scope") or "",
@@ -1092,17 +1126,26 @@ def _kb_graph_payload(root: Path, cfg: dict, *, max_nodes: int = 300, project_ke
 
     links = []
     seen_links: set[tuple[str, str]] = set()
-    for entry in bounded:
-        src = str(entry.get("meta", {}).get("slug") or "")
+    for entry, src in graph_entries:
+        source_meta = entry.get("meta", {})
+        source_scope = str(source_meta.get("scope") or "")
+        source_project = str(source_meta.get("project_key") or "") if source_scope == "project" else ""
         for target in (entry.get("meta", {}).get("links") or []):
-            target = str(target or "")
-            if not target or target not in bounded_slugs:
+            target_slug = str(target or "")
+            if not target_slug:
                 continue
-            key = (src, target)
+            target_id = node_id_by_scope_slug.get((source_scope, source_project, target_slug))
+            if target_id is None:
+                candidates = node_ids_by_slug.get(target_slug, [])
+                if len(candidates) == 1:
+                    target_id = candidates[0]
+            if target_id is None:
+                continue
+            key = (src, target_id)
             if key in seen_links:
                 continue
             seen_links.add(key)
-            links.append({"source": src, "target": target, "type": "wikilink"})
+            links.append({"source": src, "target": target_id, "type": "wikilink"})
     # Hub links from the "skills" node to each skill node.
     for skill_node_id in sorted(skill_node_ids - {"skills"}):
         key = ("skills", skill_node_id)

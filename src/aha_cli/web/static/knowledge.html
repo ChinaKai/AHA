@@ -1233,6 +1233,8 @@
       panX: 0,
       panY: 0,
       hover: -1,
+      selectedNodeId: null,
+      persistentLabelIds: new Set(),
       search: "",
       colorBy: "kind",
       settings: readGraphSettings(),
@@ -1293,6 +1295,14 @@
       const base = 6;
       const count = Number(node.backlink_count || 0);
       return Math.min(24, (base + count * 1.6) * graphState.settings.nodeScale);
+    }
+
+    function updateGraphPersistentLabels() {
+      const ranked = [...(graphState.nodes || [])]
+        .filter(node => !node.virtual && Number(node.backlink_count || 0) >= 3)
+        .sort((left, right) => Number(right.backlink_count || 0) - Number(left.backlink_count || 0)
+          || String(left.title || left.id || "").localeCompare(String(right.title || right.id || "")));
+      graphState.persistentLabelIds = new Set(ranked.slice(0, 6).map(node => node.id));
     }
 
     function graphMatchesFilter(node) {
@@ -1445,6 +1455,7 @@
       graphState.nodes = derived.nodes;
       graphState.links = derived.links;
       graphState.nodeMap = new Map(graphState.nodes.map(node => [node.id, node]));
+      updateGraphPersistentLabels();
       renderGraphFileTree();
       renderGraphColorLegend();
       updateGraphStatus();
@@ -1725,6 +1736,16 @@
           velocities.get(limited[i].id).y += fy;
           velocities.get(limited[j].id).x -= fx;
           velocities.get(limited[j].id).y -= fy;
+          const collisionDistance = graphNodeRadius(limited[i]) + graphNodeRadius(limited[j]) + 8;
+          if (dist < collisionDistance) {
+            const collisionForce = (collisionDistance - dist) * 0.12;
+            const collisionX = (dx / dist) * collisionForce;
+            const collisionY = (dy / dist) * collisionForce;
+            velocities.get(limited[i].id).x += collisionX;
+            velocities.get(limited[i].id).y += collisionY;
+            velocities.get(limited[j].id).x -= collisionX;
+            velocities.get(limited[j].id).y -= collisionY;
+          }
         }
       }
       // Spring attraction along links.
@@ -1802,6 +1823,7 @@
           if (link.target === hoverId) hoverNeighbors.add(link.source);
         }
       }
+      const labelCandidates = [];
 
       // Links.
       ctx.lineWidth = graphState.settings.linkWidth;
@@ -1841,16 +1863,44 @@
           ctx.stroke();
         }
         ctx.globalAlpha = 1;
-        // Label for larger nodes / hover.
-        if (hoverId === node.id || radius >= 9) {
-          const textColor = getComputedStyle(canvas).getPropertyValue("--color-text").trim() || "#222";
-          ctx.globalAlpha = alpha * graphState.settings.textOpacity;
-          ctx.fillStyle = textColor;
-          ctx.font = "10px sans-serif";
-          ctx.fillText(String(node.title || node.id || "").slice(0, 24), p.x + radius + 3, p.y + 3);
-          ctx.globalAlpha = 1;
+        const isHovered = hoverId === node.id;
+        const isSelected = graphState.selectedNodeId === node.id;
+        const isPersistent = graphState.persistentLabelIds.has(node.id);
+        const searchMatch = Boolean(graphState.search) && matches;
+        const zoomVisible = graphState.scale >= 1.6 && matches && !node.virtual;
+        if (isHovered || (!hoverId && (isSelected || isPersistent || searchMatch || zoomVisible))) {
+          labelCandidates.push({
+            node,
+            position: p,
+            radius,
+            alpha,
+            priority: isHovered ? 5 : isSelected ? 4 : searchMatch ? 2 : isPersistent ? 1 : 0,
+          });
         }
       }
+
+      const textColor = getComputedStyle(canvas).getPropertyValue("--color-text").trim() || "#222";
+      const fontSize = 10 / Math.max(1, graphState.scale);
+      ctx.font = `${fontSize}px sans-serif`;
+      ctx.fillStyle = textColor;
+      const occupiedLabels = [];
+      labelCandidates.sort((left, right) => right.priority - left.priority
+        || Number(right.node.backlink_count || 0) - Number(left.node.backlink_count || 0));
+      for (const candidate of labelCandidates) {
+        const text = String(candidate.node.title || candidate.node.id || "").slice(0, 24);
+        const x = candidate.position.x + candidate.radius + 3;
+        const y = candidate.position.y + 3;
+        const box = { x, y: y - fontSize, width: ctx.measureText(text).width, height: fontSize + 3 };
+        const overlaps = occupiedLabels.some(other => box.x < other.x + other.width
+          && box.x + box.width > other.x
+          && box.y < other.y + other.height
+          && box.y + box.height > other.y);
+        if (overlaps) continue;
+        occupiedLabels.push(box);
+        ctx.globalAlpha = candidate.alpha * graphState.settings.textOpacity;
+        ctx.fillText(text, x, y);
+      }
+      ctx.globalAlpha = 1;
       ctx.restore();
     }
 
@@ -1980,7 +2030,10 @@
         graphState.dragIndex = -1;
         panning = false;
         canvas.classList.remove("dragging");
-        if (node) void openGraphNode(node);
+        if (node) {
+          graphState.selectedNodeId = node.id;
+          void openGraphNode(node);
+        }
       };
       canvas.addEventListener("pointerup", () => endDrag(true));
       canvas.addEventListener("pointerleave", () => endDrag(false));
