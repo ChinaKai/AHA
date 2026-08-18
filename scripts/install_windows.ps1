@@ -8,6 +8,8 @@ param(
     [string]$DownloadUrl = "https://github.com/ChinaKai/AHA/releases/latest/download/aha",
     [string]$Artifact = "",
     [switch]$EnableStartup,
+    [System.Management.Automation.PSCredential]$StartupCredential = $null,
+    [switch]$Uninstall,
     [switch]$NoShortcut,
     [switch]$NoStart,
     [switch]$NoAuth,
@@ -72,7 +74,8 @@ function Write-AhaTrayConfig {
         [string]$HomePath,
         [string]$BindAddress,
         [int]$WebPort,
-        [string]$WebTokenFile
+        [string]$WebTokenFile,
+        [string]$StartupTaskName
     )
 
     $settings = [ordered]@{
@@ -80,10 +83,199 @@ function Write-AhaTrayConfig {
         bind = $BindAddress
         port = $WebPort
         web_token_file = $WebTokenFile
+        startup_task_name = $StartupTaskName
     }
     $json = $settings | ConvertTo-Json
     $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
     [System.IO.File]::WriteAllText($Path, $json + [Environment]::NewLine, $utf8NoBom)
+}
+
+function Quote-PowerShellLiteral {
+    param([string]$Value)
+    return "'" + $Value.Replace("'", "''") + "'"
+}
+
+function Test-IsAdministrator {
+    $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+    $principal = New-Object Security.Principal.WindowsPrincipal($identity)
+    return $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+}
+
+function Get-AhaStartupTask {
+    param(
+        [string]$TaskPath,
+        [string]$TaskName
+    )
+    return Get-ScheduledTask -TaskPath $TaskPath -TaskName $TaskName -ErrorAction SilentlyContinue
+}
+
+function Resolve-AhaStartupCredential {
+    param([System.Management.Automation.PSCredential]$Credential)
+
+    $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+    if ($null -eq $Credential) {
+        $Credential = Get-Credential -UserName $identity.Name -Message "AHA needs the current Windows account password to start before sign-in. The Task Scheduler stores it as an LSA-protected secret."
+    }
+    if ($null -eq $Credential) {
+        throw "A startup credential is required"
+    }
+    try {
+        $account = New-Object Security.Principal.NTAccount($Credential.UserName)
+        $credentialSid = $account.Translate([Security.Principal.SecurityIdentifier]).Value
+    }
+    catch {
+        throw "Unable to resolve startup account: $($Credential.UserName)"
+    }
+    if ($credentialSid -ne $identity.User.Value) {
+        throw "The startup task must use the current Windows account so it can access the selected AHA_HOME"
+    }
+    return $Credential
+}
+
+function Write-AhaServiceLauncher {
+    param(
+        [string]$Path,
+        [string]$PythonPath,
+        [string]$ArtifactPath,
+        [string]$ConfigPath
+    )
+
+    $pythonLiteral = Quote-PowerShellLiteral $PythonPath
+    $artifactLiteral = Quote-PowerShellLiteral $ArtifactPath
+    $configLiteral = Quote-PowerShellLiteral $ConfigPath
+    $content = @"
+`$ErrorActionPreference = "Stop"
+`$config = Get-Content -LiteralPath $configLiteral -Raw | ConvertFrom-Json
+`$arguments = @(
+    $artifactLiteral,
+    "--home", [string]`$config.aha_home,
+    "ui",
+    "--host", [string]`$config.bind,
+    "--port", [string]`$config.port,
+    "--poll-interval", "1000"
+)
+if (-not [string]::IsNullOrWhiteSpace([string]`$config.web_token_file)) {
+    `$arguments += @("--auth-token-file", [string]`$config.web_token_file)
+}
+& $pythonLiteral @arguments
+exit `$LASTEXITCODE
+"@
+    $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+    [System.IO.File]::WriteAllText($Path, $content, $utf8NoBom)
+}
+
+function Install-AhaStartupTask {
+    param(
+        [string]$TaskPath,
+        [string]$TaskName,
+        [string]$LauncherPath,
+        [string]$WorkingDirectory,
+        [System.Management.Automation.PSCredential]$Credential
+    )
+
+    if (-not (Test-IsAdministrator)) {
+        throw "-EnableStartup requires an elevated PowerShell because an AtStartup task is machine-triggered"
+    }
+    $actionArguments = '-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File ' + (Quote-StartProcessArgument $LauncherPath)
+    $action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument $actionArguments -WorkingDirectory $WorkingDirectory
+    $trigger = New-ScheduledTaskTrigger -AtStartup
+    $settings = New-ScheduledTaskSettingsSet `
+        -StartWhenAvailable `
+        -RestartCount 3 `
+        -RestartInterval (New-TimeSpan -Minutes 1) `
+        -ExecutionTimeLimit ([TimeSpan]::Zero) `
+        -AllowStartIfOnBatteries `
+        -DontStopIfGoingOnBatteries `
+        -MultipleInstances IgnoreNew
+    $existing = Get-AhaStartupTask -TaskPath $TaskPath -TaskName $TaskName
+    if ($null -ne $existing) {
+        if ($null -ne $Credential) {
+            $Credential = Resolve-AhaStartupCredential $Credential
+            $password = $Credential.GetNetworkCredential().Password
+            Register-ScheduledTask `
+                -TaskPath $TaskPath `
+                -TaskName $TaskName `
+                -Action $action `
+                -Trigger $trigger `
+                -Settings $settings `
+                -Description "Start the AHA Web service before Windows sign-in" `
+                -User $Credential.UserName `
+                -Password $password `
+                -RunLevel Limited `
+                -Force | Out-Null
+            return
+        }
+        Set-ScheduledTask `
+            -TaskPath $TaskPath `
+            -TaskName $TaskName `
+            -Action $action `
+            -Trigger $trigger `
+            -Settings $settings | Out-Null
+        Enable-ScheduledTask -TaskPath $TaskPath -TaskName $TaskName | Out-Null
+        return
+    }
+    $Credential = Resolve-AhaStartupCredential $Credential
+    $password = $Credential.GetNetworkCredential().Password
+    Register-ScheduledTask `
+        -TaskPath $TaskPath `
+        -TaskName $TaskName `
+        -Action $action `
+        -Trigger $trigger `
+        -Settings $settings `
+        -Description "Start the AHA Web service before Windows sign-in" `
+        -User $Credential.UserName `
+        -Password $password `
+        -RunLevel Limited `
+        -Force | Out-Null
+}
+
+function Set-AhaLoginStartup {
+    param(
+        [bool]$Enabled,
+        [string]$Command
+    )
+
+    $runKey = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run"
+    if ($Enabled) {
+        New-Item -Path $runKey -Force | Out-Null
+        New-ItemProperty -Path $runKey -Name "AHA" -Value $Command -PropertyType String -Force | Out-Null
+        return
+    }
+    Remove-ItemProperty -Path $runKey -Name "AHA" -ErrorAction SilentlyContinue
+}
+
+function Remove-AhaStartupTask {
+    param(
+        [string]$TaskPath,
+        [string]$TaskName
+    )
+
+    $existing = Get-AhaStartupTask -TaskPath $TaskPath -TaskName $TaskName
+    if ($null -eq $existing) {
+        return
+    }
+    if (-not (Test-IsAdministrator)) {
+        throw "Uninstalling the AHA startup task requires an elevated PowerShell"
+    }
+    Stop-ScheduledTask -TaskPath $TaskPath -TaskName $TaskName -ErrorAction SilentlyContinue
+    Unregister-ScheduledTask -TaskPath $TaskPath -TaskName $TaskName -Confirm:$false
+}
+
+function Stop-AhaStartupTask {
+    param(
+        [string]$TaskPath,
+        [string]$TaskName
+    )
+
+    Stop-ScheduledTask -TaskPath $TaskPath -TaskName $TaskName -ErrorAction SilentlyContinue
+    for ($attempt = 0; $attempt -lt 50; $attempt++) {
+        $task = Get-AhaStartupTask -TaskPath $TaskPath -TaskName $TaskName
+        if ($null -eq $task -or $task.State -ne "Running") {
+            return
+        }
+        Start-Sleep -Milliseconds 100
+    }
+    throw "The existing AHA startup task did not stop within five seconds"
 }
 
 function Install-AhaIcon {
@@ -153,6 +345,37 @@ function Install-AhaStartMenuShortcut {
     return $shortcutPath
 }
 
+$StartupTaskPath = "\"
+$StartupTaskName = "AHA Web"
+$StartupTaskFullName = "\AHA Web"
+$Programs = [Environment]::GetFolderPath([Environment+SpecialFolder]::Programs)
+$ShortcutDirectory = if ([string]::IsNullOrWhiteSpace($Programs)) { "" } else { Join-Path $Programs "AHA" }
+$ShortcutPath = if ($ShortcutDirectory) { Join-Path $ShortcutDirectory "AHA.lnk" } else { "" }
+
+if ($Uninstall) {
+    Remove-AhaStartupTask -TaskPath $StartupTaskPath -TaskName $StartupTaskName
+    Set-AhaLoginStartup -Enabled $false -Command ""
+    if ($ShortcutPath) {
+        Remove-Item -LiteralPath $ShortcutPath -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $ShortcutDirectory -Force -ErrorAction SilentlyContinue
+    }
+    if (Test-Path -LiteralPath $AhaDir) {
+        Remove-Item -LiteralPath $AhaDir -Recurse -Force
+    }
+    Write-Host "Removed AHA startup task, login startup, shortcut, and installed files"
+    Write-Host "AHA home retained: $AhaHome"
+    return
+}
+
+$ExistingStartupTask = Get-AhaStartupTask -TaskPath $StartupTaskPath -TaskName $StartupTaskName
+$StartupRequested = $EnableStartup -or ($null -ne $ExistingStartupTask)
+if ($StartupRequested -and -not (Test-IsAdministrator)) {
+    throw "Installing or upgrading pre-login startup requires an elevated PowerShell"
+}
+if ($null -ne $ExistingStartupTask) {
+    Stop-AhaStartupTask -TaskPath $StartupTaskPath -TaskName $StartupTaskName
+}
+
 $PythonExe = Resolve-AhaPython -Requested $Python
 $PythonVersion = (& $PythonExe -c "import sys; print('.'.join(map(str, sys.version_info[:3])))" 2>&1 | Out-String).Trim()
 if ($LASTEXITCODE -ne 0 -or [Version]$PythonVersion -lt [Version]"3.10") {
@@ -201,15 +424,31 @@ if (-not $NoAuth -and -not (Test-Path -LiteralPath $TokenFile -PathType Leaf)) {
     Set-Content -LiteralPath $TokenFile -Value (New-WebToken) -Encoding ASCII -NoNewline
 }
 
-if ($EnableStartup -and $NoStart) {
-    throw "-EnableStartup requires the tray to start; remove -NoStart"
+$TrayConfig = Join-Path $AhaDir "tray.json"
+$ServiceLauncher = Join-Path $AhaDir "start-web.ps1"
+$ConfiguredTokenFile = if ($NoAuth) { "" } else { $TokenFile }
+$ConfiguredTaskName = if ($StartupRequested) { $StartupTaskFullName } else { "" }
+Write-AhaTrayConfig `
+    -Path $TrayConfig `
+    -HomePath $AhaHome `
+    -BindAddress $Bind `
+    -WebPort $Port `
+    -WebTokenFile $ConfiguredTokenFile `
+    -StartupTaskName $ConfiguredTaskName
+Write-AhaServiceLauncher -Path $ServiceLauncher -PythonPath $PythonExe -ArtifactPath $InstallBin -ConfigPath $TrayConfig
+
+if ($StartupRequested) {
+    Install-AhaStartupTask `
+        -TaskPath $StartupTaskPath `
+        -TaskName $StartupTaskName `
+        -LauncherPath $ServiceLauncher `
+        -WorkingDirectory $AhaDir `
+        -Credential $StartupCredential
+    $LoginCommand = (Quote-StartProcessArgument $PythonwExe) + " " + (Quote-StartProcessArgument $InstallBin) + " tray"
+    Set-AhaLoginStartup -Enabled $true -Command $LoginCommand
+    Start-ScheduledTask -TaskPath $StartupTaskPath -TaskName $StartupTaskName
 }
 
-$TrayConfig = Join-Path $AhaDir "tray.json"
-$ConfiguredTokenFile = if ($NoAuth) { "" } else { $TokenFile }
-Write-AhaTrayConfig -Path $TrayConfig -HomePath $AhaHome -BindAddress $Bind -WebPort $Port -WebTokenFile $ConfiguredTokenFile
-
-$ShortcutPath = ""
 if (-not $NoShortcut) {
     $IconPath = Join-Path $AhaDir "aha.ico"
     Install-AhaIcon -ArtifactPath $InstallBin -Destination $IconPath | Out-Null
@@ -235,9 +474,6 @@ if (-not $NoStart) {
     if (-not $NoAuth) {
         $TrayArguments += @("--auth-token-file", (Quote-StartProcessArgument $TokenFile))
     }
-    if ($EnableStartup) {
-        $TrayArguments += "--enable-startup"
-    }
     Start-Process -FilePath $PythonwExe -ArgumentList $TrayArguments -WindowStyle Hidden
 }
 
@@ -246,5 +482,6 @@ Write-Host "AHA home: $AhaHome"
 Write-Host "Bind: $Bind"
 Write-Host "Port: $Port"
 Write-Host "Tray started: $(-not $NoStart)"
-Write-Host "Startup enabled: $EnableStartup"
+Write-Host "Pre-login startup enabled: $StartupRequested"
+Write-Host "Startup task: $ConfiguredTaskName"
 Write-Host "Start Menu shortcut: $ShortcutPath"

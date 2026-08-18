@@ -60,7 +60,13 @@ class WindowsTrayTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             config_path = root / "local" / "tray.json"
-            settings = windows_tray.TraySettings(root / "aha-home", "0.0.0.0", 18788, "secret-token")
+            settings = windows_tray.TraySettings(
+                root / "aha-home",
+                "0.0.0.0",
+                18788,
+                "secret-token",
+                r"\AHA Web",
+            )
 
             windows_tray.save_tray_settings(settings, config_path)
             loaded = windows_tray.load_tray_settings(config_path)
@@ -68,6 +74,7 @@ class WindowsTrayTests(unittest.TestCase):
 
             self.assertEqual(loaded, settings.normalized())
             self.assertNotIn("secret-token", config_text)
+            self.assertIn(r'"startup_task_name":"\\AHAWeb"', config_text.replace(" ", "").replace("\n", ""))
             self.assertEqual(json.loads(config_text)["web_token_file"], str(root / "aha-home" / "web-token"))
             self.assertEqual((root / "aha-home" / "web-token").read_text(encoding="utf-8"), "secret-token")
 
@@ -142,6 +149,18 @@ class WindowsTrayTests(unittest.TestCase):
             self.assertFalse(windows_tray.startup_enabled('"pythonw.exe" other tray'))
             windows_tray.set_startup_enabled(False, "ignored")
             self.assertFalse(windows_tray.startup_enabled())
+
+    def test_scheduled_task_commands_use_argument_list_without_shell(self) -> None:
+        completed = subprocess.CompletedProcess([], 0, "", "")
+        with mock.patch.object(windows_tray.platform, "is_windows", return_value=True), mock.patch.object(
+            subprocess, "run", return_value=completed
+        ) as run:
+            self.assertTrue(windows_tray.start_scheduled_task(r"\AHA Web"))
+            windows_tray.stop_scheduled_task(r"\AHA Web")
+
+        self.assertEqual(run.call_args_list[0].args[0], ["schtasks.exe", "/Run", "/TN", r"\AHA Web"])
+        self.assertEqual(run.call_args_list[1].args[0], ["schtasks.exe", "/End", "/TN", r"\AHA Web"])
+        self.assertFalse(run.call_args_list[0].kwargs["check"])
 
     def test_dashboard_url_reads_token_file_and_normalizes_wildcard_host(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -313,6 +332,65 @@ class WindowsTrayTests(unittest.TestCase):
         web_process.stop.assert_called_once_with()
         web_process.start.assert_called_once_with()
 
+    def test_tray_attaches_to_prelogin_scheduled_service(self) -> None:
+        web_process = mock.Mock()
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.object(
+            windows_tray, "WebUiProcess", return_value=web_process
+        ), mock.patch.object(windows_tray, "wait_for_dashboard", return_value=True), mock.patch.object(
+            windows_tray, "start_scheduled_task"
+        ) as start_task:
+            runtime = windows_tray.TrayRuntime(
+                windows_tray.TraySettings(
+                    Path(tmp) / "home",
+                    "127.0.0.1",
+                    8788,
+                    startup_task_name=r"\AHA Web",
+                ),
+                "",
+                1000,
+                config_path=Path(tmp) / "tray.json",
+            )
+            runtime.start()
+
+        self.assertTrue(runtime._scheduled_service_active)
+        web_process.start.assert_not_called()
+        start_task.assert_not_called()
+
+    def test_tray_restart_controls_scheduled_service(self) -> None:
+        web_process = mock.Mock()
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.object(
+            windows_tray, "WebUiProcess", return_value=web_process
+        ), mock.patch.object(
+            windows_tray, "dashboard_instance_id", return_value="old-instance"
+        ), mock.patch.object(
+            windows_tray, "stop_scheduled_task"
+        ) as stop_task, mock.patch.object(
+            windows_tray, "start_scheduled_task", return_value=True
+        ) as start_task, mock.patch.object(
+            windows_tray, "wait_for_dashboard", side_effect=[False, True]
+        ), mock.patch.object(
+            windows_tray, "wait_for_dashboard_shutdown", return_value=True
+        ) as wait_shutdown:
+            runtime = windows_tray.TrayRuntime(
+                windows_tray.TraySettings(
+                    Path(tmp) / "home",
+                    "127.0.0.1",
+                    8788,
+                    startup_task_name=r"\AHA Web",
+                ),
+                "",
+                1000,
+                config_path=Path(tmp) / "tray.json",
+            )
+            runtime._scheduled_service_active = True
+            runtime.restart()
+
+        stop_task.assert_called_once_with(r"\AHA Web")
+        start_task.assert_called_once_with(r"\AHA Web")
+        wait_shutdown.assert_called_once_with("127.0.0.1", 8788, "old-instance")
+        web_process.stop.assert_not_called()
+        web_process.start.assert_not_called()
+
     def test_duplicate_tray_opens_existing_dashboard_without_second_web_process(self) -> None:
         mutex = mock.Mock()
         mutex.acquire.return_value = False
@@ -392,7 +470,11 @@ class WindowsTrayTests(unittest.TestCase):
         installer = (repo / "scripts" / "install_windows.ps1").read_text(encoding="utf-8")
         workflow = (repo / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
         self.assertIn('"tray"', installer)
-        self.assertIn('"--enable-startup"', installer)
+        self.assertIn("New-ScheduledTaskTrigger -AtStartup", installer)
+        self.assertIn("-Password $password", installer)
+        self.assertIn("-RunLevel Limited", installer)
+        self.assertIn('startup_task_name = $StartupTaskName', installer)
+        self.assertIn("[switch]$Uninstall", installer)
         self.assertIn("[ValidateNotNullOrEmpty()][string]$Bind", installer)
         self.assertIn('"--host"', installer)
         self.assertIn("-AllowUnsafeBind", installer)

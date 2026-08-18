@@ -120,13 +120,31 @@ Invoke-WebRequest "https://github.com/ChinaKai/AHA/releases/latest/download/inst
 powershell.exe -ExecutionPolicy Bypass -File $Installer
 ```
 
-托盘使用 AHA Logo。双击图标可打开 AHA；右键菜单可打开面板、重启服务、切换“开机自启动”，也可在“设置…”中修改 `AHA_HOME`、Bind 地址、Port 和 Web Token。保存设置后 Web 服务会自动重启，已启用的开机启动命令也会同步更新；选择“退出 AHA”会结束完整 Web 进程树并释放监听端口，包括从 Web 页面重启过的进程。若希望安装时直接启用开机自启动：
+托盘使用 AHA Logo。双击图标可打开 AHA；右键菜单可打开面板、重启服务和控制登录后是否显示托盘，也可在“设置…”中修改 `AHA_HOME`、Bind 地址、Port 和 Web Token。保存设置后 Web 服务会自动重启；未启用计划任务时，选择“退出 AHA”会结束完整 Web 进程树并释放监听端口。若希望电脑重启后无需登录或解锁即可启动 Web 服务：
 
 ```powershell
+# 请在“以管理员身份运行”的 PowerShell 中执行；首次会提示输入当前 Windows 账户密码
 powershell.exe -ExecutionPolicy Bypass -File $Installer -EnableStartup
 ```
 
-默认安装位置是 `%LOCALAPPDATA%\AHA\aha`，数据目录是 `%USERPROFILE%\.aha`，Web UI 是 <http://127.0.0.1:8788>。安装脚本会在当前用户的开始菜单创建带 AHA Logo 的 `AHA` 快捷方式；退出托盘后可按 Win 键搜索 `AHA` 重新启动，也可将其固定到任务栏。若不需要快捷方式，安装时传入 `-NoShortcut`。托盘设置保存在 `%LOCALAPPDATA%\AHA\tray.json`；Web Token 明文只写入所选 `AHA_HOME\web-token`。开机启动项写入当前用户的 `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`，不需要管理员权限。托盘模式下，Web 请求触发的 Git、后端探测和其他辅助进程会以无控制台窗口方式运行。
+默认安装位置是 `%LOCALAPPDATA%\AHA\aha`，数据目录是 `%USERPROFILE%\.aha`，Web UI 是 <http://127.0.0.1:8788>。安装脚本会在当前用户的开始菜单创建带 AHA Logo 的 `AHA` 快捷方式；退出托盘后可按 Win 键搜索 `AHA` 重新启动，也可将其固定到任务栏。若不需要快捷方式，安装时传入 `-NoShortcut`。托盘设置保存在 `%LOCALAPPDATA%\AHA\tray.json`；Web Token 明文只写入所选 `AHA_HOME\web-token`。
+
+`-EnableStartup` 创建根目录下的 `\AHA Web` Windows Task Scheduler 任务，触发器为系统启动（`AtStartup`）。任务不使用 SYSTEM，而以当前 Windows 用户、`RunLevel Limited` 和密码登录令牌运行，以便访问该用户的 `AHA_HOME`、用户级配置、凭据与网络身份。密码由 Task Scheduler 保存为 LSA 保护的任务机密，不写入 AHA 配置、命令行或日志。若企业策略禁止保存计划任务凭据或禁止该账户进行批处理登录，安装器会失败并保留错误，不会降级为 SYSTEM。HKCU Run 只在用户登录后显示通知区托盘；托盘附着到已运行的 Web 服务，退出图标不会停止后台任务。
+
+重复安装会更新并复用现有任务，不会再次询问密码。Windows 账户密码变更后，可显式刷新任务凭据：
+
+```powershell
+$Credential = Get-Credential -UserName ([Security.Principal.WindowsIdentity]::GetCurrent().Name)
+& $Installer -EnableStartup -StartupCredential $Credential
+```
+
+从旧版 HKCU-only 自启动升级时，以管理员身份重新执行一次 `-EnableStartup` 即可迁移。卸载前先退出托盘，然后执行以下命令；计划任务、登录启动项、快捷方式和安装文件会被幂等清理，`AHA_HOME` 数据会保留：
+
+```powershell
+powershell.exe -ExecutionPolicy Bypass -File $Installer -Uninstall
+```
+
+未启用 `-EnableStartup` 时仍保持原有托盘/快捷方式使用方式。托盘模式下，Web 请求触发的 Git、后端探测和其他辅助进程会以无控制台窗口方式运行。
 
 Codex 和 Claude 至少安装一个：
 

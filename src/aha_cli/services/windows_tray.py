@@ -3,7 +3,7 @@ from __future__ import annotations
 import contextlib
 import ctypes
 from ctypes import wintypes
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import hashlib
 from importlib import resources
 import json
@@ -40,6 +40,7 @@ class TraySettings:
     bind: str
     port: int
     web_token: str = ""
+    startup_task_name: str = ""
 
     def normalized(self) -> TraySettings:
         home_text = platform.expand_path(str(self.aha_home)).strip()
@@ -58,7 +59,13 @@ class TraySettings:
             token = normalize_auth_token(self.web_token)
         except ValueError as exc:
             raise WindowsTrayError(str(exc)) from exc
-        return TraySettings(Path(home_text).expanduser().resolve(), bind, port, token)
+        return TraySettings(
+            Path(home_text).expanduser().resolve(),
+            bind,
+            port,
+            token,
+            str(self.startup_task_name or "").strip(),
+        )
 
 
 def default_tray_config_path() -> Path:
@@ -93,6 +100,7 @@ def load_tray_settings(path: Path | None = None) -> TraySettings | None:
             str(payload.get("bind") or "127.0.0.1"),
             int(payload.get("port", 8766)),
             token,
+            str(payload.get("startup_task_name") or ""),
         ).normalized()
     except (OSError, WindowsTrayError, ValueError):
         return None
@@ -112,6 +120,7 @@ def save_tray_settings(settings: TraySettings, path: Path | None = None) -> Path
             "bind": normalized.bind,
             "port": normalized.port,
             "web_token_file": str(token_file) if normalized.web_token else "",
+            "startup_task_name": normalized.startup_task_name,
         },
     )
     return config_path
@@ -240,6 +249,28 @@ def set_startup_enabled(enabled: bool, command: str) -> None:
             winreg.DeleteValue(key, STARTUP_VALUE)
     except FileNotFoundError:
         pass
+
+
+def _scheduled_task_command(task_name: str, operation: str) -> subprocess.CompletedProcess[str]:
+    _require_windows()
+    creationflags = int(getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    return subprocess.run(
+        ["schtasks.exe", f"/{operation}", "/TN", task_name],
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        check=False,
+        creationflags=creationflags,
+    )
+
+
+def start_scheduled_task(task_name: str) -> bool:
+    return _scheduled_task_command(task_name, "Run").returncode == 0
+
+
+def stop_scheduled_task(task_name: str) -> None:
+    _scheduled_task_command(task_name, "End")
 
 
 def dashboard_url(host: str, port: int, *, auth_token: str = "", auth_token_file: str = "") -> str:
@@ -408,6 +439,7 @@ class TrayRuntime:
         self.poll_interval = poll_interval
         self.config_path = config_path or default_tray_config_path()
         save_tray_settings(self.settings, self.config_path)
+        self._scheduled_service_active = False
         self.web = WebUiProcess(
             self.web_command(),
             supervise=True,
@@ -442,16 +474,42 @@ class TrayRuntime:
             auth_token_file=self.auth_token_file(),
         )
 
+    def login_startup_enabled(self) -> bool:
+        expected_command = None if self.settings.startup_task_name else self.startup_command()
+        return startup_enabled(expected_command)
+
     def dashboard_url(self) -> str:
         return dashboard_url(self.settings.bind, self.settings.port, auth_token=self.settings.web_token)
 
     def start(self) -> None:
+        task_name = self.settings.startup_task_name
+        if task_name:
+            if wait_for_dashboard(self.settings.bind, self.settings.port, timeout_seconds=0.5):
+                self._scheduled_service_active = True
+                return
+            if start_scheduled_task(task_name):
+                self._scheduled_service_active = True
+                if not wait_for_dashboard(self.settings.bind, self.settings.port, timeout_seconds=10.0):
+                    stop_scheduled_task(task_name)
+                    self._scheduled_service_active = False
+                    raise WindowsTrayError("AHA 启动任务已运行，但 Web 服务未就绪")
+                return
         self.web.command = self.web_command()
         self.web.start()
+        self._scheduled_service_active = False
 
-    def restart(self) -> None:
+    def _stop_service(self) -> str:
+        if self._scheduled_service_active and self.settings.startup_task_name:
+            old_instance_id = dashboard_instance_id(self.settings.bind, self.settings.port)
+            stop_scheduled_task(self.settings.startup_task_name)
+            self._scheduled_service_active = False
+            return old_instance_id
         old_instance_id = self.web.instance_id
         self.web.stop()
+        return old_instance_id
+
+    def restart(self) -> None:
+        old_instance_id = self._stop_service()
         if old_instance_id and not wait_for_dashboard_shutdown(
             self.settings.bind,
             self.settings.port,
@@ -461,13 +519,11 @@ class TrayRuntime:
         self.start()
 
     def apply_settings(self, settings: TraySettings) -> None:
-        updated = settings.normalized()
+        updated = replace(settings, startup_task_name=self.settings.startup_task_name).normalized()
         previous = self.settings
         previous_run_id = self.run_id
-        previous_startup = self.startup_command()
-        startup_was_enabled = startup_enabled(previous_startup)
-        old_instance_id = self.web.instance_id
-        self.web.stop()
+        startup_was_enabled = self.login_startup_enabled()
+        old_instance_id = self._stop_service()
         if old_instance_id and not wait_for_dashboard_shutdown(
             previous.bind,
             previous.port,
@@ -482,10 +538,10 @@ class TrayRuntime:
             self.start()
             if self.web.process is not None and self.web.process.poll() is not None:
                 raise WindowsTrayError("新设置下的 AHA Web 服务启动失败，请检查 bind 和端口")
-            if startup_was_enabled:
+            if startup_was_enabled and not updated.startup_task_name:
                 set_startup_enabled(True, self.startup_command())
         except Exception:
-            self.web.stop()
+            self._stop_service()
             self.settings = previous
             self.run_id = previous_run_id
             save_tray_settings(previous, self.config_path)
@@ -595,6 +651,7 @@ def _show_settings_dialog(parent: int, settings: TraySettings) -> TraySettings |
                         control_text("bind"),
                         int(control_text("port")),
                         control_text("token"),
+                        settings.startup_task_name,
                     ).normalized()
                     if bind_host_exposes_network(updated.bind) and not updated.web_token:
                         confirmed = user32.MessageBoxW(
@@ -835,7 +892,7 @@ def _run_native_tray(
     def toggle_startup() -> None:
         try:
             command = runtime.startup_command()
-            set_startup_enabled(not startup_enabled(command), command)
+            set_startup_enabled(not runtime.login_startup_enabled(), command)
         except (OSError, WindowsTrayError) as exc:
             _show_error(f"无法更新开机自启动：{exc}")
 
@@ -854,13 +911,14 @@ def _run_native_tray(
         if not menu:
             return
         try:
-            checked = 0x00000008 if startup_enabled(runtime.startup_command()) else 0
+            checked = 0x00000008 if runtime.login_startup_enabled() else 0
         except (OSError, WindowsTrayError) as exc:
             checked = 0
             _show_error(f"无法读取开机自启动设置：{exc}")
         user32.AppendMenuW(menu, 0, open_id, "打开 AHA")
         user32.AppendMenuW(menu, 0x00000800, 0, None)
-        user32.AppendMenuW(menu, checked, startup_id, "开机自启动")
+        startup_label = "登录后显示托盘" if runtime.settings.startup_task_name else "开机自启动"
+        user32.AppendMenuW(menu, checked, startup_id, startup_label)
         user32.AppendMenuW(menu, 0, settings_id, "设置…")
         user32.AppendMenuW(menu, 0, restart_id, "重启 AHA 服务")
         user32.AppendMenuW(menu, 0x00000800, 0, None)
@@ -963,6 +1021,19 @@ def wait_for_dashboard(
     return False
 
 
+def dashboard_instance_id(host: str, port: int) -> str:
+    health_url = f"{dashboard_url(host, port).rstrip('/')}/api/health"
+    try:
+        with urlopen(health_url, timeout=0.5) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+            status = int(getattr(response, "status", 0))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return ""
+    if status != 200:
+        return ""
+    return str(payload.get("instance_id") or "").strip()
+
+
 def wait_for_dashboard_shutdown(
     host: str,
     port: int,
@@ -1002,7 +1073,9 @@ def run_windows_tray(
     token = str(auth_token or "").strip()
     if not token and auth_token_file:
         token = Path(auth_token_file).expanduser().read_text(encoding="utf-8").strip()
-    settings = TraySettings(root, host, port, token).normalized()
+    stored = load_tray_settings(config_path)
+    startup_task_name = stored.startup_task_name if stored is not None else ""
+    settings = TraySettings(root, host, port, token, startup_task_name).normalized()
     runtime = TrayRuntime(settings, run_id, poll_interval, config_path=config_path)
     icon_path = materialize_tray_icon(runtime.config_path)
     if enable_startup:

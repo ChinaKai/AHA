@@ -14,6 +14,7 @@ INSTALL_ONEBIN = REPO_ROOT / "scripts" / "install_user_service.sh"
 INSTALL_SOURCE = REPO_ROOT / "scripts" / "install_source_user_service.sh"
 SMOKE_SERVICE_INSTALLERS = REPO_ROOT / "scripts" / "smoke_service_installers.py"
 PREFLIGHT_SERVICE_UPGRADE = REPO_ROOT / "scripts" / "preflight_service_upgrade.py"
+INSTALL_WINDOWS = REPO_ROOT / "scripts" / "install_windows.ps1"
 
 
 def _wsl_python3_shim_hijack() -> bool:
@@ -333,6 +334,31 @@ class ServiceInstallerTests(unittest.TestCase):
             self.assertTrue(payload["real_home_runs"]["unchanged"])
             self.assertFalse((tmp_path / "home" / ".aha" / "runs").exists())
             self.assertEqual(payload["onebin"]["built"], False)
+
+
+class WindowsServiceInstallerContractTests(unittest.TestCase):
+    def test_windows_installer_uses_prelogin_user_task_and_idempotent_cleanup(self) -> None:
+        installer = INSTALL_WINDOWS.read_text(encoding="utf-8")
+
+        self.assertIn('New-ScheduledTaskTrigger -AtStartup', installer)
+        self.assertIn('Register-ScheduledTask', installer)
+        self.assertIn('-User $Credential.UserName', installer)
+        self.assertIn('-Password $password', installer)
+        self.assertIn('-RunLevel Limited', installer)
+        self.assertNotIn('-User "SYSTEM"', installer)
+        self.assertIn('Set-ScheduledTask', installer)
+        self.assertIn('Unregister-ScheduledTask', installer)
+        self.assertIn('Remove-ItemProperty -Path $runKey -Name "AHA"', installer)
+        self.assertIn('AHA home retained', installer)
+
+    def test_windows_installer_separates_background_service_and_login_tray(self) -> None:
+        installer = INSTALL_WINDOWS.read_text(encoding="utf-8")
+
+        self.assertIn('"ui"', installer)
+        self.assertIn('" tray"', installer)
+        self.assertIn('Start-ScheduledTask', installer)
+        self.assertIn('Set-AhaLoginStartup -Enabled $true', installer)
+        self.assertIn('The Task Scheduler stores it as an LSA-protected secret', installer)
 
 
 if __name__ == "__main__":
