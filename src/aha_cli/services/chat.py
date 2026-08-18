@@ -157,10 +157,16 @@ def _apply_context_fingerprint_updates(session: dict, prompt_metrics: dict) -> N
         session["updated_at"] = utc_now()
 
 
-def _clear_force_full_prompt_after_delivery(session: dict, prompt_metrics: dict) -> None:
+def _clear_force_full_prompt_after_delivery(
+    session: dict,
+    prompt_metrics: dict,
+    delivered_marker: object,
+) -> None:
     if prompt_metrics.get("prompt_mode") != "full":
         return
-    if FORCE_FULL_PROMPT_NEXT_TURN_KEY not in session:
+    if not delivered_marker:
+        return
+    if session.get(FORCE_FULL_PROMPT_NEXT_TURN_KEY) != delivered_marker:
         return
     session.pop(FORCE_FULL_PROMPT_NEXT_TURN_KEY, None)
     session["updated_at"] = utc_now()
@@ -1181,6 +1187,9 @@ def agent_chat(root: Path, run_id: str, args, *, backend_name: str) -> int:
                     requested_model=requested_model,
                     resolved_model=resolved_model,
                 )
+                force_full_marker_for_prompt = session.get(FORCE_FULL_PROMPT_NEXT_TURN_KEY)
+                if isinstance(force_full_marker_for_prompt, dict):
+                    force_full_marker_for_prompt = dict(force_full_marker_for_prompt)
                 try:
                     prompt_metrics["prompt_ref"] = save_prompt_artifact(root, run_id, item_task_id, args.target, prompt)
                 except OSError as exc:
@@ -1392,7 +1401,7 @@ def agent_chat(root: Path, run_id: str, args, *, backend_name: str) -> int:
                 if session:
                     if exit_code == 0:
                         _apply_context_fingerprint_updates(session, prompt_metrics)
-                        _clear_force_full_prompt_after_delivery(session, prompt_metrics)
+                        _clear_force_full_prompt_after_delivery(session, prompt_metrics, force_full_marker_for_prompt)
                         if item_task_id and backend_name == "codex":
                             _mark_force_full_for_runtime_context_compaction(
                                 root,

@@ -46,7 +46,7 @@ from aha_cli.store.filesystem import (
     write_json,
 )
 from aha_cli.store.knowledge import entry_dir, knowledge_root, write_entry
-from aha_cli.store.sessions import FORCE_FULL_PROMPT_NEXT_TURN_KEY
+from aha_cli.store.sessions import FORCE_FULL_PROMPT_NEXT_TURN_KEY, set_force_full_prompt_next_turn
 from aha_cli.store.paths import config_path
 from tests.helpers import isolated_cli_environment
 
@@ -1185,6 +1185,73 @@ class ChatPromptTests(unittest.TestCase):
         self.assertIn("You are the AHA backend agent", captured["prompt"])
         self.assertIn("AHA Knowledge/Nav Pull Contract:", captured["prompt"])
         self.assertNotIn("AHA sticky-session delta turn", captured["prompt"])
+
+    def test_codex_chat_preserves_compact_marker_created_during_full_turn(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp) / "repo"
+            root = Path(tmp) / ".aha"
+            workspace.mkdir()
+            with mock.patch("pathlib.Path.cwd", return_value=workspace):
+                self.run_cli("--home", str(root), "init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("--home", str(root), "plan", "Preserve new compact marker", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = next(line.split(": ", 1)[1] for line in plan_output.splitlines() if line.startswith("Created run: "))
+                plan_file = run_dir(root, run_id) / "plan.json"
+                plan = read_json(plan_file)
+                plan["tasks"][0]["preferred_backend"] = "codex"
+                plan["tasks"][0]["agents"][0]["backend"] = "codex"
+                write_json(plan_file, plan)
+                append_message(root, run_id, "main", "full turn", sender="browser", task_id="task-001", role="main")
+                session_file = run_dir(root, run_id) / "tasks" / "task-001" / "sessions" / "main.json"
+                session = read_json(session_file)
+                session["backend"] = "codex"
+                session["backend_session_id"] = "backend-session-1"
+                session_file.write_text(json.dumps(session), encoding="utf-8")
+                captured: dict[str, str] = {}
+
+                def fake_codex_exec(prompt: str, **kwargs: object) -> tuple[int, str, dict | None]:
+                    captured["prompt"] = prompt
+                    returned_session = kwargs.get("session")
+                    if isinstance(returned_session, dict):
+                        set_force_full_prompt_next_turn(
+                            returned_session,
+                            "backend_auto_context_compact",
+                            raw_type="thread.compacted",
+                        )
+                    return 0, "reply", returned_session if isinstance(returned_session, dict) else None
+
+                with mock.patch("aha_cli.services.chat.run_codex_exec", side_effect=fake_codex_exec):
+                    code, _ = self.run_cli(
+                        "--home",
+                        str(root),
+                        "codex-chat",
+                        run_id,
+                        "main",
+                        "--task-id",
+                        "task-001",
+                        "--from-start",
+                        "--once",
+                    )
+                updated = read_json(session_file)
+                next_item = append_message(
+                    root,
+                    run_id,
+                    "main",
+                    "continue after compact",
+                    sender="browser",
+                    task_id="task-001",
+                    role="main",
+                    plain_sticky=True,
+                )
+                next_prompt, next_metrics = chat_prompt_with_metrics(root, run_id, "main", next_item, "")
+
+        self.assertEqual(code, 0)
+        self.assertIn("You are the AHA backend agent", captured["prompt"])
+        self.assertEqual(updated[FORCE_FULL_PROMPT_NEXT_TURN_KEY]["reason"], "backend_auto_context_compact")
+        self.assertEqual(updated[FORCE_FULL_PROMPT_NEXT_TURN_KEY]["raw_type"], "thread.compacted")
+        self.assertEqual(next_metrics["prompt_mode"], "full")
+        self.assertIn("You are the AHA backend agent", next_prompt)
+        self.assertNotIn("AHA sticky-session delta turn", next_prompt)
 
     def test_codex_chat_forces_full_after_silent_runtime_context_drop(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
