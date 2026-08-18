@@ -342,12 +342,12 @@ def set_parent_death_signal() -> None:
 
 
 def bridge_launcher() -> list[str]:
-    """How to launch an ``aha`` subcommand using the *current* runtime's code.
+    """How to launch an ``aha`` subcommand using the authoritative runtime.
 
-    Onebin-aware: runs the running zipapp when present (a packaged dashboard has
-    no importable ``aha_cli`` module), otherwise ``python -m aha_cli`` for source
-    checkouts. Deliberately not a ``PATH`` lookup so the bridge runs the same
-    code as the runtime spawning it.
+    Onebin-aware: runs the Windows-owned onebin forwarded into a WSL backend when
+    present, otherwise the running zipapp or ``python -m aha_cli`` for source
+    checkouts. Deliberately not a ``PATH`` lookup so a WSL-side AHA shim cannot
+    select stale bridge code.
     """
 
     return aha_cli_invocation()

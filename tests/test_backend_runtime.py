@@ -33,6 +33,7 @@ from aha_cli.services.backend_runtime import (
     stop_all_backends,
     stop_task_backends,
 )
+from aha_cli.services.onebin import AHA_WSL_AHA_BIN_ENV
 from aha_cli.store.filesystem import add_agent, append_event, read_json, session_path, update_agent_config, write_json
 
 
@@ -160,15 +161,19 @@ class BackendRuntimeTests(unittest.TestCase):
                 {
                     "AHA_ROOT": r"C:\Users\toope\.aha",
                     "AHA_WSL_DISTRO": "Ubuntu-24.04",
+                    AHA_WSL_AHA_BIN_ENV: "/mnt/c/Users/toope/AppData/Local/AHA/aha",
                     "AHA_MODEL": "",
-                    "WSLENV": "AHA_WSL_DISTRO:AHA_WSL_AHA_HOME",
+                    "WSLENV": f"AHA_WSL_DISTRO:AHA_WSL_AHA_HOME:{AHA_WSL_AHA_BIN_ENV}",
                 }
             )
 
         # Only the Windows basics plus the WSLENV-forwarded AHA vars cross the
         # hop; the service PATH (translated AHA install dir first) and any
         # provider secrets must stay behind on the Windows side.
-        self.assertEqual(set(env), {"SystemRoot", "AHA_ROOT", "AHA_WSL_DISTRO", "WSLENV"})
+        self.assertEqual(
+            set(env),
+            {"SystemRoot", "AHA_ROOT", "AHA_WSL_DISTRO", AHA_WSL_AHA_BIN_ENV, "WSLENV"},
+        )
         self.assertEqual(env["SystemRoot"], r"C:\Windows")
 
     def test_wsl_backend_process_env_defaults_system_root(self) -> None:
@@ -241,8 +246,10 @@ class BackendRuntimeTests(unittest.TestCase):
         self.assertEqual(env["SystemRoot"], r"C:\Windows")
         self.assertEqual(env["AHA_WSL_DISTRO"], "Ubuntu-24.04")
         self.assertEqual(env["AHA_WSL_AHA_HOME"], "/mnt/c/Users/toope/.aha")
+        self.assertEqual(env[AHA_WSL_AHA_BIN_ENV], "/mnt/c/Users/toope/AppData/Local/AHA/aha")
         self.assertIn("AHA_WSL_DISTRO", env["WSLENV"])
         self.assertIn("AHA_WSL_AHA_HOME", env["WSLENV"])
+        self.assertIn(AHA_WSL_AHA_BIN_ENV, env["WSLENV"])
 
     def test_start_backend_inside_wsl_records_session_lookup_context(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -259,7 +266,11 @@ class BackendRuntimeTests(unittest.TestCase):
             with (
                 mock.patch.dict(
                     os.environ,
-                    {"AHA_WSL_DISTRO": "Ubuntu-24.04", "HOME": "/home/kaikai"},
+                    {
+                        "AHA_WSL_DISTRO": "Ubuntu-24.04",
+                        AHA_WSL_AHA_BIN_ENV: "/mnt/c/Users/toope/AppData/Local/AHA/aha",
+                        "HOME": "/home/kaikai",
+                    },
                     clear=True,
                 ),
                 mock.patch("aha_cli.services.backend_runtime.Path.home", return_value=Path("/home/kaikai")),
@@ -275,6 +286,7 @@ class BackendRuntimeTests(unittest.TestCase):
 
         self.assertEqual(state["wsl_distro"], "Ubuntu-24.04")
         self.assertEqual(state["wsl_native_home"], "/home/kaikai")
+        self.assertEqual(state["wsl_aha_bin"], "/mnt/c/Users/toope/AppData/Local/AHA/aha")
         self.assertNotEqual(state["command"][0], "wsl.exe")
 
     def test_worker_self_heals_missing_wsl_session_lookup_context(self) -> None:
@@ -294,7 +306,14 @@ class BackendRuntimeTests(unittest.TestCase):
             )
 
             with (
-                mock.patch.dict(os.environ, {"WSL_DISTRO_NAME": "Ubuntu-24.04"}, clear=True),
+                mock.patch.dict(
+                    os.environ,
+                    {
+                        "WSL_DISTRO_NAME": "Ubuntu-24.04",
+                        AHA_WSL_AHA_BIN_ENV: "/mnt/c/Users/toope/AppData/Local/AHA/aha",
+                    },
+                    clear=True,
+                ),
                 mock.patch("aha_cli.services.backend_runtime.Path.home", return_value=Path("/home/kaikai")),
             ):
                 updated = ensure_backend_wsl_state(root, run_id, "main", task_id="task-004")
@@ -303,6 +322,7 @@ class BackendRuntimeTests(unittest.TestCase):
 
         self.assertEqual(updated["wsl_distro"], "Ubuntu-24.04")
         self.assertEqual(updated["wsl_native_home"], "/home/kaikai")
+        self.assertEqual(updated["wsl_aha_bin"], "/mnt/c/Users/toope/AppData/Local/AHA/aha")
         self.assertEqual(persisted["pid"], 4242)
         self.assertEqual(persisted["command"], ["/usr/bin/python3", "aha", "claude-chat"])
 

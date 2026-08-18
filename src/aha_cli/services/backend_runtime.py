@@ -26,6 +26,7 @@ from aha_cli.domain.models import utc_now
 from aha_cli.services.backend_paths import add_user_backend_paths
 from aha_cli.services.commit_policy import generated_by_for_backend_model
 from aha_cli.services.context_pressure import context_pressure
+from aha_cli.services.onebin import AHA_WSL_AHA_BIN_ENV
 from aha_cli.services.prompt_templates import render_prompt_template
 from aha_cli.services.proxy import PROXY_ENV_KEYS, apply_proxy_environment, proxy_env_for_agent
 from aha_cli.store.filesystem import (
@@ -159,6 +160,9 @@ def ensure_backend_wsl_state(
         updated["wsl_distro"] = distro
         if native_home:
             updated["wsl_native_home"] = native_home
+        wsl_aha_bin = str(os.environ.get(AHA_WSL_AHA_BIN_ENV) or "").strip()
+        if wsl_aha_bin:
+            updated["wsl_aha_bin"] = wsl_aha_bin
         if updated != state:
             _write_state(root, run_id, target, updated, task_id)
         return updated
@@ -1398,10 +1402,11 @@ def start_backend(
             if launch_wsl:
                 launch_aha_env["AHA_WSL_DISTRO"] = str(launch_wsl.get("distro") or "").strip()
                 launch_aha_env["AHA_WSL_AHA_HOME"] = str(launch_wsl.get("aha_home") or "").strip()
+                launch_aha_env[AHA_WSL_AHA_BIN_ENV] = str(launch_wsl.get("aha_bin") or "").strip()
                 # WSLENV declares which variables pass through wsl.exe into the
                 # distro. Task/agent proxy vars must be declared too, or the WSL
                 # watcher and its backend CLI children lose the egress config.
-                wslenv_parts = ["AHA_WSL_DISTRO", "AHA_WSL_AHA_HOME"]
+                wslenv_parts = ["AHA_WSL_DISTRO", "AHA_WSL_AHA_HOME", AHA_WSL_AHA_BIN_ENV]
                 wslenv_parts.extend(
                     key for key in (proxy_env or {}) if key.upper() in _WSL_PROXY_ENV_KEY_SET
                 )
@@ -1459,6 +1464,11 @@ def start_backend(
                 state["wsl_distro"] = state_wsl_distro
             if state_wsl_home:
                 state["wsl_native_home"] = state_wsl_home
+            state_wsl_aha_bin = str(
+                (launch_wsl or {}).get("aha_bin") or os.environ.get(AHA_WSL_AHA_BIN_ENV) or ""
+            ).strip()
+            if state_wsl_aha_bin:
+                state["wsl_aha_bin"] = state_wsl_aha_bin
             _write_state(root, run_id, target, state, task_id)
             append_event(
                 root,

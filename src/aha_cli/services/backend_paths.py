@@ -5,14 +5,16 @@ import stat
 import sys
 from pathlib import Path
 
+from aha_cli.services.onebin import AHA_WSL_AHA_BIN_ENV
+
 
 def _running_zipapp() -> Path | None:
     try:
-        from aha_cli.services.onebin import running_zipapp_path
+        from aha_cli.services.onebin import authoritative_onebin_path
     except (ImportError, SystemExit):  # pragma: no cover - import fallback
         return None
     try:
-        return running_zipapp_path()
+        return authoritative_onebin_path()
     except Exception:  # pragma: no cover - defensive, never break PATH setup
         return None
 
@@ -113,7 +115,8 @@ def add_user_backend_paths(env: dict[str, str], *, home: Path | None = None) -> 
         # orchestrating Windows instance stays first for ``aha`` lookups
         # (ahead of any separate WSL AHA the user keeps) without dragging the
         # Windows python3 shim onto PATH.
-        if aha_dir is not None and not str(aha_dir).startswith("/mnt/"):
+        forwarded_wsl_onebin = bool(str(os.environ.get(AHA_WSL_AHA_BIN_ENV) or "").strip())
+        if aha_dir is not None and not forwarded_wsl_onebin and not str(aha_dir).startswith("/mnt/"):
             candidates.insert(0, aha_dir)
         else:
             candidates.insert(0, _ensure_wsl_backend_bin(zipapp_path, home))

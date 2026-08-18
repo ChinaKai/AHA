@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import re
 from pathlib import Path
 import shutil
@@ -9,6 +10,8 @@ import sys
 import tempfile
 import zipapp
 import zipfile
+
+AHA_WSL_AHA_BIN_ENV = "AHA_WSL_AHA_BIN"
 
 
 def _ignore_build_artifacts(_path: str, names: list[str]) -> set[str]:
@@ -34,6 +37,27 @@ def running_zipapp_path() -> Path | None:
     return None
 
 
+def authoritative_onebin_path() -> Path | None:
+    """Return the onebin that owns this runtime, including a WSL handoff.
+
+    A Windows Web service launches WSL backend watchers through the same onebin,
+    but later agent-shell commands can enter through a WSL-side shim or
+    ``python -m aha_cli``. The forwarded path remains the authority in that
+    case, preventing a separate WSL AHA install from spawning stale hardware
+    bridges. Source/editable runs have no forwarded path and keep the normal
+    module fallback.
+    """
+    raw_path = str(os.environ.get(AHA_WSL_AHA_BIN_ENV) or "").strip()
+    if raw_path:
+        try:
+            candidate = Path(raw_path).expanduser().resolve()
+            if candidate.is_file() and zipfile.is_zipfile(candidate):
+                return candidate
+        except OSError:
+            pass
+    return running_zipapp_path()
+
+
 def aha_cli_invocation() -> list[str]:
     """Command prefix to invoke this AHA runtime's CLI in a subprocess.
 
@@ -41,7 +65,7 @@ def aha_cli_invocation() -> list[str]:
     spawn bridges/backends without an importable ``aha_cli`` module; otherwise
     ``python -m aha_cli`` for source checkouts.
     """
-    zipapp_path = running_zipapp_path()
+    zipapp_path = authoritative_onebin_path()
     if zipapp_path:
         return [sys.executable, str(zipapp_path)]
     return [sys.executable, "-m", "aha_cli"]

@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import sys
 import tempfile
+import zipfile
 from pathlib import Path
 from unittest import mock
 
@@ -12,7 +13,7 @@ from aha_cli.services import backend_paths
 class TestBackendPaths:
     def _run_with_zipapp(self, zipapp: Path | None) -> dict[str, str]:
         env: dict[str, str] = {"PATH": "/usr/bin:/bin"}
-        with mock.patch("aha_cli.services.onebin.running_zipapp_path", return_value=zipapp):
+        with mock.patch("aha_cli.services.onebin.authoritative_onebin_path", return_value=zipapp):
             backend_paths.add_user_backend_paths(env)
         return env
 
@@ -50,6 +51,55 @@ class TestBackendPaths:
 
             # No onebin -> no install dir to place a shim in; only user bin dirs.
             assert all("python3" not in Path(item).name for item in env["PATH"].split(os.pathsep))
+
+    def test_wsl_forwarded_onebin_repairs_aha_path_from_source_entry(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            onebin = root / "windows" / "aha"
+            onebin.parent.mkdir()
+            with zipfile.ZipFile(onebin, "w") as archive:
+                archive.writestr("__main__.py", "")
+            home = root / "home"
+            home.mkdir()
+            env = {"PATH": "/usr/bin:/bin"}
+
+            with (
+                mock.patch.dict(
+                    os.environ,
+                    {"AHA_WSL_AHA_BIN": str(onebin), "XDG_DATA_HOME": str(root / "data")},
+                    clear=True,
+                ),
+                mock.patch("aha_cli.services.onebin.running_zipapp_path", return_value=None),
+            ):
+                backend_paths.add_user_backend_paths(env, home=home)
+
+            bridge_bin = root / "data" / "aha" / "backend-bin"
+            assert env["PATH"].split(os.pathsep)[0] == str(bridge_bin)
+            assert Path(os.readlink(bridge_bin / "aha")) == onebin.resolve()
+
+    def test_wsl_forwarded_home_path_is_not_rewritten_as_windows_path(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            home = root / "home"
+            home.mkdir()
+            forwarded = Path("/home/kaikai/aha-windows-owner")
+            env = {"PATH": "/usr/bin:/bin"}
+
+            with (
+                mock.patch.dict(
+                    os.environ,
+                    {"AHA_WSL_AHA_BIN": str(forwarded), "XDG_DATA_HOME": str(root / "data")},
+                    clear=True,
+                ),
+                mock.patch(
+                    "aha_cli.services.onebin.authoritative_onebin_path",
+                    return_value=forwarded,
+                ),
+            ):
+                backend_paths.add_user_backend_paths(env, home=home)
+
+            bridge_bin = root / "data" / "aha" / "backend-bin"
+            assert Path(os.readlink(bridge_bin / "aha")) == forwarded
 
     def test_shim_rewrites_only_when_target_changes(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

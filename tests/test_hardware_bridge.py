@@ -6,16 +6,19 @@ import os
 import select
 import signal
 import socket
+import sys
 import threading
 import time
 import unittest
 from unittest import mock
 from pathlib import Path
 import tempfile
+import zipfile
 
 from aha_cli.services.hardware_bridge import (
     DeviceBridgeDaemon,
     append_bridge_control,
+    bridge_launcher,
     bridge_status,
     device_bridge_dir,
     device_bridge_state_path,
@@ -520,6 +523,19 @@ class BridgeStatusTests(unittest.TestCase):
 
 
 class EnsureBridgeTests(unittest.TestCase):
+    def test_bridge_launcher_prefers_forwarded_windows_onebin(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            onebin = Path(tmp) / "aha"
+            with zipfile.ZipFile(onebin, "w") as archive:
+                archive.writestr("__main__.py", "")
+            with (
+                mock.patch.dict(os.environ, {"AHA_WSL_AHA_BIN": str(onebin)}, clear=True),
+                mock.patch("aha_cli.services.onebin.running_zipapp_path", return_value=None),
+            ):
+                launcher = bridge_launcher()
+
+        self.assertEqual(launcher, [sys.executable, str(onebin.resolve())])
+
     def test_ensure_spawns_managed_bridge_and_is_idempotent(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
