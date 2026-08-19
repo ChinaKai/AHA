@@ -637,34 +637,46 @@
     #graph-status { margin-top: 6px; min-height: 1.2em; }
     @media (max-width: 820px) {
       html, body { width: 100%; height: 100%; overflow: hidden; overscroll-behavior: none; }
-      .kb-wrap { height: 100dvh; min-height: 0; }
+      .kb-wrap { --kb-mobile-sidebar-fixed-height: 112px; height: 100dvh; min-height: 0; }
       .kb-shell { position: relative; display: block; height: 100%; min-height: 0; overflow: hidden; }
       .kb-sidebar-actions [data-kb-view="graph"],
       #tab-graph { display: none !important; }
       .kb-graph-sidebar {
         position: absolute; z-index: 20; top: 0; left: 0; right: 0;
-        height: min(46dvh, 360px); max-height: calc(100dvh - env(safe-area-inset-bottom));
+        grid-template-areas: "head" "status" "tree";
+        grid-template-rows: auto auto minmax(0, 1fr);
+        height: min(62dvh, 520px); max-height: calc(100dvh - env(safe-area-inset-bottom));
         padding-top: env(safe-area-inset-top);
         border-right: 0; border-bottom: 1px solid var(--color-border-subtle);
         box-shadow: 0 10px 28px rgba(0, 0, 0, .18);
       }
       .kb-graph-sidebar-head {
+        grid-area: head;
         min-height: 48px;
         padding: 8px calc(8px + env(safe-area-inset-right)) 8px calc(8px + env(safe-area-inset-left));
       }
+      .kb-sidebar-footer {
+        grid-area: status; border-top: 0; border-bottom: 1px solid var(--color-border-subtle);
+      }
+      .kb-graph-file-tree { grid-area: tree; }
       .kb-sidebar-actions { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; }
       .kb-sidebar-actions::-webkit-scrollbar { display: none; }
       .kb-sidebar-actions button, .kb-sidebar-toggle { min-height: 40px; }
       .kb-graph-file-folder, .kb-graph-file-entry { min-height: 40px; }
       .kb-sidebar-resizer { display: none; }
+      .kb-wrap.kb-sidebar-collapsed .kb-sidebar-actions { display: flex; }
+      .kb-wrap.kb-sidebar-collapsed .kb-sidebar-footer { display: grid; }
       .kb-wrap.kb-sidebar-collapsed .kb-graph-sidebar {
-        height: calc(48px + env(safe-area-inset-top)); max-height: none;
+        height: calc(var(--kb-mobile-sidebar-fixed-height) + env(safe-area-inset-top)); max-height: none;
         box-shadow: none;
       }
-      .kb-wrap.kb-sidebar-collapsed .kb-graph-sidebar-head { padding-inline: calc(8px + env(safe-area-inset-left)) calc(8px + env(safe-area-inset-right)); }
+      .kb-wrap.kb-sidebar-collapsed .kb-graph-sidebar-head {
+        justify-content: space-between;
+        padding-inline: calc(8px + env(safe-area-inset-left)) calc(8px + env(safe-area-inset-right));
+      }
       .kb-workspace-main {
         height: 100%; min-height: 0; overflow: hidden;
-        padding: calc(56px + env(safe-area-inset-top)) calc(8px + env(safe-area-inset-right)) calc(8px + env(safe-area-inset-bottom)) calc(8px + env(safe-area-inset-left));
+        padding: calc(var(--kb-mobile-sidebar-fixed-height) + 8px + env(safe-area-inset-top)) calc(8px + env(safe-area-inset-right)) calc(8px + env(safe-area-inset-bottom)) calc(8px + env(safe-area-inset-left));
       }
       .kb-workspace-main > section[id^="tab-"] { height: 100%; min-height: 0; }
       #tab-graph { min-height: 0; overflow: hidden; }
@@ -695,8 +707,7 @@
     }
     @media (max-width: 820px) and (orientation: landscape) and (max-height: 600px) {
       .kb-wrap:not(.kb-sidebar-collapsed) .kb-graph-sidebar {
-        right: auto; width: min(360px, 48vw); height: 100%; max-height: none;
-        border-right: 1px solid var(--color-border-subtle); border-bottom: 0;
+        width: 100%; height: min(72dvh, 360px); max-height: calc(100dvh - env(safe-area-inset-bottom));
       }
       .kb-wrap.kb-sidebar-collapsed .kb-graph-sidebar { width: 100%; }
       .kb-graph-controls-panel {
@@ -1087,6 +1098,7 @@
     const KB_SIDEBAR_COLLAPSED_KEY = "aha:kb:sidebar-collapsed";
     const compactGraphMedia = window.matchMedia?.("(max-width: 820px)") || null;
     let compactSidebarExpanded = false;
+    let compactSidebarResizeObserver = null;
     const GRAPH_SETTINGS_KEY = "aha:kb:graph-settings:v1";
     const KB_TABS = ["entries", "navigation", "graph", "pending", "skills", "settings"];
     const ENTRIES_PAGE_LIMIT = 120;
@@ -1197,13 +1209,42 @@
       if (!wrap) return;
       wrap.style.setProperty("--kb-sidebar-width", `${readStoredSidebarWidth()}px`);
       const collapsed = sidebarIsCollapsed();
+      const compact = isCompactGraphViewport();
       wrap.classList.toggle("kb-sidebar-collapsed", collapsed);
       const toggle = $("#kb-sidebar-toggle");
       if (toggle) {
-        toggle.textContent = collapsed ? "›" : "‹";
+        toggle.textContent = compact ? (collapsed ? "⌄" : "⌃") : (collapsed ? "›" : "‹");
         toggle.setAttribute("aria-expanded", String(!collapsed));
         toggle.setAttribute("aria-label", collapsed ? t("common.expand_sidebar", "Expand sidebar") : t("common.collapse_sidebar", "Collapse sidebar"));
       }
+      syncCompactSidebarOffset();
+    }
+
+    function syncCompactSidebarOffset() {
+      const wrap = $(".kb-wrap");
+      if (!wrap) return;
+      if (!isCompactGraphViewport()) {
+        wrap.style.removeProperty("--kb-mobile-sidebar-fixed-height");
+        return;
+      }
+      requestAnimationFrame(() => {
+        const headHeight = $(".kb-graph-sidebar-head")?.getBoundingClientRect().height || 0;
+        const statusHeight = $(".kb-sidebar-footer")?.getBoundingClientRect().height || 0;
+        const fixedHeight = Math.ceil(headHeight + statusHeight);
+        if (fixedHeight > 0) wrap.style.setProperty("--kb-mobile-sidebar-fixed-height", `${fixedHeight}px`);
+      });
+    }
+
+    function bindCompactSidebarOffset() {
+      if (typeof ResizeObserver === "function") {
+        compactSidebarResizeObserver = new ResizeObserver(syncCompactSidebarOffset);
+        const head = $(".kb-graph-sidebar-head");
+        const status = $(".kb-sidebar-footer");
+        if (head) compactSidebarResizeObserver.observe(head);
+        if (status) compactSidebarResizeObserver.observe(status);
+      }
+      window.addEventListener("resize", syncCompactSidebarOffset);
+      syncCompactSidebarOffset();
     }
 
     function setSidebarCollapsed(collapsed) {
@@ -5338,6 +5379,7 @@
     $("#kb-sidebar-toggle").addEventListener("click", () => setSidebarCollapsed(!sidebarIsCollapsed()));
     bindSidebarResize();
     bindResponsiveGraphLayout();
+    bindCompactSidebarOffset();
     bindGraphCanvas();
     bindGraphSettingsControls();
     $("#graph-controls-toggle").addEventListener("click", () => setGraphControlsOpen(true));

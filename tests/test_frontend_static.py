@@ -330,6 +330,24 @@ if (customStartRoot.children[0].start !== 3) {
         self.assertIn('data-kb-view="graph"', knowledge)
         self.assertIn('<section id="tab-graph">', knowledge)
 
+    def test_knowledge_mobile_keeps_status_fixed_and_expands_tree_vertically(self) -> None:
+        knowledge = (static_root() / "knowledge.html").read_text(encoding="utf-8")
+
+        self.assertIn('grid-template-areas: "head" "status" "tree";', knowledge)
+        self.assertIn(".kb-sidebar-footer {\n        grid-area: status;", knowledge)
+        self.assertIn(".kb-graph-file-tree { grid-area: tree; }", knowledge)
+        self.assertIn(".kb-wrap.kb-sidebar-collapsed .kb-sidebar-actions { display: flex; }", knowledge)
+        self.assertIn(".kb-wrap.kb-sidebar-collapsed .kb-sidebar-footer { display: grid; }", knowledge)
+        self.assertIn("height: calc(var(--kb-mobile-sidebar-fixed-height) + env(safe-area-inset-top));", knowledge)
+        self.assertIn("padding: calc(var(--kb-mobile-sidebar-fixed-height) + 8px + env(safe-area-inset-top))", knowledge)
+        self.assertIn('toggle.textContent = compact ? (collapsed ? "⌄" : "⌃") : (collapsed ? "›" : "‹");', knowledge)
+        self.assertIn("function syncCompactSidebarOffset()", knowledge)
+        self.assertIn("function bindCompactSidebarOffset()", knowledge)
+        self.assertIn("let compactSidebarResizeObserver = null;", knowledge)
+        self.assertIn("compactSidebarResizeObserver = new ResizeObserver(syncCompactSidebarOffset);", knowledge)
+        self.assertIn("bindCompactSidebarOffset();", knowledge)
+        self.assertNotIn("right: auto; width: min(360px, 48vw); height: 100%;", knowledge)
+
     def test_runtime_model_selector_scripts_are_cache_busted(self) -> None:
         root = static_root()
         html = (root / "index.html").read_text(encoding="utf-8")
