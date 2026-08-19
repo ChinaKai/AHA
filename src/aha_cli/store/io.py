@@ -132,6 +132,7 @@ def exclusive_sidecar_lock(
     timeout: float = _SIDECAR_LOCK_TIMEOUT_SECONDS,
     stale_seconds: float = _SIDECAR_LOCK_STALE_SECONDS,
     retry_delay: float = _SIDECAR_LOCK_RETRY_DELAY,
+    heartbeat_seconds: float = _SIDECAR_LOCK_HEARTBEAT_SECONDS,
 ):
     """Serialize writers through a lock file shared by Windows and WSL views."""
     lock_path.parent.mkdir(parents=True, exist_ok=True)
@@ -185,7 +186,7 @@ def exclusive_sidecar_lock(
     heartbeat = None
 
     def _heartbeat() -> None:
-        while not stop.wait(_SIDECAR_LOCK_HEARTBEAT_SECONDS):
+        while not stop.wait(max(0.1, float(heartbeat_seconds))):
             _refresh_sidecar_lock(lock_path)
 
     try:

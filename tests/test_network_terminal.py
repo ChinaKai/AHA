@@ -48,6 +48,7 @@ class NetworkTerminalTests(unittest.TestCase):
                         "host": host,
                         "port": port,
                         "pid": 4343,
+                        "pid_platform": "posix",
                         "status": "running",
                         "owner_instance": "web-instance",
                         "transfer": {"id": "transfer-2"},

@@ -2011,7 +2011,16 @@ def cmd_hardware_rules(args: argparse.Namespace) -> int:
     if args.json:
         print(json.dumps(state, ensure_ascii=False))
         return 0
-    print(f"device={device} status={state.get('status')} paused={state.get('paused', False)}")
+    details = [
+        f"device={device}",
+        f"status={state.get('status')}",
+        f"paused={state.get('paused', False)}",
+    ]
+    if state.get("liveness_source"):
+        details.append(f"liveness={state['liveness_source']}")
+    if state.get("generation") is not None:
+        details.append(f"generation={state['generation']}")
+    print(" ".join(details))
     rules = state.get("rules") or []
     if not rules:
         print("(no armed rules)")

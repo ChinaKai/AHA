@@ -9,7 +9,7 @@ from pathlib import Path
 import socket
 import stat
 import time
-from typing import Iterable
+from typing import Callable, Iterable
 
 from aha_cli.store.io import iter_jsonl_records_from
 
@@ -23,6 +23,7 @@ _CONTROL_RETRY_ATTEMPTS = 6                   # transient WSL/Windows share erro
 _CONTROL_RETRY_DELAY = 0.05
 _BRIDGE_HEARTBEAT_TTL = 15.0                  # a bridge with a fresh heartbeat is alive even when
                                               # its PID is not checkable from this OS (WSL vs Windows)
+_BRIDGE_STARTING_TTL = 8.0                    # provisional pid=0 states expire with the spawn lock
 
 
 def read_control_records(path: Path, start: int = 0, limit: int = 200) -> tuple[list[tuple[dict, int]], int]:
@@ -116,19 +117,101 @@ def state_has_fresh_heartbeat(state: dict | None, *, ttl: float = _BRIDGE_HEARTB
     return (time.time() - value) <= ttl
 
 
-def stamp_control_generation(record: dict, state: dict | None) -> dict:
-    """Stamp a control record (e.g. ``stop``) with the target bridge's generation.
+def current_pid_platform() -> str:
+    return "windows" if os.name == "nt" else "posix"
 
-    A freshly spawned bridge ignores stop records whose generation predates it, so
-    ``hardware-stop`` immediately followed by ``hardware-attach`` cannot kill the
-    new bridge with the previous instance's stop.
+
+def state_pid_is_local(state: dict | None) -> bool:
+    if not isinstance(state, dict):
+        return False
+    recorded = str(state.get("pid_platform") or "").strip().lower()
+    if recorded:
+        return recorded == current_pid_platform()
+    device = str(state.get("device") or "").strip().upper()
+    if current_pid_platform() == "posix":
+        serial_name = device.removeprefix("\\\\.\\")
+        if serial_name.startswith("COM") and serial_name[3:].isdigit():
+            return False
+    return True
+
+
+def state_liveness_source(state: dict | None, pid_checker: Callable[[object], bool]) -> str:
+    if not isinstance(state, dict):
+        return ""
+    if str(state.get("status") or "").strip().lower() == "stopped":
+        return ""
+    if state_pid_is_local(state) and pid_checker(state.get("pid")):
+        return "pid"
+    try:
+        pid = int(state.get("pid") or 0)
+    except (TypeError, ValueError):
+        pid = 0
+    heartbeat_ttl = (
+        _BRIDGE_STARTING_TTL
+        if str(state.get("status") or "").lower() == "starting" and pid <= 0
+        else _BRIDGE_HEARTBEAT_TTL
+    )
+    if state_has_fresh_heartbeat(state, ttl=heartbeat_ttl):
+        return "heartbeat"
+    return ""
+
+
+def control_file_size(path: Path) -> int:
+    last_error: OSError | None = None
+    for attempt in range(_CONTROL_RETRY_ATTEMPTS):
+        try:
+            return path.stat().st_size if path.exists() else 0
+        except OSError as exc:
+            last_error = exc
+            if attempt + 1 < _CONTROL_RETRY_ATTEMPTS:
+                time.sleep(_CONTROL_RETRY_DELAY * (attempt + 1))
+    raise last_error or OSError(f"cannot stat {path}")
+
+
+def control_start_offset(path: Path, state: dict | None) -> int:
+    file_size = control_file_size(path)
+    if not isinstance(state, dict) or "control_start_offset" not in state:
+        return file_size
+    try:
+        offset = int(state.get("control_start_offset") or 0)
+    except (TypeError, ValueError):
+        return file_size
+    if offset < 0:
+        return file_size
+    return 0 if offset > file_size else offset
+
+
+def stamp_control_generation(record: dict, state: dict | None) -> dict:
+    """Stamp a control record with the target bridge generation and instance.
+
+    A freshly spawned bridge ignores records whose target predates it, so stale
+    ``stop``, ``pause``, TX, or rule commands cannot affect the new instance.
     """
     record = dict(record)
     if state:
-        generation = int(state.get("generation") or 0)
+        try:
+            generation = int(state.get("generation") or 0)
+        except (TypeError, ValueError):
+            generation = 0
         if generation > 0:
             record["generation"] = generation
+        instance_uuid = str(state.get("instance_uuid") or "").strip()
+        if instance_uuid:
+            record["instance_uuid"] = instance_uuid
     return record
+
+
+def control_record_targets_instance(record: dict, generation: int, instance_uuid: str) -> bool:
+    try:
+        target_generation = int(record.get("generation") or 0)
+    except (TypeError, ValueError):
+        target_generation = 0
+    target_instance = str(record.get("instance_uuid") or "").strip()
+    if target_generation > 0 and target_generation != int(generation):
+        return False
+    if target_instance and target_instance != str(instance_uuid):
+        return False
+    return True
 
 
 @dataclass
@@ -332,8 +415,14 @@ class BridgeTerminalIpc:
 
 __all__ = [
     "BridgeTerminalIpc",
+    "control_file_size",
+    "control_record_targets_instance",
+    "control_start_offset",
+    "current_pid_platform",
     "read_control_records",
     "rotate_control_file",
     "stamp_control_generation",
     "state_has_fresh_heartbeat",
+    "state_liveness_source",
+    "state_pid_is_local",
 ]

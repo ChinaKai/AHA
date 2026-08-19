@@ -573,6 +573,7 @@ class BridgeShutdownTests(unittest.TestCase):
                     {
                         "device": device,
                         "pid": 4242,
+                        "pid_platform": "posix",
                         "status": "running",
                         "paused": False,
                         "owner_instance": "web-instance",
@@ -617,6 +618,7 @@ class BridgeShutdownTests(unittest.TestCase):
                     {
                         "device": "COM6",
                         "pid": 5252,
+                        "pid_platform": "posix",
                         "status": "running",
                         "owner_instance": "old-instance",
                     }
