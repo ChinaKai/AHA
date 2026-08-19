@@ -233,6 +233,25 @@
     .kb-modal[hidden] { display: none; }
     .kb-modal-card { background: var(--color-surface); padding: 16px; border-radius: var(--radius-md); min-width: min(260px, 92vw); max-width: 92vw; min-height: 0; box-sizing: border-box; display: grid; gap: 10px; box-shadow: 0 8px 30px rgba(0,0,0,.25); }
     .kb-modal-card h3 { margin: 0; font-size: 15px; }
+    .kb-local-changes-modal { width: min(920px, 94vw); max-height: min(86vh, 820px); grid-template-rows: auto auto minmax(0, 1fr) auto; }
+    .kb-local-changes-list { min-height: 0; overflow: auto; display: grid; gap: 10px; padding-right: 2px; }
+    .kb-local-change { min-width: 0; border: 1px solid var(--color-border-subtle); border-radius: var(--radius-md); overflow: hidden; }
+    .kb-local-change-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 9px 11px; background: var(--color-surface-muted); }
+    .kb-local-change-head code { min-width: 0; flex: 1 1 auto; overflow-wrap: anywhere; white-space: normal; }
+    .kb-local-change-status { flex: 0 0 auto; padding: 1px 6px; border-radius: 999px; background: var(--status-bg); color: var(--status-text); font-size: 10px; }
+    .kb-local-change-stats { flex: 0 0 auto; font-size: 11px; font-variant-numeric: tabular-nums; }
+    .kb-local-change-stats .add { color: var(--color-success-text, #16803a); }
+    .kb-local-change-stats .delete { color: var(--color-danger-text, #c53b3b); }
+    .kb-local-change-message { padding: 12px; color: var(--color-text-subtle); font-size: 12px; }
+    .kb-local-change-diff { margin: 0; max-height: 360px; overflow: auto; padding: 12px; border: 0; border-radius: 0; background: var(--color-code-bg, #111827); color: var(--color-code-text, #e5e7eb); font-size: 11px; line-height: 1.5; white-space: pre; tab-size: 2; }
+    .kb-sync-status-action { display: inline; min-height: 0; padding: 0; border: 0; background: transparent; color: var(--color-primary-strong); font: inherit; text-decoration: underline; text-underline-offset: 2px; cursor: pointer; }
+    .kb-sync-status-action:hover { color: var(--color-primary); }
+    .kb-capture-create-fields { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 10px; }
+    .kb-capture-create-fields label { display: grid; gap: 5px; min-width: 0; color: var(--color-text-subtle); font-size: 12px; }
+    .kb-capture-create-fields input, .kb-capture-create-fields select { width: 100%; }
+    .kb-capture-path-preview { display: grid; gap: 5px; min-width: 0; padding: 9px 10px; border: 1px solid var(--color-border-subtle); border-radius: var(--radius-sm); background: var(--color-surface-muted); }
+    .kb-capture-path-preview span { color: var(--color-text-subtle); font-size: 11px; }
+    .kb-capture-path-preview code { overflow-wrap: anywhere; white-space: normal; }
     .kb-attachments { margin-top: 14px; border-top: 1px solid var(--color-border-subtle); padding-top: 10px; display: grid; gap: 10px; }
     .kb-attachments-heading { font-weight: 650; color: var(--color-text-strong); }
     .kb-attachment { border: 1px solid var(--color-border-subtle); border-radius: var(--radius-sm); padding: 8px; display: grid; gap: 6px; }
@@ -500,6 +519,9 @@
       .kb-workspace-detail-card #cap-view-refs,
       .kb-workspace-detail-card #cap-view-distill { padding: 0 12px; }
       .kb-workspace-detail-card .kb-detail-scroll-body { padding: 14px 12px 44px; }
+      .kb-capture-create-fields { grid-template-columns: 1fr; }
+      .kb-local-changes-modal { width: calc(100vw - 16px - env(safe-area-inset-left) - env(safe-area-inset-right)); max-height: calc(100dvh - 16px - env(safe-area-inset-top) - env(safe-area-inset-bottom)); }
+      .kb-local-change-diff { max-height: 44dvh; }
     }
     .kb-shell {
       display: grid; grid-template-columns: var(--kb-sidebar-active-width, 380px) minmax(0, 1fr);
@@ -552,8 +574,9 @@
     .kb-graph-file-folder-label,
     .kb-graph-file-entry-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .kb-graph-file-folder-count { margin-left: auto; color: var(--color-text-subtle); font-size: 10px; }
-    .kb-graph-file-chevron { width: 10px; flex: 0 0 10px; color: var(--color-text-subtle); }
-    .kb-graph-file-entry::before { content: ""; width: 7px; height: 9px; flex: 0 0 7px; border: 1px solid currentColor; border-radius: 1px; opacity: .55; }
+    .kb-graph-file-chevron { width: 12px; height: 12px; flex: 0 0 12px; color: var(--color-text-subtle); transition: transform .15s ease; }
+    .kb-graph-file-chevron.expanded { transform: rotate(90deg); }
+    .kb-graph-file-entry-icon { width: 13px; height: 15px; flex: 0 0 13px; color: var(--color-text-subtle); fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
     .kb-workspace-main { position: relative; display: block; min-width: 0; min-height: 0; overflow: hidden; padding: 12px; }
     .kb-workspace-main > section[id^="tab-"] { min-width: 0; height: 100%; overflow: auto; }
     #tab-graph { height: 100%; min-height: 560px; }
@@ -926,22 +949,36 @@
   </div>
 
   <div id="cap-new-modal" class="kb-modal" hidden>
-    <form id="capture-form" class="kb-modal-card kb-capture-form">
-      <h3 data-i18n="knowledge.capture_add">New note</h3>
-      <div class="kb-row">
-        <input id="cap-title" type="text" placeholder="Optional title" data-i18n-placeholder="knowledge.capture_title_placeholder" />
-        <select id="cap-scope" aria-label="Scope hint"><option value="personal" data-i18n="knowledge.scope_personal">Personal</option><option value="general" data-i18n="knowledge.scope_general">General</option><option value="project" data-i18n="knowledge.scope_project">Project</option></select>
+    <form id="capture-form" class="kb-modal-card kb-capture-form" role="dialog" aria-modal="true" aria-labelledby="cap-new-title" aria-describedby="cap-new-description">
+      <h3 id="cap-new-title" data-i18n="knowledge.capture_create_title">Create knowledge note</h3>
+      <div id="cap-new-description" class="kb-muted" data-i18n="knowledge.capture_create_hint">Create a Markdown note in the Capture inbox. You can edit its content before confirming.</div>
+      <div class="kb-capture-create-fields">
+        <label><span data-i18n="knowledge.capture_create_type">Type</span><input id="cap-create-type" type="text" value="Capture Markdown" readonly /></label>
+        <label><span data-i18n="knowledge.capture_create_scope">Scope</span><select id="cap-scope" aria-label="Scope hint"><option value="personal" data-i18n="knowledge.scope_personal">Personal</option><option value="general" data-i18n="knowledge.scope_general">General</option><option value="project" data-i18n="knowledge.scope_project">Project</option></select></label>
+        <label><span data-i18n="knowledge.capture_create_name">Name</span><input id="cap-title" type="text" placeholder="Note name" data-i18n-placeholder="knowledge.capture_create_name_placeholder" required /></label>
       </div>
-      <textarea id="cap-text" rows="7" placeholder="Dump raw notes here…" data-i18n-placeholder="knowledge.capture_new_placeholder"></textarea>
+      <div class="kb-capture-path-preview"><span data-i18n="knowledge.capture_create_path">Path</span><code id="cap-path-preview">capture/inbox/…</code></div>
+      <label><span class="kb-muted" data-i18n="knowledge.capture_create_content">Initial content</span><textarea id="cap-text" rows="7" placeholder="Dump raw notes here…" data-i18n-placeholder="knowledge.capture_new_placeholder" required></textarea></label>
       <div class="kb-row kb-cap-edit-tools">
         <label class="kb-cap-upload" for="cap-new-image"><span data-i18n="knowledge.capture_add_image">+ image</span><input id="cap-new-image" type="file" accept="image/png,image/jpeg,image/webp" hidden /></label>
         <span id="cap-new-image-count" class="kb-muted"></span>
       </div>
       <div class="kb-card-actions">
-        <button class="primary" type="submit" data-i18n="knowledge.capture_create">Create</button>
+        <button class="primary" type="submit" id="cap-new-confirm" data-i18n="knowledge.capture_create_confirm">Create note</button>
         <button class="button-ghost" type="button" id="cap-new-cancel" data-i18n="common.cancel">Cancel</button>
       </div>
     </form>
+  </div>
+
+  <div id="kb-local-changes-modal" class="kb-modal" hidden>
+    <div class="kb-modal-card kb-local-changes-modal" role="dialog" aria-modal="true" aria-labelledby="kb-local-changes-title" aria-describedby="kb-local-changes-summary">
+      <h3 id="kb-local-changes-title" data-i18n="knowledge.local_changes_title">Local changes</h3>
+      <div id="kb-local-changes-summary" class="kb-muted" data-i18n="knowledge.local_changes_loading">Loading local changes...</div>
+      <div id="kb-local-changes-list" class="kb-local-changes-list" aria-live="polite"></div>
+      <div class="kb-card-actions">
+        <button class="button-ghost" type="button" id="kb-local-changes-close" data-i18n="common.close">Close</button>
+      </div>
+    </div>
   </div>
 
   <div id="nav-draft-modal" class="kb-modal" hidden>
@@ -1003,7 +1040,7 @@
   <script src="/static/textarea_image_paste.js?v=clipboard-image-dedupe-v1"></script>
   <script src="/static/task_memo_markdown.js"></script>
   <script src="/static/search_highlight.js?v=global-search-v4"></script>
-  <script src="/static/i18n.js?v=knowledge-proxy-v3"></script>
+  <script src="/static/i18n.js?v=knowledge-local-changes-v1"></script>
   <script>
     const $ = (s) => document.querySelector(s);
     const t = (key, fallback) => window.AHAI18n?.t?.(key, fallback) || fallback || key;
@@ -1323,7 +1360,13 @@
     function syncChromeText() {
       document.title = t("knowledge.title", "AHA Knowledge Base");
       window.AHAI18n?.apply?.(document);
+      syncCreateDialogText();
       applySidebarLayout();
+    }
+
+    function syncCreateDialogText() {
+      const type = $("#cap-create-type");
+      if (type) type.value = t("knowledge.capture_create_type_capture", "Capture Markdown");
     }
 
     function clearWorkspaceDetails() {
@@ -1731,6 +1774,12 @@
       return defaultCollapsed;
     }
 
+    const GRAPH_DOCUMENT_ICON = '<svg class="kb-graph-file-entry-icon" viewBox="0 0 16 18" aria-hidden="true" focusable="false"><path d="M3.5 1.5h5.7l3.3 3.3v11.7h-9z"></path><path d="M9 1.8v3.5h3.3"></path><path d="M5.5 9h5M5.5 12h5"></path></svg>';
+
+    function graphFolderChevron(collapsed) {
+      return `<svg class="kb-graph-file-chevron${collapsed ? "" : " expanded"}" viewBox="0 0 12 12" aria-hidden="true" focusable="false"><path d="M4 2.5 7.5 6 4 9.5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path></svg>`;
+    }
+
     function renderGraphFileGroup(node, depth, indexPath) {
       const collapsed = graphFileGroupCollapsed(node, depth);
       const encodedKey = encodeURIComponent(node.key);
@@ -1740,11 +1789,11 @@
       const entries = sortEntriesByTitle(node.entries).map(entry => {
         const id = encodeURIComponent(entryIdentity(entry));
         const title = entryTitle(entry);
-        return `<button class="kb-graph-file-entry" type="button" title="${esc(entry.path || title)}" onclick="openGraphEntry('${esc(id)}')"><span class="kb-graph-file-entry-label">${esc(title)}</span></button>`;
+        return `<button class="kb-graph-file-entry" type="button" title="${esc(entry.path || title)}" onclick="openGraphEntry('${esc(id)}')">${GRAPH_DOCUMENT_ICON}<span class="kb-graph-file-entry-label">${esc(title)}</span></button>`;
       }).join("");
       return `<section class="kb-graph-file-group">
         <button class="kb-graph-file-folder" type="button" aria-expanded="${collapsed ? "false" : "true"}" onclick="toggleGraphFileGroup('${esc(encodedKey)}', ${collapsed ? "true" : "false"})">
-          <span class="kb-graph-file-chevron" aria-hidden="true">${collapsed ? "›" : "⌄"}</span>
+          ${graphFolderChevron(collapsed)}
           <span class="kb-graph-file-folder-label">${esc(node.label)}</span>
           <span class="kb-graph-file-folder-count">${node.count}</span>
         </button>
@@ -1780,11 +1829,11 @@
       const entries = [...node.entries].sort((a, b) => String(a.filename || "").localeCompare(String(b.filename || ""))).map(note => {
         const active = state.activeCaptureNote?.id === note.id;
         const label = String(note.filename || note.title || note.id || "note").replace(/\.md$/i, "");
-        return `<button class="kb-graph-file-entry${active ? " active" : ""}" type="button" title="${esc(note.path || label)}" onclick="openGraphCapture('${esc(encodeURIComponent(note.id))}')"><span class="kb-graph-file-entry-label">${esc(label)}</span></button>`;
+        return `<button class="kb-graph-file-entry${active ? " active" : ""}" type="button" title="${esc(note.path || label)}" onclick="openGraphCapture('${esc(encodeURIComponent(note.id))}')">${GRAPH_DOCUMENT_ICON}<span class="kb-graph-file-entry-label">${esc(label)}</span></button>`;
       }).join("");
       return `<section class="kb-graph-file-group">
         <button class="kb-graph-file-folder" type="button" aria-expanded="${collapsed ? "false" : "true"}" onclick="toggleGraphFileGroup('${esc(encodedKey)}', ${collapsed ? "true" : "false"})">
-          <span class="kb-graph-file-chevron" aria-hidden="true">${collapsed ? "›" : "⌄"}</span>
+          ${graphFolderChevron(collapsed)}
           <span class="kb-graph-file-folder-label">${esc(node.label)}</span>
           <span class="kb-graph-file-folder-count">${node.count}</span>
         </button>
@@ -1807,13 +1856,13 @@
       const skillsCollapsed = specialFileGroupCollapsed(skillsKey, true);
       const skills = `<section class="kb-graph-file-group">
         <button class="kb-graph-file-folder" type="button" aria-expanded="${skillsCollapsed ? "false" : "true"}" onclick="toggleGraphFileGroup('${encodeURIComponent(skillsKey)}', ${skillsCollapsed ? "true" : "false"})">
-          <span class="kb-graph-file-chevron" aria-hidden="true">${skillsCollapsed ? "›" : "⌄"}</span>
+          ${graphFolderChevron(skillsCollapsed)}
           <span class="kb-graph-file-folder-label">${esc(t("skills.title", "Skills"))}</span>
           <span class="kb-graph-file-folder-count">${skillNodes.length}</span>
         </button>
         <div class="kb-graph-file-group-children"${skillsCollapsed ? " hidden" : ""}>
-          <button class="kb-graph-file-entry" type="button" onclick="openGraphSkills()"><span class="kb-graph-file-entry-label">${esc(t("skills.manage", "Manage Skills"))}</span></button>
-          ${skillNodes.map(node => `<button class="kb-graph-file-entry${state.skillSelectedId === String(node.id).replace(/^skill:/, "") ? " active" : ""}" type="button" onclick="openGraphSkill('${esc(encodeURIComponent(String(node.id).replace(/^skill:/, "")))}')"><span class="kb-graph-file-entry-label">${esc(node.title || node.id)}</span></button>`).join("")}
+          <button class="kb-graph-file-entry" type="button" onclick="openGraphSkills()">${GRAPH_DOCUMENT_ICON}<span class="kb-graph-file-entry-label">${esc(t("skills.manage", "Manage Skills"))}</span></button>
+          ${skillNodes.map(node => `<button class="kb-graph-file-entry${state.skillSelectedId === String(node.id).replace(/^skill:/, "") ? " active" : ""}" type="button" onclick="openGraphSkill('${esc(encodeURIComponent(String(node.id).replace(/^skill:/, "")))}')">${GRAPH_DOCUMENT_ICON}<span class="kb-graph-file-entry-label">${esc(node.title || node.id)}</span></button>`).join("")}
         </div>
       </section>`;
       container.innerHTML = capture + groups + skills;
@@ -4889,6 +4938,7 @@
       $("#cap-text").value = "";
       $("#cap-title").value = "";
       $("#cap-scope").value = "personal";
+      updateCapturePathPreview();
       renderNewNoteImageCount();
     }
     function newNoteDraft() {
@@ -4922,7 +4972,9 @@
       $("#cap-text").value = state.newNoteImages.length ? (draft?.text || "") : stripPendingCaptureImages(draft?.text || "");
       $("#cap-title").value = draft?.title || "";
       $("#cap-scope").value = draft?.scope || "personal";
+      updateCapturePathPreview();
       renderNewNoteImageCount();
+      return Boolean(draft);
     }
     function clearNewNoteDraft() {
       try { localStorage.removeItem(CAPTURE_DRAFT_KEY); }
@@ -4931,9 +4983,19 @@
       resetNewNoteForm();
     }
     function openNewNoteModal() {
-      restoreNewNoteDraft();
+      const restored = restoreNewNoteDraft();
+      if (!restored) {
+        const template = captureTemplateValues();
+        $("#cap-title").value = template.title;
+        $("#cap-text").value = template.text;
+        $("#cap-scope").value = "personal";
+        updateCapturePathPreview();
+      }
       $("#cap-new-modal").hidden = false;
-      setTimeout(() => $("#cap-text").focus(), 0);
+      setTimeout(() => {
+        $("#cap-title").focus();
+        $("#cap-title").select();
+      }, 0);
     }
     function captureTemplateValues() {
       const now = new Date();
@@ -4954,27 +5016,22 @@
       ].join("\n");
       return { title, text };
     }
-    async function createCaptureTemplateFile() {
-      const button = $("#kb-capture-new");
-      if (button) button.disabled = true;
-      try {
-        const template = captureTemplateValues();
-        const created = await api("/api/kb/capture", {
-          method: "POST",
-          body: JSON.stringify({ title: template.title, text: template.text, scope_hint: "personal" }),
-        });
-        graphState.collapsedFileGroups.delete("sidebar:capture");
-        graphState.expandedFileGroups.add("sidebar:capture");
-        await loadCapture();
-        const noteId = String(created.note?.id || "");
-        if (noteId) openCaptureNoteView(noteId);
-        const path = created.note?.path || "capture/inbox";
-        toast(formatText("knowledge.capture_template_created", { path }, `Created ${path}. Continue editing it in Obsidian.`));
-      } catch (error) {
-        toast(formatText("knowledge.failed_with_error", { error: error.message }, "Failed: " + error.message));
-      } finally {
-        if (button) button.disabled = false;
-      }
+
+    function capturePathPreview(title = $("#cap-title")?.value || "") {
+      const clean = String(title || "")
+        .replace(/[<>:"/\\|?*\x00-\x1f]+/g, "-")
+        .replace(/\s+/g, "-")
+        .replace(/^[ .-]+|[ .-]+$/g, "")
+        .slice(0, 80) || t("knowledge.capture_create_generated_name", "generated-note");
+      const now = new Date();
+      const pad = value => String(value).padStart(2, "0");
+      const stamp = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
+      return `capture/inbox/${stamp}-${clean}-<id>.md`;
+    }
+
+    function updateCapturePathPreview() {
+      const preview = $("#cap-path-preview");
+      if (preview) preview.textContent = capturePathPreview();
     }
     function closeNewNoteModal(clearDraft) {
       if (!clearDraft) saveNewNoteDraft();
@@ -5006,7 +5063,7 @@
       } catch (e) { toast(formatText("knowledge.failed_with_error", { error: e.message }, "Failed: " + e.message)); }
       finally { input.value = ""; }
     }
-    $("#kb-capture-new").addEventListener("click", createCaptureTemplateFile);
+    $("#kb-capture-new").addEventListener("click", openNewNoteModal);
     $("#cap-new-cancel").addEventListener("click", () => closeNewNoteModal(false));
     $("#cap-new-modal").addEventListener("click", (ev) => { if (ev.target.id === "cap-new-modal") closeNewNoteModal(false); });
     $("#cap-new-image").addEventListener("change", (ev) => queueNewNoteImage(ev.currentTarget));
@@ -5019,13 +5076,16 @@
         (e) => toast(formatText("knowledge.failed_with_error", { error: e.message }, t("memo.image_paste_failed", "Failed to paste image.")))
       );
     });
-    for (const id of ["#cap-text", "#cap-title"]) $(id).addEventListener("input", saveNewNoteDraft);
+    $("#cap-text").addEventListener("input", saveNewNoteDraft);
+    $("#cap-title").addEventListener("input", () => { updateCapturePathPreview(); saveNewNoteDraft(); });
     $("#cap-scope").addEventListener("change", saveNewNoteDraft);
 
     $("#capture-form").addEventListener("submit", async (ev) => {
       ev.preventDefault();
       const text = $("#cap-text").value;
       if (!text.trim()) return;
+      const submit = $("#cap-new-confirm");
+      if (submit) submit.disabled = true;
       let noteId = "";
       try {
         const created = await api("/api/kb/capture", { method: "POST", body: JSON.stringify({ text, scope_hint: $("#cap-scope").value, title: $("#cap-title").value.trim() || null }) });
@@ -5046,14 +5106,21 @@
         if (nextText !== text) {
           await api("/api/kb/capture", { method: "PATCH", body: JSON.stringify({ id: noteId, title: $("#cap-title").value.trim(), text: nextText, scope_hint: $("#cap-scope").value }) });
         }
+        graphState.collapsedFileGroups.delete("sidebar:capture");
+        graphState.expandedFileGroups.add("sidebar:capture");
+        const path = created.note?.path || capturePathPreview($("#cap-title").value);
         closeNewNoteModal(true);
-        await loadCapture(); await loadStatus(); toast(t("knowledge.saved", "Saved"));
+        await loadCapture(); await loadStatus();
+        if (noteId) openCaptureNoteView(noteId);
+        toast(formatText("knowledge.capture_template_created", { path }, `Created ${path}. Continue editing it in Obsidian.`));
       } catch (e) {
         if (noteId) {
           closeNewNoteModal(true);
           await loadCapture(); await loadStatus();
         }
         toast(formatText("knowledge.failed_with_error", { error: e.message }, "Failed: " + e.message));
+      } finally {
+        if (submit) submit.disabled = false;
       }
     });
     document.addEventListener("change", (event) => {
@@ -5078,36 +5145,43 @@
       return result?.error || result?.reason || t("knowledge.sync_failed", "Sync failed");
     }
 
-    function syncStatusMessage(status) {
-      if (!status?.git_available) return t("knowledge.sync_status_git_unavailable", "git unavailable");
-      if (!status?.is_repo) return t("knowledge.sync_status_not_initialized", "Not initialized");
-      if (!status?.remote) return t("knowledge.sync_status_no_remote", "No remote");
+    function syncStatusParts(status) {
+      if (!status?.git_available) return [{ text: t("knowledge.sync_status_git_unavailable", "git unavailable") }];
+      if (!status?.is_repo) return [{ text: t("knowledge.sync_status_not_initialized", "Not initialized") }];
+      if (!status?.remote) return [{ text: t("knowledge.sync_status_no_remote", "No remote") }];
       if (status?.remote_error) {
-        return formatText("knowledge.sync_status_remote_error", { error: status.remote_error }, "Remote check failed: " + status.remote_error);
+        return [{ text: formatText("knowledge.sync_status_remote_error", { error: status.remote_error }, "Remote check failed: " + status.remote_error) }];
       }
       const maintenance = status.maintenance || {};
       if (maintenance.status === "running") {
-        return t("knowledge.sync_status_resolving", "Resolving conflicts...");
+        return [{ text: t("knowledge.sync_status_resolving", "Resolving conflicts...") }];
       }
       if (status.unmerged?.length || status.state === "conflict") {
         const files = (status.conflict_files || []).slice(0, 3).join(", ");
         const extra = files ? " · " + files : "";
-        return t("knowledge.sync_status_conflict", "Sync conflict needs resolution") + extra;
+        return [{ text: t("knowledge.sync_status_conflict", "Sync conflict needs resolution") + extra }];
       }
       if (maintenance.status === "resolved") {
-        return maintenance.summary || t("knowledge.sync_status_resolved", "Conflicts resolved");
+        return [{ text: maintenance.summary || t("knowledge.sync_status_resolved", "Conflicts resolved") }];
       }
       const parts = [];
       if (status.changed_count) {
-        parts.push(formatText("knowledge.sync_status_dirty", { count: status.changed_count }, status.changed_count + " local change(s)"));
+        parts.push({
+          text: formatText("knowledge.sync_status_dirty", { count: status.changed_count }, status.changed_count + " local change(s)"),
+          action: "local_changes",
+        });
       }
       if (status.ahead) {
-        parts.push(formatText("knowledge.sync_status_ahead", { count: status.ahead }, "ahead by " + status.ahead));
+        parts.push({ text: formatText("knowledge.sync_status_ahead", { count: status.ahead }, "ahead by " + status.ahead) });
       }
       if (status.behind) {
-        parts.push(formatText("knowledge.sync_status_behind", { count: status.behind }, "behind by " + status.behind));
+        parts.push({ text: formatText("knowledge.sync_status_behind", { count: status.behind }, "behind by " + status.behind) });
       }
-      return parts.length ? parts.join(" · ") : t("knowledge.sync_status_clean", "Up to date");
+      return parts.length ? parts : [{ text: t("knowledge.sync_status_clean", "Up to date") }];
+    }
+
+    function syncStatusMessage(status) {
+      return syncStatusParts(status).map(part => part.text).join(" · ");
     }
 
     function syncStatusElements() {
@@ -5116,6 +5190,94 @@
 
     function setSyncStatusText(text) {
       for (const el of syncStatusElements()) el.textContent = text;
+    }
+
+    function renderSyncStatus(status) {
+      const parts = syncStatusParts(status);
+      for (const el of syncStatusElements()) {
+        el.replaceChildren();
+        parts.forEach((part, index) => {
+          if (index) el.append(document.createTextNode(" · "));
+          if (part.action === "local_changes") {
+            const button = document.createElement("button");
+            button.type = "button";
+            button.className = "kb-sync-status-action";
+            button.textContent = part.text;
+            button.setAttribute("aria-haspopup", "dialog");
+            button.addEventListener("click", () => openLocalChangesModal(button));
+            el.append(button);
+          } else {
+            el.append(document.createTextNode(part.text));
+          }
+        });
+      }
+    }
+
+    let localChangesTrigger = null;
+
+    function localChangeMessage(change) {
+      if (change.error) return formatText("knowledge.local_changes_file_error", { error: change.error }, "Failed to read diff: " + change.error);
+      if (change.binary) return t("knowledge.local_changes_binary", "Binary file; textual diff is unavailable.");
+      if (change.no_diff) return t("knowledge.local_changes_no_diff", "No textual diff is available for this change.");
+      return "";
+    }
+
+    function renderLocalChanges(payload) {
+      const list = $("#kb-local-changes-list");
+      const summary = $("#kb-local-changes-summary");
+      const changes = Array.isArray(payload?.changes) ? payload.changes : [];
+      const count = Number(payload?.count || changes.length);
+      summary.textContent = payload?.truncated
+        ? formatText("knowledge.local_changes_summary_truncated", { count, returned: changes.length }, `Showing ${changes.length} of ${count} local changes; long diffs are truncated.`)
+        : formatText("knowledge.local_changes_summary", { count }, `${count} local change(s)`);
+      if (!changes.length) {
+        list.innerHTML = `<div class="kb-local-change-message">${esc(t("knowledge.local_changes_empty", "No local changes."))}</div>`;
+        return;
+      }
+      list.innerHTML = changes.map(change => {
+        const additions = Number.isFinite(Number(change.additions)) ? Number(change.additions) : null;
+        const deletions = Number.isFinite(Number(change.deletions)) ? Number(change.deletions) : null;
+        const stats = additions === null || deletions === null
+          ? ""
+          : `<span class="kb-local-change-stats"><span class="add">+${additions}</span> <span class="delete">−${deletions}</span></span>`;
+        const message = localChangeMessage(change);
+        const body = message
+          ? `<div class="kb-local-change-message">${esc(message)}</div>`
+          : `<pre class="kb-local-change-diff">${esc(change.diff || "")}</pre>`;
+        const truncated = change.truncated
+          ? `<div class="kb-local-change-message">${esc(t("knowledge.local_changes_diff_truncated", "Diff truncated for display."))}</div>`
+          : "";
+        return `<section class="kb-local-change">
+          <div class="kb-local-change-head"><code>${esc(change.path || "-")}</code><span class="kb-local-change-status">${esc(change.status || "??")}</span>${stats}</div>
+          ${body}${truncated}
+        </section>`;
+      }).join("");
+    }
+
+    async function openLocalChangesModal(trigger = null) {
+      localChangesTrigger = trigger || document.activeElement;
+      $("#kb-local-changes-modal").hidden = false;
+      $("#kb-local-changes-summary").textContent = t("knowledge.local_changes_loading", "Loading local changes...");
+      $("#kb-local-changes-list").innerHTML = "";
+      $("#kb-local-changes-modal").setAttribute("aria-busy", "true");
+      setTimeout(() => $("#kb-local-changes-close").focus(), 0);
+      try {
+        const payload = await api("/api/kb/local-changes");
+        if (!payload?.ok) throw new Error(payload?.error || t("knowledge.local_changes_failed", "Failed to load local changes."));
+        renderLocalChanges(payload);
+      } catch (error) {
+        $("#kb-local-changes-summary").textContent = formatText("knowledge.local_changes_failed_with_error", { error: error.message }, "Failed to load local changes: " + error.message);
+        $("#kb-local-changes-list").innerHTML = "";
+      } finally {
+        $("#kb-local-changes-modal").removeAttribute("aria-busy");
+      }
+    }
+
+    function closeLocalChangesModal() {
+      $("#kb-local-changes-modal").hidden = true;
+      const trigger = localChangesTrigger;
+      localChangesTrigger = null;
+      trigger?.focus?.();
     }
 
     function syncButtons() {
@@ -5152,7 +5314,7 @@
       setSyncStatusText(t("knowledge.sync_status_checking", "Checking sync status..."));
       try {
         const status = await api("/api/kb/sync-status");
-        setSyncStatusText(syncStatusMessage(status));
+        renderSyncStatus(status);
         const hasConflict = Boolean(status?.unmerged?.length || status?.state === "conflict");
         setResolveButtons(hasConflict, false);
       } catch (e) {
@@ -5329,6 +5491,10 @@
         closeProjectRelations();
         return true;
       }
+      if (knowledgeModalOpen("#kb-local-changes-modal")) {
+        closeLocalChangesModal();
+        return true;
+      }
       if (knowledgeModalOpen("#nav-agent-modal")) {
         closeProjectNavAgentModal();
         return true;
@@ -5376,6 +5542,10 @@
       button.addEventListener("click", () => showTab(button.dataset.kbView));
     }
     $("#kb-settings-open").addEventListener("click", () => showTab("settings"));
+    $("#kb-local-changes-close").addEventListener("click", closeLocalChangesModal);
+    $("#kb-local-changes-modal").addEventListener("click", event => {
+      if (event.target.id === "kb-local-changes-modal") closeLocalChangesModal();
+    });
     $("#kb-sidebar-toggle").addEventListener("click", () => setSidebarCollapsed(!sidebarIsCollapsed()));
     bindSidebarResize();
     bindResponsiveGraphLayout();

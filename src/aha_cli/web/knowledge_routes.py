@@ -24,6 +24,7 @@ from aha_cli.domain.models import default_knowledge_config, utc_now
 from aha_cli.services.knowledge_agent_progress import agent_log_event, summarize_agent_progress, trim_agent_log
 from aha_cli.services.knowledge_git import auto_commit_after_change
 from aha_cli.services.knowledge_git import changed_paths as knowledge_changed_paths
+from aha_cli.services.knowledge_git import local_changes as knowledge_local_changes
 from aha_cli.services.knowledge_git import sync_status as knowledge_sync_status
 from aha_cli.services.knowledge_git import sync as knowledge_sync
 from aha_cli.services.knowledge_navigation import (
@@ -1191,6 +1192,9 @@ def knowledge_route_response(
         status["maintenance"] = maintenance_record(root)
         status["sync_loop"] = (read_sync_state(root).get("loop") or {})
         return _ok(method, status)
+
+    if method in {"GET", "HEAD"} and path == "/api/kb/local-changes":
+        return _ok(method, knowledge_local_changes(root, cfg))
 
     if method in {"GET", "HEAD"} and path == "/api/kb/project-identity":
         try:

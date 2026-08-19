@@ -1810,6 +1810,43 @@ def test_sync_status_endpoint_checks_local_by_default_and_remote_on_request(tmp_
     assert calls == [{"root": home, "check_remote": True, "enabled": True}]
 
 
+def test_local_changes_endpoint_is_read_only_and_returns_diff_payload(tmp_path: Path, monkeypatch):
+    home = _setup(tmp_path)
+    calls = []
+
+    import aha_cli.web.knowledge_routes as kr
+
+    def fake_local_changes(root, cfg):
+        calls.append({"root": root, "enabled": cfg["knowledge"]["enabled"]})
+        return {
+            "ok": True,
+            "state": "dirty",
+            "count": 1,
+            "returned": 1,
+            "truncated": False,
+            "changes": [{
+                "path": "projects/example/navigation/index.md",
+                "status": " M",
+                "additions": 2,
+                "deletions": 1,
+                "binary": False,
+                "diff": "@@ -1 +1 @@\n-old\n+new",
+                "truncated": False,
+                "no_diff": False,
+                "error": "",
+            }],
+        }
+
+    monkeypatch.setattr(kr, "knowledge_local_changes", fake_local_changes)
+
+    out = _get(home, "/api/kb/local-changes")
+
+    assert out["count"] == 1
+    assert out["changes"][0]["additions"] == 2
+    assert out["changes"][0]["diff"].startswith("@@")
+    assert calls == [{"root": home, "enabled": True}]
+
+
 def test_config_patch_rejects_bad_gate(tmp_path: Path):
     home = _setup(tmp_path)
     resp = knowledge_route_response(

@@ -330,6 +330,57 @@ def test_changed_paths_preserves_unicode_paths(tmp_path: Path):
     assert not any("\\347" in item or item.startswith('"') for item in paths)
 
 
+def test_local_changes_reports_text_binary_untracked_and_truncated_diff(tmp_path: Path):
+    root = tmp_path / ".aha"
+    cfg = _config()
+    assert kg.ensure_repo(root, cfg)["ok"] is True
+    repo = knowledge_root(root, cfg)
+    tracked = repo / "general" / "wiki" / "tracked.md"
+    tracked.parent.mkdir(parents=True, exist_ok=True)
+    tracked.write_text("before\n", encoding="utf-8")
+    assert kg.commit_all(root, "base", cfg)["committed"] is True
+
+    tracked.write_text("after\nextra\n", encoding="utf-8")
+    untracked = repo / "general" / "wiki" / "new.md"
+    untracked.write_text("new line\n", encoding="utf-8")
+    binary = repo / "general" / "wiki" / "blob.bin"
+    binary.write_bytes(b"\x00\x01\x02")
+    empty = repo / "general" / "wiki" / "empty.md"
+    empty.write_text("", encoding="utf-8")
+    long_file = repo / "general" / "wiki" / "long.md"
+    long_file.write_text("long-line\n" * 3000, encoding="utf-8")
+
+    payload = kg.local_changes(root, cfg)
+    changes = {item["path"]: item for item in payload["changes"]}
+
+    assert payload["ok"] is True
+    assert payload["state"] == "dirty"
+    assert payload["count"] == 5
+    assert changes["general/wiki/tracked.md"]["additions"] == 2
+    assert changes["general/wiki/tracked.md"]["deletions"] == 1
+    assert "+after" in changes["general/wiki/tracked.md"]["diff"]
+    assert changes["general/wiki/new.md"]["status"] == "??"
+    assert changes["general/wiki/new.md"]["additions"] == 1
+    assert "+new line" in changes["general/wiki/new.md"]["diff"]
+    assert changes["general/wiki/blob.bin"]["binary"] is True
+    assert changes["general/wiki/blob.bin"]["diff"] == ""
+    assert changes["general/wiki/empty.md"]["no_diff"] is True
+    assert changes["general/wiki/empty.md"]["additions"] == 0
+    assert changes["general/wiki/long.md"]["truncated"] is True
+    assert payload["truncated"] is True
+
+
+def test_local_changes_surfaces_git_status_error(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    root = tmp_path / ".aha"
+    cfg = _config()
+    assert kg.ensure_repo(root, cfg)["ok"] is True
+    monkeypatch.setattr(kg, "_changed_entries", lambda repo: {"ok": False, "entries": [], "error": "status failed"})
+
+    payload = kg.local_changes(root, cfg)
+
+    assert payload == {"ok": False, "state": "error", "error": "status failed", "changes": []}
+
+
 def test_pull_unreachable_remote_returns_failure(tmp_path: Path):
     root = tmp_path / ".aha"
     # Remote path that does not exist -> unreachable, not "empty".

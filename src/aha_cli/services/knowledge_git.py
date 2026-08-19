@@ -38,6 +38,10 @@ from aha_cli.store.knowledge import PROJECTS_DIR, init_knowledge_base, knowledge
 
 _GIT_TIMEOUT = 120
 _PROJECT_APPROVED_KINDS = ("navigation", "solutions", "worklog")
+_LOCAL_CHANGES_MAX_FILES = 100
+_LOCAL_CHANGES_MAX_DIFF_CHARS = 12_000
+_LOCAL_CHANGES_MAX_TOTAL_DIFF_CHARS = 60_000
+_LOCAL_CHANGES_READ_BYTES = 256_000
 
 # Porcelain XY codes for unmerged paths (index and worktree both non-space).
 _UNMERGED_CODES = {"AA", "DD", "AU", "UA", "DU", "UD", "UU"}
@@ -436,6 +440,171 @@ def changed_paths(root: Path, config: dict | None = None) -> list[str]:
     if not status["ok"]:
         return []
     return list(status["paths"])
+
+
+def _changed_entries(repo: Path) -> dict:
+    status = _run_git(repo, ["status", "--porcelain=v1", "-z", "--untracked-files=all"])
+    if not status["ok"]:
+        return {"ok": False, "entries": [], "error": status["stderr"] or "git status failed"}
+    entries: list[dict] = []
+    parts = (status["stdout"] or "").split("\0")
+    index = 0
+    while index < len(parts):
+        raw = parts[index]
+        index += 1
+        if len(raw) < 4:
+            continue
+        code = raw[:2]
+        path = raw[3:]
+        original_path = None
+        if "R" in code or "C" in code:
+            if index < len(parts) and parts[index]:
+                original_path = parts[index]
+            index += 1
+        if path:
+            entries.append({"status": code, "path": path, "original_path": original_path})
+    return {"ok": True, "entries": entries, "error": ""}
+
+
+def _untracked_change(repo: Path, entry: dict, max_chars: int) -> dict:
+    path = str(entry.get("path") or "")
+    item = {
+        **entry,
+        "additions": None,
+        "deletions": None,
+        "binary": False,
+        "diff": "",
+        "truncated": False,
+        "no_diff": False,
+        "error": "",
+    }
+    try:
+        target = (repo / path).resolve()
+        target.relative_to(repo.resolve())
+        if not target.is_file():
+            item["no_diff"] = True
+            return item
+        with target.open("rb") as handle:
+            raw = handle.read(_LOCAL_CHANGES_READ_BYTES + 1)
+        if b"\0" in raw:
+            item["binary"] = True
+            return item
+        content_truncated = len(raw) > _LOCAL_CHANGES_READ_BYTES
+        if not raw:
+            item["additions"] = 0
+            item["deletions"] = 0
+            item["no_diff"] = True
+            return item
+        try:
+            text = raw[:_LOCAL_CHANGES_READ_BYTES].decode("utf-8", errors="ignore" if content_truncated else "strict")
+        except UnicodeDecodeError:
+            item["binary"] = True
+            return item
+        lines = text.splitlines()
+        item["additions"] = len(lines)
+        item["deletions"] = 0
+        header = f"--- /dev/null\n+++ b/{path}\n@@ -0,0 +1,{len(lines)} @@\n"
+        diff = header + "".join(f"+{line}\n" for line in lines)
+        if len(diff) > max_chars:
+            diff = diff[:max_chars].rstrip() + "\n…"
+            content_truncated = True
+        item["diff"] = diff
+        item["truncated"] = content_truncated
+        item["no_diff"] = not bool(diff)
+    except (OSError, ValueError) as exc:
+        item["error"] = str(exc)
+    return item
+
+
+def _tracked_change(repo: Path, entry: dict, max_chars: int, *, has_head: bool) -> dict:
+    path = str(entry.get("path") or "")
+    item = {
+        **entry,
+        "additions": None,
+        "deletions": None,
+        "binary": False,
+        "diff": "",
+        "truncated": False,
+        "no_diff": False,
+        "error": "",
+    }
+    base = ["HEAD"] if has_head else ["--cached"]
+    numstat = _run_git(repo, ["diff", "--no-ext-diff", "--no-renames", "--numstat", *base, "--", path])
+    if not numstat["ok"]:
+        item["error"] = numstat["stderr"] or "git diff --numstat failed"
+        return item
+    additions = 0
+    deletions = 0
+    saw_stats = False
+    for raw_line in (numstat["stdout"] or "").splitlines():
+        added, separator, remainder = raw_line.partition("\t")
+        removed, separator2, _changed_path = remainder.partition("\t")
+        if not separator or not separator2:
+            continue
+        saw_stats = True
+        if added == "-" or removed == "-":
+            item["binary"] = True
+            break
+        try:
+            additions += int(added)
+            deletions += int(removed)
+        except ValueError:
+            continue
+    if saw_stats and not item["binary"]:
+        item["additions"] = additions
+        item["deletions"] = deletions
+    if item["binary"]:
+        return item
+    diff_result = _run_git(repo, ["diff", "--no-ext-diff", "--no-color", "--no-renames", "--unified=3", *base, "--", path])
+    if not diff_result["ok"]:
+        item["error"] = diff_result["stderr"] or "git diff failed"
+        return item
+    diff = diff_result["stdout"] or ""
+    if len(diff) > max_chars:
+        diff = diff[:max_chars].rstrip() + "\n…"
+        item["truncated"] = True
+    item["diff"] = diff
+    item["no_diff"] = not bool(diff)
+    return item
+
+
+def local_changes(root: Path, config: dict | None = None) -> dict:
+    """Return bounded, read-only details for local KB git changes."""
+    repo = knowledge_root(root, config)
+    if not git_available():
+        return {"ok": False, "state": "git_unavailable", "error": "git is not available on PATH", "changes": []}
+    if not is_repo(repo):
+        return {"ok": False, "state": "not_initialized", "error": "knowledge git repository is not initialized", "changes": []}
+    status = _changed_entries(repo)
+    if not status["ok"]:
+        return {"ok": False, "state": "error", "error": status["error"], "changes": []}
+    entries = status["entries"]
+    has_head = _run_git(repo, ["rev-parse", "--verify", "HEAD"])["ok"]
+    changes: list[dict] = []
+    used_chars = 0
+    content_truncated = False
+    for entry in entries[:_LOCAL_CHANGES_MAX_FILES]:
+        remaining = max(0, _LOCAL_CHANGES_MAX_TOTAL_DIFF_CHARS - used_chars)
+        max_chars = min(_LOCAL_CHANGES_MAX_DIFF_CHARS, remaining)
+        if entry["status"] == "??":
+            item = _untracked_change(repo, entry, max_chars)
+        else:
+            item = _tracked_change(repo, entry, max_chars, has_head=has_head)
+        if max_chars <= 0 and not item["binary"] and not item["error"]:
+            item["diff"] = ""
+            item["truncated"] = True
+            item["no_diff"] = True
+        used_chars += len(item["diff"])
+        content_truncated = content_truncated or bool(item["truncated"])
+        changes.append(item)
+    return {
+        "ok": True,
+        "state": "dirty" if entries else "clean",
+        "count": len(entries),
+        "returned": len(changes),
+        "truncated": len(entries) > len(changes) or content_truncated,
+        "changes": changes,
+    }
 
 
 def commit_all(root: Path, message: str, config: dict | None = None) -> dict:
