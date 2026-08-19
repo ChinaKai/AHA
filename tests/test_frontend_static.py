@@ -286,6 +286,74 @@ if (customStartRoot.children[0].start !== 3) {
             )
             self.assertEqual(result.returncode, 0, f"inline script {index} failed to parse: {result.stderr}")
 
+    def test_markdown_preserves_intraword_underscores(self) -> None:
+        node = shutil.which("node")
+        if not node:
+            self.skipTest("node is not available")
+        renderer = static_root() / "task_memo_markdown.js"
+        assertion = r'''
+const fs = require("fs");
+global.window = {};
+new Function(fs.readFileSync(process.argv[1], "utf8"))();
+
+class MiniElement {
+  constructor(tagName, ownerDocument) {
+    this.tagName = String(tagName).toUpperCase();
+    this.ownerDocument = ownerDocument;
+    this.children = [];
+    this._textContent = "";
+  }
+  appendChild(child) {
+    this.children.push(child);
+    return child;
+  }
+  set textContent(value) {
+    this._textContent = String(value);
+  }
+  get textContent() {
+    return this._textContent || this.children.map(child => child.textContent || "").join("");
+  }
+}
+
+const documentRef = {
+  createElement(tagName) {
+    return new MiniElement(tagName, documentRef);
+  },
+  createTextNode(text) {
+    return { nodeType: 3, textContent: String(text), ownerDocument: documentRef };
+  }
+};
+
+function renderInline(text) {
+  const root = documentRef.createElement("span");
+  window.AHATaskMemoMarkdown.appendInlineMarkdown(root, text, { documentRef });
+  return root.children.map(child => (
+    child.nodeType === 3
+      ? child.textContent
+      : `<${child.tagName}>${child.textContent}</${child.tagName}>`
+  )).join("");
+}
+
+const expected = new Map([
+  ["foo_bar_baz", "foo_bar_baz"],
+  ["snake_case_identifier", "snake_case_identifier"],
+  ["foo__bar__baz", "foo__bar__baz"],
+  ["_emphasis_", "<EM>emphasis</EM>"],
+  ["__strong__", "<STRONG>strong</STRONG>"]
+]);
+for (const [input, output] of expected) {
+  const actual = renderInline(input);
+  if (actual !== output) throw new Error(`${input}: ${actual} !== ${output}`);
+}
+'''
+        result = subprocess.run(
+            [node, "-e", assertion, str(renderer)],
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_knowledge_graph_mobile_layout_and_touch_gestures(self) -> None:
         knowledge = (static_root() / "knowledge.html").read_text(encoding="utf-8")
 
