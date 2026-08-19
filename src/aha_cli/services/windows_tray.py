@@ -28,6 +28,8 @@ from aha_cli.web.auth import bind_host_exposes_network, normalize_auth_token
 
 STARTUP_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
 STARTUP_VALUE = "AHA"
+WINDOWS_STARTUP_TASK_NAME = r"\AHA Web"
+WINDOWS_STARTUP_TASK_BASENAME = "AHA Web"
 
 
 class WindowsTrayError(RuntimeError):
@@ -129,6 +131,19 @@ def save_tray_settings(settings: TraySettings, path: Path | None = None) -> Path
 def materialize_tray_icon(config_path: Path | None = None) -> Path:
     target = (config_path or default_tray_config_path()).with_name("aha.ico")
     payload = resources.files("aha_cli").joinpath("assets", "aha.ico").read_bytes()
+    try:
+        current = target.read_bytes()
+    except OSError:
+        current = b""
+    if current != payload:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(payload)
+    return target
+
+
+def materialize_startup_helper(config_path: Path | None = None) -> Path:
+    target = (config_path or default_tray_config_path()).with_name("configure-startup.ps1")
+    payload = resources.files("aha_cli").joinpath("assets", "configure_windows_startup.ps1").read_bytes()
     try:
         current = target.read_bytes()
     except OSError:
@@ -271,6 +286,100 @@ def start_scheduled_task(task_name: str) -> bool:
 
 def stop_scheduled_task(task_name: str) -> None:
     _scheduled_task_command(task_name, "End")
+
+
+def scheduled_task_exists(task_name: str = WINDOWS_STARTUP_TASK_NAME) -> bool:
+    return _scheduled_task_command(task_name, "Query").returncode == 0
+
+
+class _ShellExecuteInfo(ctypes.Structure):
+    _fields_ = [
+        ("cbSize", wintypes.DWORD),
+        ("fMask", wintypes.ULONG),
+        ("hwnd", wintypes.HWND),
+        ("lpVerb", wintypes.LPCWSTR),
+        ("lpFile", wintypes.LPCWSTR),
+        ("lpParameters", wintypes.LPCWSTR),
+        ("lpDirectory", wintypes.LPCWSTR),
+        ("nShow", ctypes.c_int),
+        ("hInstApp", wintypes.HINSTANCE),
+        ("lpIDList", wintypes.LPVOID),
+        ("lpClass", wintypes.LPCWSTR),
+        ("hkeyClass", wintypes.HKEY),
+        ("dwHotKey", wintypes.DWORD),
+        ("hIconOrMonitor", wintypes.HANDLE),
+        ("hProcess", wintypes.HANDLE),
+    ]
+
+
+def _powershell_executable() -> str:
+    system_root = str(os.environ.get("SystemRoot") or r"C:\Windows").strip()
+    candidate = Path(system_root) / "System32" / "WindowsPowerShell" / "v1.0" / "powershell.exe"
+    return str(candidate)
+
+
+def _run_elevated_powershell_script(script: Path, arguments: list[str]) -> int:
+    _require_windows()
+    shell32 = ctypes.windll.shell32
+    kernel32 = ctypes.windll.kernel32
+    shell32.ShellExecuteExW.argtypes = [ctypes.POINTER(_ShellExecuteInfo)]
+    shell32.ShellExecuteExW.restype = wintypes.BOOL
+    kernel32.WaitForSingleObject.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+    kernel32.WaitForSingleObject.restype = wintypes.DWORD
+    kernel32.GetExitCodeProcess.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD)]
+    kernel32.GetExitCodeProcess.restype = wintypes.BOOL
+    kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+    kernel32.CloseHandle.restype = wintypes.BOOL
+    parameters = subprocess.list2cmdline(["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(script), *arguments])
+    info = _ShellExecuteInfo()
+    info.cbSize = ctypes.sizeof(_ShellExecuteInfo)
+    info.fMask = 0x00000040
+    info.lpVerb = "runas"
+    info.lpFile = _powershell_executable()
+    info.lpParameters = parameters
+    info.lpDirectory = str(script.parent)
+    info.nShow = 1
+    if not shell32.ShellExecuteExW(ctypes.byref(info)):
+        error = int(kernel32.GetLastError())
+        if error == 1223:
+            raise WindowsTrayError("用户取消了管理员授权")
+        raise WindowsTrayError(f"无法启动管理员配置程序，Windows 错误码 {error}")
+    try:
+        wait_result = int(kernel32.WaitForSingleObject(info.hProcess, 0xFFFFFFFF))
+        if wait_result != 0:
+            raise WindowsTrayError(f"等待启动配置程序失败，Windows 等待结果 {wait_result}")
+        exit_code = wintypes.DWORD()
+        if not kernel32.GetExitCodeProcess(info.hProcess, ctypes.byref(exit_code)):
+            raise WindowsTrayError("无法读取启动配置程序结果")
+        return int(exit_code.value)
+    finally:
+        kernel32.CloseHandle(info.hProcess)
+
+
+def configure_prelogin_startup_task(settings: TraySettings, config_path: Path, enabled: bool) -> None:
+    zipapp = running_zipapp_path()
+    if enabled and zipapp is None:
+        raise WindowsTrayError("无需解锁启动仅支持已安装的 AHA onebin")
+    helper = materialize_startup_helper(config_path)
+    arguments = ["-Mode", "Enable" if enabled else "Disable", "-TaskName", WINDOWS_STARTUP_TASK_BASENAME]
+    if enabled:
+        arguments.extend(
+            [
+                "-PythonwPath",
+                pythonw_executable(),
+                "-ArtifactPath",
+                str(zipapp),
+                "-ConfigPath",
+                str(config_path),
+                "-LauncherPath",
+                str(config_path.with_name("start-web.ps1")),
+                "-WorkingDirectory",
+                str(config_path.parent),
+            ]
+        )
+    exit_code = _run_elevated_powershell_script(helper, arguments)
+    if exit_code != 0:
+        raise WindowsTrayError(f"启动配置程序失败，退出码 {exit_code}")
 
 
 def dashboard_url(host: str, port: int, *, auth_token: str = "", auth_token_file: str = "") -> str:
@@ -478,6 +587,34 @@ class TrayRuntime:
         expected_command = None if self.settings.startup_task_name else self.startup_command()
         return startup_enabled(expected_command)
 
+    def prelogin_startup_enabled(self) -> bool:
+        return scheduled_task_exists(WINDOWS_STARTUP_TASK_NAME)
+
+    def set_prelogin_startup_enabled(self, enabled: bool) -> None:
+        old_instance_id = ""
+        scheduled_service_was_active = bool(self._scheduled_service_active)
+        if not enabled and scheduled_service_was_active:
+            old_instance_id = dashboard_instance_id(self.settings.bind, self.settings.port)
+        configure_prelogin_startup_task(self.settings, self.config_path, enabled)
+        updated = replace(
+            self.settings,
+            startup_task_name=WINDOWS_STARTUP_TASK_NAME if enabled else "",
+        ).normalized()
+        self.settings = updated
+        save_tray_settings(updated, self.config_path)
+        set_startup_enabled(enabled, self.startup_command())
+        if enabled or not scheduled_service_was_active:
+            return
+        self._scheduled_service_active = False
+        if old_instance_id and not wait_for_dashboard_shutdown(
+            updated.bind,
+            updated.port,
+            old_instance_id,
+        ):
+            raise WindowsTrayError("启动任务已删除，但旧 AHA Web 实例未完全退出")
+        self.web.command = self.web_command()
+        self.web.start()
+
     def dashboard_url(self) -> str:
         return dashboard_url(self.settings.bind, self.settings.port, auth_token=self.settings.web_token)
 
@@ -538,7 +675,7 @@ class TrayRuntime:
             self.start()
             if self.web.process is not None and self.web.process.poll() is not None:
                 raise WindowsTrayError("新设置下的 AHA Web 服务启动失败，请检查 bind 和端口")
-            if startup_was_enabled and not updated.startup_task_name:
+            if startup_was_enabled:
                 set_startup_enabled(True, self.startup_command())
         except Exception:
             self._stop_service()
@@ -889,12 +1026,24 @@ def _run_native_tray(
     def open_dashboard() -> None:
         webbrowser.open(runtime.dashboard_url())
 
-    def toggle_startup() -> None:
+    def toggle_startup(window: int) -> None:
         try:
-            command = runtime.startup_command()
-            set_startup_enabled(not runtime.login_startup_enabled(), command)
+            enabled = runtime.prelogin_startup_enabled()
+            if not enabled:
+                confirmed = user32.MessageBoxW(
+                    window,
+                    "启用后，AHA Web 将在 Windows 启动时运行，无需登录或解锁。\n\n"
+                    "接下来会显示管理员授权和当前 Windows 账户凭据窗口；密码仅由任务计划程序保存。",
+                    "启用无需解锁开机启动",
+                    0x00000004 | 0x00000030,
+                )
+                if confirmed != 6:
+                    return
+            runtime.set_prelogin_startup_enabled(not enabled)
+            message = "已启用，下次开机无需登录或解锁即可启动 AHA。" if not enabled else "已关闭无需解锁开机启动。"
+            user32.MessageBoxW(window, message, "AHA", 0x40)
         except (OSError, WindowsTrayError) as exc:
-            _show_error(f"无法更新开机自启动：{exc}")
+            _show_error(f"无法更新无需解锁开机启动：{exc}")
 
     def edit_settings(window: int) -> None:
         try:
@@ -911,14 +1060,13 @@ def _run_native_tray(
         if not menu:
             return
         try:
-            checked = 0x00000008 if runtime.login_startup_enabled() else 0
+            checked = 0x00000008 if runtime.prelogin_startup_enabled() else 0
         except (OSError, WindowsTrayError) as exc:
             checked = 0
-            _show_error(f"无法读取开机自启动设置：{exc}")
+            _show_error(f"无法读取无需解锁开机启动设置：{exc}")
         user32.AppendMenuW(menu, 0, open_id, "打开 AHA")
         user32.AppendMenuW(menu, 0x00000800, 0, None)
-        startup_label = "登录后显示托盘" if runtime.settings.startup_task_name else "开机自启动"
-        user32.AppendMenuW(menu, checked, startup_id, startup_label)
+        user32.AppendMenuW(menu, checked, startup_id, "无需解锁开机启动")
         user32.AppendMenuW(menu, 0, settings_id, "设置…")
         user32.AppendMenuW(menu, 0, restart_id, "重启 AHA 服务")
         user32.AppendMenuW(menu, 0x00000800, 0, None)
@@ -932,7 +1080,7 @@ def _run_native_tray(
         if selected == open_id:
             open_dashboard()
         elif selected == startup_id:
-            toggle_startup()
+            toggle_startup(window)
         elif selected == settings_id:
             edit_settings(window)
         elif selected == restart_id:
@@ -1079,7 +1227,7 @@ def run_windows_tray(
     runtime = TrayRuntime(settings, run_id, poll_interval, config_path=config_path)
     icon_path = materialize_tray_icon(runtime.config_path)
     if enable_startup:
-        set_startup_enabled(True, runtime.startup_command())
+        runtime.set_prelogin_startup_enabled(True)
     mutex = WindowsTrayMutex(settings.aha_home, settings.port)
     if not mutex.acquire():
         mutex.close()

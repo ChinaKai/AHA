@@ -104,6 +104,18 @@ class WindowsTrayTests(unittest.TestCase):
             self.assertEqual(icon_path, config_path.with_name("aha.ico"))
             self.assertTrue(icon_path.read_bytes().startswith(b"\x00\x00\x01\x00"))
 
+    def test_materialize_startup_helper_copies_packaged_powershell(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config_path = Path(tmp) / "AHA" / "tray.json"
+            helper_path = windows_tray.materialize_startup_helper(config_path)
+            helper = helper_path.read_text(encoding="utf-8")
+
+        self.assertEqual(helper_path, config_path.with_name("configure-startup.ps1"))
+        self.assertIn('ValidateSet("Enable", "Disable")', helper)
+        self.assertIn("New-ScheduledTaskTrigger -AtStartup", helper)
+        self.assertIn("Get-Credential", helper)
+        self.assertIn("Unregister-ScheduledTask", helper)
+
     def test_pythonw_executable_uses_sibling_without_console(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -161,6 +173,26 @@ class WindowsTrayTests(unittest.TestCase):
         self.assertEqual(run.call_args_list[0].args[0], ["schtasks.exe", "/Run", "/TN", r"\AHA Web"])
         self.assertEqual(run.call_args_list[1].args[0], ["schtasks.exe", "/End", "/TN", r"\AHA Web"])
         self.assertFalse(run.call_args_list[0].kwargs["check"])
+
+    def test_configure_prelogin_startup_uses_elevated_packaged_helper(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            config_path = root / "AHA" / "tray.json"
+            zipapp = root / "aha"
+            zipapp.write_bytes(b"zipapp")
+            settings = windows_tray.TraySettings(root / "home", "127.0.0.1", 8788)
+            with mock.patch.object(windows_tray, "running_zipapp_path", return_value=zipapp), mock.patch.object(
+                windows_tray, "pythonw_executable", return_value=r"C:\Python\pythonw.exe"
+            ), mock.patch.object(windows_tray, "_run_elevated_powershell_script", return_value=0) as elevated:
+                windows_tray.configure_prelogin_startup_task(settings, config_path, True)
+
+        helper, arguments = elevated.call_args.args
+        self.assertEqual(helper.name, "configure-startup.ps1")
+        self.assertIn("Enable", arguments)
+        self.assertIn("AHA Web", arguments)
+        self.assertIn(str(zipapp), arguments)
+        self.assertIn(r"C:\Python\pythonw.exe", arguments)
+        self.assertNotIn("password", " ".join(arguments).casefold())
 
     def test_dashboard_url_reads_token_file_and_normalizes_wildcard_host(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -437,6 +469,59 @@ class WindowsTrayTests(unittest.TestCase):
         web_process.start.assert_called_once_with()
         set_startup.assert_called_once_with(True, runtime.startup_command())
 
+    def test_runtime_enables_prelogin_task_and_keeps_login_tray(self) -> None:
+        web_process = mock.Mock()
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.object(
+            windows_tray, "WebUiProcess", return_value=web_process
+        ), mock.patch.object(windows_tray, "configure_prelogin_startup_task") as configure, mock.patch.object(
+            windows_tray, "set_startup_enabled"
+        ) as set_login_startup:
+            root = Path(tmp)
+            config_path = root / "local" / "tray.json"
+            runtime = windows_tray.TrayRuntime(
+                windows_tray.TraySettings(root / "home", "127.0.0.1", 8788),
+                "",
+                1000,
+                config_path=config_path,
+            )
+            runtime.set_prelogin_startup_enabled(True)
+            stored = windows_tray.load_tray_settings(config_path)
+
+        configure.assert_called_once()
+        configured_settings, configured_path, configured_enabled = configure.call_args.args
+        self.assertEqual(configured_settings.startup_task_name, "")
+        self.assertEqual(configured_path, config_path)
+        self.assertTrue(configured_enabled)
+        self.assertEqual(runtime.settings.startup_task_name, windows_tray.WINDOWS_STARTUP_TASK_NAME)
+        self.assertEqual(stored.startup_task_name, windows_tray.WINDOWS_STARTUP_TASK_NAME)
+        set_login_startup.assert_called_once_with(True, runtime.startup_command())
+        web_process.stop.assert_not_called()
+
+    def test_apply_settings_updates_login_tray_command_for_prelogin_task(self) -> None:
+        web_process = mock.Mock()
+        web_process.process = None
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.object(
+            windows_tray, "WebUiProcess", return_value=web_process
+        ), mock.patch.object(windows_tray, "startup_enabled", return_value=True), mock.patch.object(
+            windows_tray, "set_startup_enabled"
+        ) as set_startup, mock.patch.object(windows_tray, "wait_for_dashboard", return_value=True):
+            root = Path(tmp)
+            runtime = windows_tray.TrayRuntime(
+                windows_tray.TraySettings(
+                    root / "old-home",
+                    "127.0.0.1",
+                    8766,
+                    "old-token",
+                    windows_tray.WINDOWS_STARTUP_TASK_NAME,
+                ),
+                "run-001",
+                1000,
+                config_path=root / "local" / "tray.json",
+            )
+            runtime.apply_settings(windows_tray.TraySettings(root / "new-home", "0.0.0.0", 18788, "new-token"))
+
+        set_startup.assert_called_once_with(True, runtime.startup_command())
+
     def test_cli_tray_reports_non_windows_platform(self) -> None:
         stderr = io.StringIO()
         with tempfile.TemporaryDirectory() as tmp, mock.patch("sys.stderr", stderr), mock.patch.object(
@@ -469,6 +554,8 @@ class WindowsTrayTests(unittest.TestCase):
         repo = Path(__file__).resolve().parents[1]
         installer = (repo / "scripts" / "install_windows.ps1").read_text(encoding="utf-8")
         workflow = (repo / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
+        pyproject = (repo / "pyproject.toml").read_text(encoding="utf-8")
+        tray_source = (repo / "src" / "aha_cli" / "services" / "windows_tray.py").read_text(encoding="utf-8")
         self.assertIn('"tray"', installer)
         self.assertIn("New-ScheduledTaskTrigger -AtStartup", installer)
         self.assertIn("-Password $password", installer)
@@ -486,6 +573,8 @@ class WindowsTrayTests(unittest.TestCase):
         self.assertIn("System.Text.UTF8Encoding($false)", installer)
         self.assertIn("pythonw.exe", installer)
         self.assertIn("install_windows.ps1", workflow)
+        self.assertIn('"assets/*.ps1"', pyproject)
+        self.assertIn('"无需解锁开机启动"', tray_source)
 
 
 if __name__ == "__main__":

@@ -120,7 +120,7 @@ Invoke-WebRequest "https://github.com/ChinaKai/AHA/releases/latest/download/inst
 powershell.exe -ExecutionPolicy Bypass -File $Installer
 ```
 
-托盘使用 AHA Logo。双击图标可打开 AHA；右键菜单可打开面板、重启服务和控制登录后是否显示托盘，也可在“设置…”中修改 `AHA_HOME`、Bind 地址、Port 和 Web Token。保存设置后 Web 服务会自动重启；未启用计划任务时，选择“退出 AHA”会结束完整 Web 进程树并释放监听端口。若希望电脑重启后无需登录或解锁即可启动 Web 服务：
+托盘使用 AHA Logo。双击图标可打开 AHA；右键菜单可打开面板、重启服务，并通过“无需解锁开机启动”直接创建或删除 `AtStartup` 计划任务，也可在“设置…”中修改 `AHA_HOME`、Bind 地址、Port 和 Web Token。首次勾选时会依次显示 UAC 管理员授权和当前 Windows 账户凭据窗口；成功后 AHA Web 在下次开机时无需登录或解锁即可启动，HKCU Run 仍负责登录后显示托盘。保存设置后 Web 服务会自动重启；未启用计划任务时，选择“退出 AHA”会结束完整 Web 进程树并释放监听端口。也可在安装时直接启用：
 
 ```powershell
 # 请在“以管理员身份运行”的 PowerShell 中执行；首次会提示输入当前 Windows 账户密码
@@ -138,7 +138,7 @@ $Credential = Get-Credential -UserName ([Security.Principal.WindowsIdentity]::Ge
 & $Installer -EnableStartup -StartupCredential $Credential
 ```
 
-从旧版 HKCU-only 自启动升级时，以管理员身份重新执行一次 `-EnableStartup` 即可迁移。卸载前先退出托盘，然后执行以下命令；计划任务、登录启动项、快捷方式和安装文件会被幂等清理，`AHA_HOME` 数据会保留：
+从旧版 HKCU-only 自启动升级后，可在托盘中勾选“无需解锁开机启动”完成迁移，也可用管理员 PowerShell 重新执行一次 `-EnableStartup`。托盘内置的配置 helper 不会把密码放入 AHA 配置、命令行或日志。卸载前先退出托盘，然后执行以下命令；计划任务、登录启动项、快捷方式和安装文件会被幂等清理，`AHA_HOME` 数据会保留：
 
 ```powershell
 powershell.exe -ExecutionPolicy Bypass -File $Installer -Uninstall

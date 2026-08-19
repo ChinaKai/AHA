@@ -14,6 +14,9 @@ AHA_RUNTIME_ENV_KEYS = (
     "AHA_BACKEND",
     "AHA_MODEL",
     "AHA_GENERATED_BY",
+    "AHA_WSL_DISTRO",
+    "AHA_WSL_AHA_HOME",
+    "AHA_WSL_AHA_BIN",
 )
 
 
