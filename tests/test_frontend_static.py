@@ -316,6 +316,20 @@ if (customStartRoot.children[0].start !== 3) {
         self.assertIn("setGraphScaleAt(canvas, graphState.scale * (distance / pinchDistance), midpoint.x, midpoint.y);", knowledge)
         self.assertIn("setGraphScaleAt(canvas, graphState.scale * factor, ev.clientX, ev.clientY);", knowledge)
 
+    def test_knowledge_mobile_prefers_navigation_and_hides_graph(self) -> None:
+        knowledge = (static_root() / "knowledge.html").read_text(encoding="utf-8")
+
+        self.assertIn('.kb-sidebar-actions [data-kb-view="graph"],\n      #tab-graph { display: none !important; }', knowledge)
+        self.assertIn("function preferredTabForViewport(name)", knowledge)
+        self.assertIn('return isCompactGraphViewport() && tab === "graph" ? "navigation" : tab;', knowledge)
+        self.assertIn("return preferredTabForViewport(window.localStorage?.getItem(KB_ACTIVE_TAB_KEY));", knowledge)
+        self.assertIn('return preferredTabForViewport("graph");', knowledge)
+        self.assertIn("const tab = preferredTabForViewport(name);", knowledge)
+        self.assertIn('if (isCompactGraphViewport() && state.activeTab === "graph") {', knowledge)
+        self.assertIn('void showTab("navigation");', knowledge)
+        self.assertIn('data-kb-view="graph"', knowledge)
+        self.assertIn('<section id="tab-graph">', knowledge)
+
     def test_runtime_model_selector_scripts_are_cache_busted(self) -> None:
         root = static_root()
         html = (root / "index.html").read_text(encoding="utf-8")
