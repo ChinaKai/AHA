@@ -223,6 +223,18 @@ class WebTaskRouteTests(unittest.TestCase):
         self.assertEqual(payload["summary"]["record_type_counts"]["agent_kb_feedback"], 1)
         self.assertEqual(payload["summary"]["agent_feedback_count"], 1)
         self.assertEqual(payload["summary"]["latest_agent_feedback"]["updated"], ["navigation/index.md"])
+        self.assertEqual(payload["summary"]["loop"]["state"], "writeback_applied")
+        self.assertEqual(
+            [(stage["id"], stage["state"]) for stage in payload["summary"]["loop"]["stages"]],
+            [
+                ("routed", "complete"),
+                ("used", "complete"),
+                ("solved", "pending"),
+                ("writeback", "complete"),
+                ("reused", "pending"),
+            ],
+        )
+        self.assertEqual(payload["summary"]["loop"]["proof"]["helped"], ["navigation narrowed the route"])
         self.assertIn("after_turn_runtime_distill", payload["summary"]["evidence_sources"])
         self.assertIn("agent_kb_feedback", payload["summary"]["evidence_sources"])
         self.assertEqual(result_only["payload"]["count"], 2)
@@ -276,6 +288,8 @@ class WebTaskRouteTests(unittest.TestCase):
 
         payload = response["payload"]
         self.assertEqual(payload["summary"]["status"]["state"], "growth_pending")
+        self.assertEqual(payload["summary"]["loop"]["state"], "writeback_pending")
+        self.assertEqual(payload["summary"]["loop"]["stages"][3]["state"], "pending")
         self.assertEqual(payload["summary"]["kb_growth_state"]["status"], "pending")
         self.assertEqual(payload["kb_growth_state"]["pending"][0]["target_path"], "navigation/index.md")
 

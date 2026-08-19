@@ -6,7 +6,7 @@
   <title>AHA Dashboard</title>
   <link rel="icon" href="/static/aha-favicon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="/static/xterm.css?v=6.0.0">
-  <link rel="stylesheet" href="/static/styles.css?v=provider-models-v11">
+  <link rel="stylesheet" href="/static/styles.css?v=chat-scroll-v1">
 </head>
 <body>
   <header>
@@ -641,6 +641,10 @@
         </div>
       </section>
       <div id="panel" class="panel"></div>
+      <button id="conversation-scroll-bottom" class="conversation-scroll-bottom" type="button" title="Back to bottom" aria-label="Back to bottom" data-i18n-title="conversation.back_to_bottom" data-i18n-aria-label="conversation.back_to_bottom" hidden>
+        <span aria-hidden="true">↓</span>
+        <span data-i18n="conversation.back_to_bottom">Back to bottom</span>
+      </button>
       <div id="selected-agent-info" class="selected-agent-info"></div>
       <div id="backend-status" class="backend-status"></div>
       <div id="pending-messages" class="pending-messages hidden"></div>
@@ -1051,7 +1055,7 @@
     </form>
   </dialog>
   <script src="/static/time_format.js"></script>
-  <script src="/static/i18n.js?v=permissions-v6"></script>
+  <script src="/static/i18n.js?v=chat-scroll-v1"></script>
   <script src="/static/app_helpers.js"></script>
   <script src="/static/task_metadata.js?v=hardware-terminal-v1"></script>
   <script src="/static/bootstrap_config.js?v=provider-models-v11"></script>
@@ -1062,12 +1066,12 @@
   <script src="/static/run_lifecycle_view.js"></script>
   <script src="/static/run_maintenance.js"></script>
   <script src="/static/agent_metadata.js"></script>
-  <script src="/static/task_list.js?v=browser-session-v1"></script>
+  <script src="/static/task_list.js?v=kb-impact-v1"></script>
   <script src="/static/task_controller.js?v=token-saving-v8"></script>
   <script src="/static/agent_controller.js"></script>
     <script src="/static/conversation_metadata.js?v=token-saving-v8"></script>
     <script src="/static/conversation_state.js"></script>
-    <script src="/static/conversation_panel.js?v=browser-bookmarks-safe-v45"></script>
+    <script src="/static/conversation_panel.js?v=kb-impact-v1"></script>
     <script src="/static/virtual_list.js?v=virtual-list-v1"></script>
     <script src="/static/conversation_controller.js?v=global-search-v4"></script>
     <script src="/static/compact_reset.js"></script>
@@ -1102,8 +1106,8 @@
   <script src="/static/auth_controller.js"></script>
   <script src="/static/backend_status.js"></script>
   <script src="/static/message_composer.js?v=chat-only-input-v38"></script>
-  <script src="/static/event_bindings.js?v=terminal-ui-v6"></script>
-  <script src="/static/panel_controller.js?v=global-search-v4"></script>
+  <script src="/static/event_bindings.js?v=chat-scroll-v1"></script>
+  <script src="/static/panel_controller.js?v=chat-scroll-v1"></script>
   <script src="/static/render_orchestrator.js"></script>
   <script src="/static/status_store.js"></script>
   <script src="/static/status_controller.js"></script>
@@ -1124,11 +1128,11 @@
   <script src="/static/confirm_dialog.js"></script>
   <script src="/static/toast.js?v=toast-v1"></script>
   <script src="/static/command_palette.js?v=command-palette-v1"></script>
-  <script src="/static/controller_registry.js?v=permissions-v1"></script>
+  <script src="/static/controller_registry.js?v=chat-scroll-v1"></script>
   <script src="/static/app_bridge.js?v=permissions-v1"></script>
-  <script src="/static/app_controller_factory.js?v=provider-models-v11"></script>
+  <script src="/static/app_controller_factory.js?v=chat-scroll-v1"></script>
   <script src="/static/app_runtime_setup.js?v=permissions-v1"></script>
-  <script src="/static/app_runtime_wiring.js?v=provider-models-v11"></script>
+  <script src="/static/app_runtime_wiring.js?v=chat-scroll-v1"></script>
   <script src="/static/browser_options.js?v=browser-options-v1"></script>
   <script src="/static/app.js"></script>
 </body>

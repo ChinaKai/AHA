@@ -25,6 +25,87 @@ def app_entry_script(root: Path | None = None) -> str:
 
 
 class FrontendStaticTests(unittest.TestCase):
+    def test_conversation_long_commands_wrap_and_scroll_bottom_control(self) -> None:
+        root = static_root()
+        html = (root / "index.html").read_text(encoding="utf-8")
+        i18n = (root / "i18n.js").read_text(encoding="utf-8")
+        styles = (root / "styles.css").read_text(encoding="utf-8")
+        event_bindings = (root / "event_bindings.js").read_text(encoding="utf-8")
+        panel_controller = root / "panel_controller.js"
+
+        self.assertIn('id="conversation-scroll-bottom"', html)
+        self.assertIn('data-i18n="conversation.back_to_bottom"', html)
+        self.assertIn('"conversation.back_to_bottom": "Back to bottom"', i18n)
+        self.assertIn('"conversation.back_to_bottom": "回到底部"', i18n)
+        self.assertIn("grid-template-columns: minmax(0, 1fr);", styles)
+        self.assertIn("overflow-wrap: anywhere;", styles)
+        self.assertIn("word-break: break-word;", styles)
+        self.assertIn(".conversation-scroll-bottom[hidden]", styles)
+        self.assertIn("overflow-x: hidden;", styles)
+        self.assertIn("{ capture: true, passive: true }", event_bindings)
+        self.assertIn("handlers.scrollConversationToBottom?.();", event_bindings)
+
+        node = shutil.which("node")
+        if not node:
+            self.skipTest("node is not available")
+        assertion = r'''
+const fs = require("fs");
+global.window = {};
+new Function(fs.readFileSync(process.argv[1], "utf8"))();
+
+let autoFollow = false;
+let activeTab = "conversation";
+const button = { hidden: true, style: {} };
+const virtualHost = { scrollHeight: 1200, scrollTop: 200, clientHeight: 300 };
+const panelEl = {
+  scrollHeight: 300,
+  scrollTop: 0,
+  clientHeight: 300,
+  addEventListener() {},
+  querySelector(selector) { return selector === ".vl-host" ? virtualHost : null; },
+  getBoundingClientRect() { return { right: 900, bottom: 700 }; }
+};
+const windowRef = {
+  innerWidth: 1000,
+  innerHeight: 800,
+  requestAnimationFrame(callback) { callback(); }
+};
+const documentRef = {
+  defaultView: windowRef,
+  getElementById(id) { return id === "conversation-scroll-bottom" ? button : null; },
+  querySelectorAll() { return []; },
+  querySelector() { return null; }
+};
+const controller = window.AHAPanelController.createPanelController(
+  { panelEl, documentRef, windowRef },
+  {
+    activeTab: () => activeTab,
+    selectedTask: () => ({ id: "task-019" }),
+    setConversationAutoFollow(value) { autoFollow = Boolean(value); }
+  }
+);
+controller.syncConversationScrollBottom();
+if (button.hidden) throw new Error("return-to-bottom control stayed hidden away from bottom");
+if (button.style.right !== "118px" || button.style.bottom !== "118px") {
+  throw new Error(`return-to-bottom control was not positioned over the panel: ${JSON.stringify(button.style)}`);
+}
+controller.scrollConversationToBottom();
+if (virtualHost.scrollTop !== virtualHost.scrollHeight) throw new Error("virtual conversation did not jump to bottom");
+if (!autoFollow) throw new Error("return-to-bottom did not re-enable auto-follow");
+if (!button.hidden) throw new Error("return-to-bottom control stayed visible at bottom");
+activeTab = "logs";
+virtualHost.scrollTop = 100;
+controller.syncConversationScrollBottom();
+if (!button.hidden) throw new Error("return-to-bottom control leaked into a non-chat tab");
+'''
+        result = subprocess.run(
+            [node, "-e", assertion, str(panel_controller)],
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_global_search_is_wired_and_targets_exact_task_or_memo(self) -> None:
         root = static_root()
         html = (root / "index.html").read_text(encoding="utf-8")
@@ -1656,8 +1737,8 @@ controller.unmount();
         self.assertIn('id="token-usage"', integration_actions)
         self.assertNotIn('id="token-usage-popover"', integration_actions)
         self.assertLess(html.index('id="skills-console-popover"'), html.index('id="token-usage-popover"'))
-        self.assertIn('<link rel="stylesheet" href="/static/styles.css?v=provider-models-v11">', html)
-        self.assertIn('<script src="/static/i18n.js?v=permissions-v6"></script>', html)
+        self.assertIn('<link rel="stylesheet" href="/static/styles.css?v=chat-scroll-v1">', html)
+        self.assertIn('<script src="/static/i18n.js?v=chat-scroll-v1"></script>', html)
         self.assertIn('"task.open": "任务"', i18n)
         self.assertIn('"agents.open": "智能体"', i18n)
         self.assertIn('"agents.title": "智能体"', i18n)
@@ -6158,7 +6239,7 @@ if (resetCount !== 1 || emptyWorkspaceCount !== 1) {
         self.assertIn("task-supervision-mode", create_form)
         self.assertNotIn("selected-task-supervision-mode", create_form)
         self.assertIn('<script src="/static/time_format.js"></script>', html)
-        self.assertIn('<script src="/static/i18n.js?v=permissions-v6"></script>', html)
+        self.assertIn('<script src="/static/i18n.js?v=chat-scroll-v1"></script>', html)
         self.assertIn('<script src="/static/app_helpers.js"></script>', html)
         self.assertIn('<script src="/static/task_metadata.js?v=hardware-terminal-v1"></script>', html)
         self.assertIn('<script src="/static/bootstrap_config.js?v=provider-models-v11"></script>', html)
@@ -6170,12 +6251,12 @@ if (resetCount !== 1 || emptyWorkspaceCount !== 1) {
         self.assertIn('<script src="/static/run_lifecycle_view.js"></script>', html)
         self.assertIn('<script src="/static/run_maintenance.js"></script>', html)
         self.assertIn('<script src="/static/agent_metadata.js"></script>', html)
-        self.assertIn('<script src="/static/task_list.js?v=browser-session-v1"></script>', html)
+        self.assertIn('<script src="/static/task_list.js?v=kb-impact-v1"></script>', html)
         self.assertIn('<script src="/static/task_controller.js?v=token-saving-v8"></script>', html)
         self.assertIn('<script src="/static/agent_controller.js"></script>', html)
         self.assertIn('<script src="/static/conversation_metadata.js?v=token-saving-v8"></script>', html)
         self.assertIn('<script src="/static/conversation_state.js"></script>', html)
-        self.assertIn('<script src="/static/conversation_panel.js?v=browser-bookmarks-safe-v45"></script>', html)
+        self.assertIn('<script src="/static/conversation_panel.js?v=kb-impact-v1"></script>', html)
         self.assertIn('<script src="/static/conversation_controller.js?v=global-search-v4"></script>', html)
         self.assertIn('<script src="/static/compact_reset.js"></script>', html)
         self.assertIn('<script src="/static/timeline_view.js?v=global-search-v4"></script>', html)
@@ -6199,8 +6280,8 @@ if (resetCount !== 1 || emptyWorkspaceCount !== 1) {
         self.assertIn('<script src="/static/auth_controller.js"></script>', html)
         self.assertIn('<script src="/static/backend_status.js"></script>', html)
         self.assertIn('<script src="/static/message_composer.js?v=chat-only-input-v38"></script>', html)
-        self.assertIn('<script src="/static/event_bindings.js?v=terminal-ui-v6"></script>', html)
-        self.assertIn('<script src="/static/panel_controller.js?v=global-search-v4"></script>', html)
+        self.assertIn('<script src="/static/event_bindings.js?v=chat-scroll-v1"></script>', html)
+        self.assertIn('<script src="/static/panel_controller.js?v=chat-scroll-v1"></script>', html)
         self.assertIn('<script src="/static/render_orchestrator.js"></script>', html)
         self.assertIn('<script src="/static/status_store.js"></script>', html)
         self.assertIn('<script src="/static/status_controller.js"></script>', html)
@@ -6212,11 +6293,11 @@ if (resetCount !== 1 || emptyWorkspaceCount !== 1) {
         self.assertIn('<script src="/static/message_flow.js?v=hardware-terminal-v1"></script>', html)
         self.assertIn('<script src="/static/render_scheduler.js"></script>', html)
         self.assertIn('<script src="/static/confirm_dialog.js"></script>', html)
-        self.assertIn('<script src="/static/controller_registry.js?v=permissions-v1"></script>', html)
+        self.assertIn('<script src="/static/controller_registry.js?v=chat-scroll-v1"></script>', html)
         self.assertIn('<script src="/static/app_bridge.js?v=permissions-v1"></script>', html)
-        self.assertIn('<script src="/static/app_controller_factory.js?v=provider-models-v11"></script>', html)
+        self.assertIn('<script src="/static/app_controller_factory.js?v=chat-scroll-v1"></script>', html)
         self.assertIn('<script src="/static/app_runtime_setup.js?v=permissions-v1"></script>', html)
-        self.assertIn('<script src="/static/app_runtime_wiring.js?v=provider-models-v11"></script>', html)
+        self.assertIn('<script src="/static/app_runtime_wiring.js?v=chat-scroll-v1"></script>', html)
         self.assertIn('<script src="/static/app.js"></script>', html)
         self.assertLess(html.find("time_format.js"), html.find("app.js"))
         self.assertLess(html.find("time_format.js"), html.find("i18n.js"))
@@ -6929,7 +7010,7 @@ if (resetCount !== 1 || emptyWorkspaceCount !== 1) {
         self.assertIn('["AHA KB", taskTokenSavingConfirmLabel(payload)]', task_form_script)
         self.assertIn("task.context_evidence", i18n_script)
         self.assertIn("conversation.context_evidence_short", i18n_script)
-        self.assertIn("上下文证据", i18n_script)
+        self.assertIn('"conversation.context_evidence": "KB 效果"', i18n_script)
         self.assertNotIn("task.token_saving_requires_headroom", i18n_script)
         self.assertIn("token_saving", frontend_scripts)
         self.assertIn('class="advanced-task-group advanced-task-capabilities"', html)
@@ -6972,8 +7053,11 @@ if (resetCount !== 1 || emptyWorkspaceCount !== 1) {
         self.assertIn("renderCreateProxyDefaultsPreview", task_config_script)
         self.assertNotIn("function renderTaskContextEvidence", task_config_script)
         self.assertNotIn("async function loadTaskContextEvidence", task_config_script)
-        self.assertIn('["context-evidence", t("conversation.context_evidence_short", "Evd")', task_list_script)
+        self.assertIn('["context-evidence", t("conversation.context_evidence_short", "KB")', task_list_script)
         self.assertIn("function renderContextEvidencePanelHtml", conversation_panel_script)
+        self.assertIn("function renderEvidenceLoop", conversation_panel_script)
+        self.assertIn("function evidenceLoopStateText", conversation_panel_script)
+        self.assertIn("function evidenceLoopStageText", conversation_panel_script)
         self.assertIn("function renderEvidenceSummary", conversation_panel_script)
         self.assertIn("function renderAgentKbFeedback", conversation_panel_script)
         self.assertIn("function renderKbGrowthState", conversation_panel_script)
@@ -6982,7 +7066,8 @@ if (resetCount !== 1 || emptyWorkspaceCount !== 1) {
         self.assertIn("function renderEvidenceDiagnostics", conversation_panel_script)
         self.assertIn("localizeTimestampText(summary.latest_record_created_at || \"-\")", conversation_panel_script)
         self.assertIn("escapeHtml(localizeTimestampText(value))", conversation_panel_script)
-        self.assertIn("task.context_evidence_kb_effect", conversation_panel_script)
+        self.assertIn("task.context_evidence_loop", conversation_panel_script)
+        self.assertIn("task.context_evidence_key_proof", conversation_panel_script)
         self.assertIn("task.context_evidence_growth", conversation_panel_script)
         self.assertIn("task.context_evidence_next_action", conversation_panel_script)
         self.assertIn("task.context_evidence_agent_feedback", conversation_panel_script)
@@ -6993,7 +7078,9 @@ if (resetCount !== 1 || emptyWorkspaceCount !== 1) {
         self.assertIn('data-context-evidence-panel="diagnostics"', conversation_panel_script)
         self.assertIn('class="task-evidence-stack"', conversation_panel_script)
         self.assertIn("renderEvidenceSuggestions(maintenanceItems)", conversation_panel_script)
-        self.assertNotIn("task-evidence-details", conversation_panel_script)
+        self.assertIn('class="task-evidence-details"', conversation_panel_script)
+        self.assertIn("task.context_evidence_technical_details", conversation_panel_script)
+        self.assertIn("task.context_evidence_reuse_note", conversation_panel_script)
         self.assertIn("data-context-evidence-refresh", conversation_panel_script)
         self.assertIn("const contextEvidenceTab = target?.closest(\"[data-context-evidence-tab]\");", event_bindings_script)
         self.assertIn("windowRef.__ahaContextEvidenceActiveTab = selected;", event_bindings_script)
@@ -7100,6 +7187,10 @@ if (resetCount !== 1 || emptyWorkspaceCount !== 1) {
         self.assertIn("task-token-saving-editor", styles)
         self.assertIn(".context-evidence-view", styles)
         self.assertIn(".task-evidence-summary", styles)
+        self.assertIn(".task-evidence-loop", styles)
+        self.assertIn(".task-evidence-loop-track", styles)
+        self.assertIn(".task-evidence-loop-stage-complete", styles)
+        self.assertIn(".task-evidence-details", styles)
         self.assertIn(".task-evidence-chip", styles)
         self.assertIn(".task-evidence-suggestion", styles)
         self.assertIn(".task-evidence-stack", styles)

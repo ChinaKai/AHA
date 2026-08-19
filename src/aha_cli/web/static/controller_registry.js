@@ -338,6 +338,8 @@
       selectedTaskId: deps.selectedTaskId,
       logState: deps.logState,
       isPanelNearBottom: deps.isPanelNearBottom,
+      scrollConversationToBottom: deps.scrollConversationToBottom,
+      syncConversationScrollBottom: deps.syncConversationScrollBottom,
       positionPromptMetricsPopover: deps.positionPromptMetricsPopover,
       loadOlderLogs: deps.loadOlderLogs,
       saveBootstrapConfigForm: form => deps.dispatchAction?.("settings-save", { form }),

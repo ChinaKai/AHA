@@ -69,6 +69,9 @@
     const panelEl = elements.panelEl;
     const documentRef = elements.documentRef || document;
     const windowRef = elements.windowRef || window;
+    const conversationScrollBottomEl = elements.conversationScrollBottomEl
+      || documentRef.getElementById?.("conversation-scroll-bottom")
+      || null;
     // Tapping an on-screen hardware key must not blur the composer (or a mobile soft
     // keyboard would collapse), so swallow the focus-stealing pointerdown on those buttons.
     panelEl?.addEventListener("pointerdown", event => {
@@ -85,7 +88,14 @@
       } else if (handlers.activeTab() === "hardware") {
         if (handlers.selectedTaskId()) handlers.hardwareIoState(handlers.selectedTaskId()).autoFollow = handlers.isPanelNearBottom();
       }
+      handlers.syncConversationScrollBottom?.();
+    }, { capture: true, passive: true });
+    conversationScrollBottomEl?.addEventListener("click", () => {
+      handlers.scrollConversationToBottom?.();
     });
+    windowRef.addEventListener?.("resize", () => {
+      handlers.syncConversationScrollBottom?.();
+    }, { passive: true });
     panelEl?.addEventListener("submit", event => {
       const target = event.target instanceof Element ? event.target : null;
       const configForm = target?.closest("[data-bootstrap-config-form]");

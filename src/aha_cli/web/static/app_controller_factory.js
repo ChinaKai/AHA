@@ -314,7 +314,8 @@
       panelEl,
       sendFormEl,
       messageEl,
-      documentRef: deps.documentRef
+      documentRef: deps.documentRef,
+      windowRef: deps.windowRef
     }, {
       hardwareTerminalController: deps.hardwareTerminalController,
       browserSessionController: deps.browserSessionController,
@@ -368,6 +369,8 @@
       copyTimelineMessage,
       eventBindings,
       isPanelNearBottom: panelController.isPanelNearBottom,
+      scrollConversationToBottom: panelController.scrollConversationToBottom,
+      syncConversationScrollBottom: panelController.syncConversationScrollBottom,
       panelController,
       panelHasTextSelection,
       promptMetricsPopover,

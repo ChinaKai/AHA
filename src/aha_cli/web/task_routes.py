@@ -357,12 +357,92 @@ def _context_evidence_next_action(maintenance_plan: list[dict], suggestions: lis
     }
 
 
+def _context_evidence_loop(*, records: list[dict], latest_result: dict | None, task: dict) -> dict:
+    latest = latest_result if isinstance(latest_result, dict) else {}
+    type_counts = _context_evidence_type_counts(records)
+    feedback_records = [record for record in records if record.get("type") == "agent_kb_feedback"]
+    feedback = feedback_records[-1].get("feedback") if feedback_records else {}
+    feedback = feedback if isinstance(feedback, dict) else {}
+    diagnostics = latest.get("navigation_diagnostics") if isinstance(latest.get("navigation_diagnostics"), dict) else {}
+    growth = latest.get("kb_growth_state") if isinstance(latest.get("kb_growth_state"), dict) else {}
+    signals = {str(item) for item in (latest.get("signals") or []) if item}
+    referenced = [str(item) for item in (latest.get("referenced_files") or []) if item]
+    adopted = [str(item) for item in (diagnostics.get("adopted_files") or []) if item]
+    helped = [str(item) for item in (feedback.get("helped") or []) if item]
+    updated = [str(item) for item in (feedback.get("updated") or []) if item]
+    reused = [str(item) for item in (feedback.get("reused") or []) if item]
+    routed = bool(type_counts.get("context_pack") or referenced)
+    used = bool("context_hit_ok" in signals or adopted or helped)
+    task_status = str(task.get("status") or "").strip().lower()
+    solved = bool(used and task_status == "completed")
+    growth_status = str(growth.get("status") or "not_required")
+    writeback_complete = bool(growth_status == "applied" or updated)
+    writeback_pending = bool(growth_status == "pending")
+    reuse_verified = bool(reused)
+
+    stages = [
+        {
+            "id": "routed",
+            "state": "complete" if routed else "pending",
+            "proof": referenced[:4],
+        },
+        {
+            "id": "used",
+            "state": "complete" if used else ("pending" if routed else "blocked"),
+            "proof": (helped or adopted)[:4],
+        },
+        {
+            "id": "solved",
+            "state": "complete" if solved else ("pending" if used else "blocked"),
+            "proof": [task_status] if task_status else [],
+        },
+        {
+            "id": "writeback",
+            "state": "complete" if writeback_complete else ("pending" if writeback_pending else "not_required"),
+            "proof": updated[:4] or [str(item.get("matched_ref") or item.get("target_path") or "") for item in (growth.get("applied") or []) if isinstance(item, dict)][:4],
+        },
+        {
+            "id": "reused",
+            "state": "complete" if reuse_verified else "pending",
+            "proof": reused[:4],
+        },
+    ]
+    if reuse_verified:
+        state = "reuse_verified"
+    elif routed and used and solved and writeback_complete:
+        state = "closed_loop"
+    elif writeback_complete:
+        state = "writeback_applied"
+    elif writeback_pending:
+        state = "writeback_pending"
+    elif used:
+        state = "helped"
+    elif routed:
+        state = "hit_only"
+    elif records:
+        state = "observing"
+    else:
+        state = "no_participation"
+    return {
+        "state": state,
+        "task_status": task_status,
+        "stages": stages,
+        "proof": {
+            "helped": helped[:6],
+            "updated": updated[:6],
+            "reused": reused[:6],
+            "adopted_files": adopted[:6],
+        },
+    }
+
+
 def _context_evidence_summary(
     *,
     records: list[dict],
     latest_result: dict | None,
     suggestions: list[dict],
     maintenance_plan: list[dict],
+    task: dict,
 ) -> dict:
     type_counts = _context_evidence_type_counts(records)
     feedback_records = [record for record in records if record.get("type") == "agent_kb_feedback"]
@@ -382,6 +462,7 @@ def _context_evidence_summary(
             "after_agent_turn",
         ],
         "status": status,
+        "loop": _context_evidence_loop(records=records, latest_result=latest_result, task=task),
         "next_action": _context_evidence_next_action(maintenance_plan, suggestions),
         "record_type_counts": type_counts,
         "evidence_sources": _context_evidence_source_labels(type_counts),
@@ -397,7 +478,7 @@ def _context_evidence_summary(
 
 
 def task_context_evidence_payload(root: Path, run_id: str, task_id: str, query: dict[str, list[str]]) -> dict:
-    task_snapshot(root, run_id, task_id)
+    task = task_snapshot(root, run_id, task_id)["task"]
     limit = _query_int(query, "limit", 50, minimum=1, maximum=200)
     record_type = str(query.get("type", [""])[0] or "").strip()
     records = list_task_context_evidence(root, run_id, task_id)
@@ -459,6 +540,7 @@ def task_context_evidence_payload(root: Path, run_id: str, task_id: str, query: 
             latest_result=latest_result,
             suggestions=suggestions,
             maintenance_plan=maintenance_plan,
+            task=task,
         ),
         "routing_health": latest_result.get("routing_health") if isinstance(latest_result, dict) else {},
         "kb_scope_policy": latest_result.get("kb_scope_policy") if isinstance(latest_result, dict) else {},

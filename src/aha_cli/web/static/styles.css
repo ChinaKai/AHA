@@ -4323,6 +4323,95 @@ body.auth-required .login-view:not(.hidden) {
 .context-evidence-view .task-evidence-grid {
   grid-template-columns: minmax(0, 1fr);
 }
+.task-evidence-loop {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid var(--color-border-subtle);
+  border-left: 4px solid var(--color-accent);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-subtle);
+}
+.task-evidence-loop-closed_loop,
+.task-evidence-loop-reuse_verified {
+  border-left-color: var(--color-success-strong);
+}
+.task-evidence-loop-writeback_pending {
+  border-left-color: var(--color-warning-strong-3);
+}
+.task-evidence-loop-head span {
+  color: var(--color-text-muted);
+  font-size: 10px;
+  font-weight: 750;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.task-evidence-loop-head strong {
+  display: block;
+  margin-top: 3px;
+  color: var(--color-text-strong);
+  font-size: var(--fs-sm);
+}
+.task-evidence-loop-head p,
+.task-evidence-loop-note {
+  margin: 3px 0 0;
+  color: var(--color-text-muted);
+  font-size: var(--fs-xxs);
+  line-height: 1.5;
+}
+.task-evidence-loop-track {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 6px;
+  min-width: 0;
+}
+.task-evidence-loop-stage {
+  position: relative;
+  display: grid;
+  align-content: start;
+  gap: 3px;
+  min-width: 0;
+  padding: 8px;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+}
+.task-evidence-loop-stage-complete {
+  border-color: color-mix(in srgb, var(--color-success-strong) 45%, var(--color-border-subtle));
+  background: color-mix(in srgb, var(--color-success-strong) 7%, var(--color-surface));
+}
+.task-evidence-loop-stage-blocked {
+  opacity: 0.58;
+}
+.task-evidence-loop-marker {
+  display: grid;
+  width: 22px;
+  height: 22px;
+  place-items: center;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: 999px;
+  color: var(--color-text-muted);
+  font-size: 10px;
+  font-weight: 750;
+}
+.task-evidence-loop-stage-complete .task-evidence-loop-marker {
+  border-color: var(--color-success-strong);
+  background: var(--color-success-strong);
+  color: var(--color-on-primary);
+}
+.task-evidence-loop-stage strong {
+  color: var(--color-text-strong);
+  font-size: var(--fs-xxs);
+}
+.task-evidence-loop-stage small {
+  color: var(--color-text-muted);
+  font-size: 10px;
+  line-height: 1.3;
+}
+.task-evidence-loop-stage code {
+  font-size: 10px;
+}
 .task-evidence-summary {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
@@ -4408,6 +4497,30 @@ body.auth-required .login-view:not(.hidden) {
 }
 .task-evidence-tab-panel.active {
   display: grid;
+}
+.task-evidence-details {
+  min-width: 0;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+}
+.task-evidence-details > summary {
+  cursor: pointer;
+  padding: 9px 10px;
+  color: var(--color-text-muted);
+  font-size: var(--fs-xxs);
+  font-weight: 700;
+  list-style-position: inside;
+}
+.task-evidence-details[open] > summary {
+  border-bottom: 1px solid var(--color-border-subtle);
+  color: var(--color-text-strong);
+}
+.task-evidence-details-body {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  padding: 10px;
 }
 .task-evidence-grid > div,
 .task-evidence-block {
@@ -4512,6 +4625,24 @@ body.auth-required .login-view:not(.hidden) {
   border-radius: var(--radius-sm);
   background: var(--color-surface-subtle);
   overflow-x: hidden;
+}
+@media (max-width: 820px) {
+  .task-evidence-loop-track {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .task-evidence-loop-stage {
+    grid-template-columns: 22px minmax(0, 1fr);
+    align-items: center;
+  }
+  .task-evidence-loop-stage strong,
+  .task-evidence-loop-stage small,
+  .task-evidence-loop-stage > div {
+    grid-column: 2;
+  }
+  .task-evidence-loop-marker {
+    grid-column: 1;
+    grid-row: 1 / span 3;
+  }
 }
 .task-settings-danger-zone {
   background: var(--color-surface);
@@ -4895,8 +5026,40 @@ body.auth-required.knowledge-home .knowledge-home-page {
   overflow: auto;
   padding: 16px 18px;
 }
-.conversation { display: grid; gap: 10px; }
+.conversation {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 10px;
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+}
 .timeline { align-content: start; }
+.conversation-scroll-bottom {
+  position: fixed;
+  z-index: var(--z-header-1);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 34px;
+  padding: 6px 11px;
+  border: 1px solid var(--color-border-strong);
+  border-radius: 999px;
+  background: var(--color-surface);
+  color: var(--color-text-strong-2);
+  font-size: var(--fs-xs);
+  font-weight: 650;
+  box-shadow: 0 8px 22px rgba(15, 23, 42, 0.16);
+}
+.conversation-scroll-bottom:hover,
+.conversation-scroll-bottom:focus-visible {
+  border-color: var(--color-primary-focus-ring);
+  background: var(--color-primary-surface);
+  color: var(--color-info-strong-2);
+}
+.conversation-scroll-bottom[hidden] {
+  display: none;
+}
 .conversation-metrics-dock {
   position: sticky;
   z-index: var(--z-header-1);
@@ -5412,6 +5575,9 @@ body.auth-required.knowledge-home .knowledge-home-page {
   font-size: var(--fs-xs);
 }
 .message {
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
   border: 1px solid var(--color-border-subtle);
   border-radius: var(--radius-md);
   padding: 10px 12px;
@@ -5580,7 +5746,14 @@ body.auth-required.knowledge-home .knowledge-home-page {
 .message-copy[data-copy-state="failed"] .message-copy-icon::after {
   transform: rotate(-45deg);
 }
-.message-body { white-space: pre-wrap; line-height: 1.5; }
+.message-body {
+  max-width: 100%;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  white-space: pre-wrap;
+  line-height: 1.5;
+}
 .message-markdown {
   white-space: normal;
   overflow-wrap: anywhere;
@@ -8376,8 +8549,12 @@ body.task-memo-home .task-memo-page .task-memo-panel {
 .vl-host {
   position: relative;
   flex: 1 1 auto;
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
   min-height: 0;
   overflow-y: auto;
+  overflow-x: hidden;
   overscroll-behavior: contain;
 }
 /* When the conversation is virtualized, make the timeline a height-constrained
@@ -8395,6 +8572,8 @@ body.task-memo-home .task-memo-page .task-memo-panel {
   top: 0;
   left: 0;
   right: 0;
+  min-width: 0;
+  max-width: 100%;
   overflow: hidden;
 }
 .vl-spacer {

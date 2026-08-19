@@ -4,6 +4,12 @@
     const sendFormEl = elements.sendFormEl;
     const messageEl = elements.messageEl;
     const documentRef = elements.documentRef || document;
+    const windowRef = elements.windowRef
+      || documentRef.defaultView
+      || (typeof window !== "undefined" ? window : null);
+    const conversationScrollBottomEl = elements.conversationScrollBottomEl
+      || documentRef.getElementById?.("conversation-scroll-bottom")
+      || null;
     const hardwareTerminalController = deps.hardwareTerminalController || null;
     const browserSessionController = deps.browserSessionController || null;
     const activeTab = deps.activeTab || (() => "conversation");
@@ -88,6 +94,7 @@
 
     function prepareForTab(tab) {
       syncComposerAvailability(tab);
+      if (tab !== "conversation" && conversationScrollBottomEl) conversationScrollBottomEl.hidden = true;
       if (tab !== "hardware") hardwareTerminalController?.unmount?.();
       if (tab !== "browser") browserSessionController?.unmount?.();
     }
@@ -99,6 +106,40 @@
       const host = panelEl.querySelector?.(".vl-host");
       if (host) return host.scrollHeight - host.scrollTop - host.clientHeight < 80;
       return panelEl.scrollHeight - panelEl.scrollTop - panelEl.clientHeight < 80;
+    }
+
+    function conversationScrollContainer() {
+      return panelEl?.querySelector?.(".vl-host") || panelEl;
+    }
+
+    function positionConversationScrollBottom() {
+      if (!conversationScrollBottomEl || !panelEl?.getBoundingClientRect || !windowRef) return;
+      const rect = panelEl.getBoundingClientRect();
+      conversationScrollBottomEl.style.right = `${Math.max(12, windowRef.innerWidth - rect.right + 18)}px`;
+      conversationScrollBottomEl.style.bottom = `${Math.max(12, windowRef.innerHeight - rect.bottom + 18)}px`;
+    }
+
+    function syncConversationScrollBottom() {
+      if (!conversationScrollBottomEl) return;
+      const visible = activeTab() === "conversation" && Boolean(selectedTask()) && !isPanelNearBottom();
+      conversationScrollBottomEl.hidden = !visible;
+      if (visible) positionConversationScrollBottom();
+    }
+
+    function queueConversationScrollBottomSync() {
+      if (typeof windowRef?.requestAnimationFrame === "function") {
+        windowRef.requestAnimationFrame(syncConversationScrollBottom);
+      } else {
+        syncConversationScrollBottom();
+      }
+    }
+
+    function scrollConversationToBottom() {
+      const scrollEl = conversationScrollContainer();
+      if (!scrollEl) return;
+      setConversationAutoFollow(true);
+      scrollEl.scrollTop = scrollEl.scrollHeight;
+      queueConversationScrollBottomSync();
     }
 
     // Scrolling the panel away from the bottom (non-virtualized conversation) must
@@ -165,6 +206,7 @@
           }
           restorePromptMetricsPopoverState(metricsPopoverState);
           positionPromptMetricsPopover();
+          queueConversationScrollBottomSync();
           return;
         }
         // Capture the virtual host's scroll position before innerHTML replaces it so a
@@ -195,6 +237,7 @@
         restorePromptMetricsPopoverState(metricsPopoverState);
         positionPromptMetricsPopover();
         focusInitialChatMessage();
+        queueConversationScrollBottomSync();
         return;
       }
       if (tab === "final") {
@@ -265,6 +308,8 @@
     return Object.freeze({
       renderPanel,
       isPanelNearBottom,
+      scrollConversationToBottom,
+      syncConversationScrollBottom,
       activateTab
     });
   }

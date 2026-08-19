@@ -233,7 +233,7 @@
         ? [["browser", t("conversation.browser", "Browser"), t("conversation.browser", "Browser")]]
         : []),
       ["context", t("conversation.context_short", "Ctx"), t("conversation.context", "Context")],
-      ["context-evidence", t("conversation.context_evidence_short", "Evd"), t("conversation.context_evidence", "Context evidence")]
+      ["context-evidence", t("conversation.context_evidence_short", "KB"), t("conversation.context_evidence", "KB impact")]
     ];
     return `
       <div class="task-view-switcher tabs" role="group" aria-label="${escapeHtml(t("task.view_switcher", "Task view"))}">

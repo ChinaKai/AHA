@@ -265,18 +265,6 @@
       return labels[state] || status.label || state;
     }
 
-    function evidenceSourceText(source) {
-      const t = window.AHAI18n?.t || ((_, fallback) => fallback);
-      const labels = {
-        after_agent_turn: t("task.context_evidence_source_after_turn", "after agent turn"),
-        after_turn_runtime_distill: t("task.context_evidence_source_after_turn", "after agent turn"),
-        agent_kb_feedback: t("task.context_evidence_source_agent_feedback", "agent KB feedback"),
-        before_agent_prompt: t("task.context_evidence_source_before_prompt", "before agent prompt"),
-        context_pack_before_prompt: t("task.context_evidence_source_context_pack", "context pack")
-      };
-      return labels[source] || source;
-    }
-
     function evidenceFeedbackModeText(mode) {
       const t = window.AHAI18n?.t || ((_, fallback) => fallback);
       if (mode === "agent_feedback_plus_runtime") {
@@ -285,10 +273,95 @@
       return t("task.context_evidence_feedback_mode", "AHA runtime inference from prompts, commands, and changed files.");
     }
 
+    function evidenceLoopStateText(loop = {}) {
+      const t = window.AHAI18n?.t || ((_, fallback) => fallback);
+      const labels = {
+        closed_loop: t("task.context_evidence_loop_closed", "Task loop closed"),
+        helped: t("task.context_evidence_loop_helped", "KB helped this task"),
+        hit_only: t("task.context_evidence_loop_hit_only", "KB matched, impact unproven"),
+        no_participation: t("task.context_evidence_loop_none", "No KB participation"),
+        observing: t("task.context_evidence_loop_observing", "Collecting proof"),
+        reuse_verified: t("task.context_evidence_loop_reused", "Cross-task reuse verified"),
+        writeback_applied: t("task.context_evidence_loop_writeback", "Knowledge written back"),
+        writeback_pending: t("task.context_evidence_loop_writeback_pending", "Knowledge write-back pending")
+      };
+      return labels[loop.state] || labels.observing;
+    }
+
+    function evidenceLoopDescription(loop = {}) {
+      const t = window.AHAI18n?.t || ((_, fallback) => fallback);
+      const descriptions = {
+        closed_loop: t("task.context_evidence_loop_closed_desc", "KB was used, the task completed, and verified knowledge was written back."),
+        helped: t("task.context_evidence_loop_helped_desc", "The task adopted KB guidance, but completion or write-back is not yet proven."),
+        hit_only: t("task.context_evidence_loop_hit_only_desc", "AHA routed KB context to the task, but there is no proof that the agent adopted it."),
+        no_participation: t("task.context_evidence_loop_none_desc", "This task has not recorded KB routing or usage evidence."),
+        observing: t("task.context_evidence_loop_observing_desc", "Evidence exists, but it does not yet prove KB impact."),
+        reuse_verified: t("task.context_evidence_loop_reused_desc", "Knowledge written by an earlier task was explicitly reused and verified."),
+        writeback_applied: t("task.context_evidence_loop_writeback_desc", "Verified task knowledge was written back; later-task reuse is still pending."),
+        writeback_pending: t("task.context_evidence_loop_writeback_pending_desc", "The task found a KB gap, but the required project knowledge update is not complete.")
+      };
+      return descriptions[loop.state] || descriptions.observing;
+    }
+
+    function evidenceLoopStageText(stageId) {
+      const t = window.AHAI18n?.t || ((_, fallback) => fallback);
+      return ({
+        routed: t("task.context_evidence_stage_routed", "Matched"),
+        used: t("task.context_evidence_stage_used", "Used"),
+        solved: t("task.context_evidence_stage_solved", "Solved"),
+        writeback: t("task.context_evidence_stage_writeback", "Written back"),
+        reused: t("task.context_evidence_stage_reused", "Reused")
+      })[stageId] || stageId;
+    }
+
+    function evidenceLoopStageStateText(state) {
+      const t = window.AHAI18n?.t || ((_, fallback) => fallback);
+      return ({
+        blocked: t("task.context_evidence_stage_blocked", "Waiting for prior proof"),
+        complete: t("task.context_evidence_stage_complete", "Proven"),
+        not_required: t("task.context_evidence_stage_not_required", "No write-back needed"),
+        pending: t("task.context_evidence_stage_pending", "Not proven")
+      })[state] || state;
+    }
+
+    function renderEvidenceLoop(payload = {}) {
+      const t = window.AHAI18n?.t || ((_, fallback) => fallback);
+      const loop = payload.summary?.loop || { state: "no_participation", stages: [] };
+      const stages = Array.isArray(loop.stages) ? loop.stages : [];
+      const safeState = String(loop.state || "observing").replace(/[^a-z0-9_-]/gi, "");
+      return `
+        <section class="task-evidence-loop task-evidence-loop-${escapeHtml(safeState)}">
+          <div class="task-evidence-loop-head">
+            <div>
+              <span>${escapeHtml(t("task.context_evidence_loop", "KB positive loop"))}</span>
+              <strong>${escapeHtml(evidenceLoopStateText(loop))}</strong>
+              <p>${escapeHtml(evidenceLoopDescription(loop))}</p>
+            </div>
+          </div>
+          <div class="task-evidence-loop-track" role="list" aria-label="${escapeHtml(t("task.context_evidence_loop", "KB positive loop"))}">
+            ${stages.map((stage, index) => {
+              const state = String(stage?.state || "pending");
+              const proof = Array.isArray(stage?.proof) ? stage.proof.filter(Boolean) : [];
+              return `
+                <div class="task-evidence-loop-stage task-evidence-loop-stage-${escapeHtml(state)}" role="listitem">
+                  <span class="task-evidence-loop-marker" aria-hidden="true">${state === "complete" ? "✓" : String(index + 1)}</span>
+                  <strong>${escapeHtml(evidenceLoopStageText(stage?.id || ""))}</strong>
+                  <small>${escapeHtml(evidenceLoopStageStateText(state))}</small>
+                  ${proof.length ? `<div>${evidenceListHtml(proof, { limit: 2, empty: "-", code: true })}</div>` : ""}
+                </div>
+              `;
+            }).join("")}
+          </div>
+          <p class="task-evidence-loop-note">${escapeHtml(t("task.context_evidence_reuse_note", "Cross-task reuse remains unverified until a later task explicitly reports using this knowledge."))}</p>
+        </section>
+      `;
+    }
+
     function renderAgentKbFeedback(feedback = {}) {
       const t = window.AHAI18n?.t || ((_, fallback) => fallback);
       const sections = [
         ["helped", t("task.context_evidence_feedback_helped", "Helped")],
+        ["reused", t("task.context_evidence_feedback_reused", "Reused")],
         ["stale", t("task.context_evidence_feedback_stale", "Stale")],
         ["missed", t("task.context_evidence_feedback_missed", "Missed")],
         ["updated", t("task.context_evidence_feedback_updated", "Updated")],
@@ -341,11 +414,8 @@
       const summary = payload.summary || {};
       const status = summary.status || {};
       const nextAction = summary.next_action || {};
-      const sources = Array.isArray(summary.evidence_sources) ? summary.evidence_sources : [];
-      const generatedWhen = Array.isArray(summary.generated_when) ? summary.generated_when : [];
-      const sourceText = sources.length
-        ? sources.map(evidenceSourceText).join(" · ")
-        : generatedWhen.map(evidenceSourceText).join(" · ");
+      const proof = summary.loop?.proof || {};
+      const proofItems = [...(proof.helped || []), ...(proof.adopted_files || []), ...(proof.updated || [])];
       const statusState = String(status.state || "observing").replace(/[^a-z0-9_-]/gi, "");
       const latestUpdate = localizeTimestampText(summary.latest_record_created_at || "-");
       const targetPath = nextAction.target_path
@@ -354,12 +424,12 @@
       return `
         <div class="task-evidence-summary task-evidence-summary-${escapeHtml(statusState)}">
           <div>
-            <span>${escapeHtml(t("task.context_evidence_scope", "Scope"))}</span>
-            <strong>${escapeHtml(t("task.context_evidence_scope_task", "This token-saving task"))}</strong>
-            <p>${escapeHtml(evidenceFeedbackModeText(summary.feedback_mode))}</p>
+            <span>${escapeHtml(t("task.context_evidence_key_proof", "Key proof"))}</span>
+            <strong>${escapeHtml(proofItems.length ? t("task.context_evidence_proof_available", "Verified observations") : t("task.context_evidence_proof_missing", "No causal proof yet"))}</strong>
+            <div>${evidenceListHtml(proofItems, { limit: 5, empty: t("task.context_evidence_proof_missing_help", "A KB match alone is not counted as task impact."), code: true })}</div>
           </div>
           <div>
-            <span>${escapeHtml(t("task.context_evidence_kb_effect", "KB effect"))}</span>
+            <span>${escapeHtml(t("task.context_evidence_health", "KB health"))}</span>
             <strong>${escapeHtml(evidenceStatusText(status))}</strong>
             <p>${escapeHtml(status.description || t("task.context_evidence_status_unknown", "No task-level KB impact summary yet."))}</p>
           </div>
@@ -370,9 +440,9 @@
             ${targetPath}
           </div>
           <div>
-            <span>${escapeHtml(t("task.context_evidence_sources", "Evidence sources"))}</span>
-            <strong>${escapeHtml(sourceText || "-")}</strong>
-            <p>${escapeHtml(t("task.context_evidence_latest", "Latest update"))}: ${escapeHtml(latestUpdate)}</p>
+            <span>${escapeHtml(t("task.context_evidence_latest", "Latest update"))}</span>
+            <strong>${escapeHtml(latestUpdate)}</strong>
+            <p>${escapeHtml(evidenceFeedbackModeText(summary.feedback_mode))}</p>
           </div>
         </div>
       `;
@@ -490,10 +560,10 @@
         return `
           <div class="context-evidence-view">
             <div class="task-evidence-head">
-              <h3>${escapeHtml(t("task.context_evidence", "Context evidence"))}</h3>
+              <h3>${escapeHtml(t("task.context_evidence", "KB impact"))}</h3>
               <button type="button" data-context-evidence-refresh>${escapeHtml(t("common.refresh", "Refresh"))}</button>
             </div>
-            <div class="task-evidence-empty">${escapeHtml(t("task.context_evidence_empty", "No context evidence yet."))}</div>
+            ${renderEvidenceLoop(payload)}
           </div>
         `;
       }
@@ -501,13 +571,19 @@
         <div class="context-evidence-view">
           <div class="task-evidence-head">
             <div>
-              <h3>${escapeHtml(t("task.context_evidence", "Context evidence"))}</h3>
-              <div class="meta">${escapeHtml(t("task.context_evidence_count", "{count} evidence records").replace("{count}", String(count)))}</div>
+              <h3>${escapeHtml(t("task.context_evidence", "KB impact"))}</h3>
+              <div class="meta">${escapeHtml(t("task.context_evidence_summary_hint", "Proof of whether KB helped this task and improved future work."))}</div>
             </div>
             <button type="button" data-context-evidence-refresh>${escapeHtml(t("common.refresh", "Refresh"))}</button>
           </div>
+          ${renderEvidenceLoop(payload)}
           ${renderEvidenceSummary(payload)}
-          ${renderContextEvidenceTabs({ payload, latest, diagnostics, routingHealth, maintenanceItems, kbGrowthState, latestFeedback })}
+          <details class="task-evidence-details">
+            <summary>${escapeHtml(t("task.context_evidence_technical_details", "Technical details"))} · ${escapeHtml(t("task.context_evidence_count", "{count} evidence records").replace("{count}", String(count)))}</summary>
+            <div class="task-evidence-details-body">
+              ${renderContextEvidenceTabs({ payload, latest, diagnostics, routingHealth, maintenanceItems, kbGrowthState, latestFeedback })}
+            </div>
+          </details>
         </div>
       `;
     }
