@@ -63,7 +63,7 @@ def _wait_until(predicate, *, timeout: float) -> bool:
 
 
 class DeviceKeyTests(unittest.TestCase):
-    def test_task_devices_excludes_skill_owned_relay_serial_ports(self) -> None:
+    def test_task_devices_migrates_legacy_relay_resource_to_hardware_group(self) -> None:
         task = {
             "hardware_debug": {
                 "mode": "serial",
@@ -74,7 +74,7 @@ class DeviceKeyTests(unittest.TestCase):
             }
         }
 
-        self.assertEqual(task_devices(task), [("/dev/ttyUSB0", 115200)])
+        self.assertEqual(task_devices(task), [("/dev/ttyUSB0", 115200), ("/dev/ttyUSB1", 9600)])
         self.assertEqual(task_serial_resource_target(task, "power"), ("/dev/ttyUSB1", 9600))
         self.assertEqual(
             task_referenced_serial_devices(task),

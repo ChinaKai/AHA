@@ -25,6 +25,7 @@
     let pendingInput = "";
     let mountKey = "";
     let taskId = "";
+    let hardware = "";
     let transport = "serial";
     let readOnly = false;
     let bridge = {};
@@ -49,8 +50,8 @@
     }
 
     function terminalWsUrl() {
-      const path = deps.apiUrl?.("/ws/hardware-terminal", { task_id: taskId, transport, cols, rows })
-        || `/ws/hardware-terminal?task_id=${encodeURIComponent(taskId)}&transport=${encodeURIComponent(transport)}&cols=${cols}&rows=${rows}`;
+      const path = deps.apiUrl?.("/ws/hardware-terminal", { task_id: taskId, hardware, transport, cols, rows })
+        || `/ws/hardware-terminal?task_id=${encodeURIComponent(taskId)}&hardware=${encodeURIComponent(hardware)}&transport=${encodeURIComponent(transport)}&cols=${cols}&rows=${rows}`;
       const url = new URL(path, windowRef.location?.href || window.location.href);
       url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
       return url.toString();
@@ -268,7 +269,8 @@
 
     function mount(nextTaskId, state = {}) {
       const nextTransport = String(state.transport || "serial");
-      const nextKey = `${String(deps.currentRunId?.() || "")}:${String(nextTaskId || "")}:${nextTransport}`;
+      const nextHardware = String(state.hardware || "");
+      const nextKey = `${String(deps.currentRunId?.() || "")}:${String(nextTaskId || "")}:${nextHardware}:${nextTransport}`;
       const nextRoot = panelEl?.querySelector?.("[data-hardware-terminal-root]") || null;
       const nextTerminal = nextRoot?.querySelector?.("[data-hardware-terminal-xterm]") || null;
       if (!nextRoot || !nextTerminal) return false;
@@ -282,6 +284,7 @@
       if (!Ctor) return false;
       mountKey = nextKey;
       taskId = String(nextTaskId || "");
+      hardware = nextHardware;
       transport = nextTransport;
       rootEl = nextRoot;
       terminalEl = nextTerminal;
@@ -358,6 +361,7 @@
       closeSocket();
       disposeTerminal();
       taskId = "";
+      hardware = "";
       transport = "serial";
       rootEl = null;
       terminalEl = null;

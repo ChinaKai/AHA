@@ -46,7 +46,7 @@ from pathlib import Path
 from aha_cli import platform, process_control
 from aha_cli.constants import AHA_WEB_INSTANCE_ENV, PLAN_FILE, RUNS_DIR
 from aha_cli.services.onebin import aha_cli_invocation
-from aha_cli.domain.models import normalize_task_hardware_debug, utc_now
+from aha_cli.domain.models import normalize_task_hardware_debug, task_hardware_group, utc_now
 from aha_cli.services.hardware_session import (
     ArmedRuleEngine,
     decode_escapes,
@@ -101,53 +101,37 @@ _CONTROL_OFFSET_PERSIST_INTERVAL = 1.0
 
 
 def task_devices(task: dict) -> list[tuple[str, int]]:
-    """Terminal UART devices referenced by a task; skill-owned relay ports stay free."""
-
+    """All serial endpoints referenced by a task's hardware groups."""
     hardware = normalize_task_hardware_debug(task.get("hardware_debug"))
-    if hardware.get("mode") not in {"serial", "both"}:
-        return []
-    serial = hardware.get("serial") if isinstance(hardware.get("serial"), dict) else {}
-    device = str(serial.get("device") or "").strip()
-    return [(device, int(serial.get("baudrate") or 115200))] if device else []
-
-
-def task_serial_resource_target(task: dict, resource_id: object) -> tuple[str, int] | None:
-    hardware = normalize_task_hardware_debug(task.get("hardware_debug"))
-    if hardware.get("mode") == "off":
-        return None
-    requested = str(resource_id or "").strip().lower()
-    if not requested:
-        return None
-    resources = hardware.get("resources") if isinstance(hardware.get("resources"), list) else []
-    resource = next(
-        (
-            item
-            for item in resources
-            if isinstance(item, dict)
-            and str(item.get("id") or "").strip().lower() == requested
-            and item.get("type") == "serial_relay"
-        ),
-        None,
-    )
-    if not resource:
-        return None
-    device = str(resource.get("device") or "").strip()
-    return (device, int(resource.get("baudrate") or 9600)) if device else None
-
-
-def task_referenced_serial_devices(task: dict) -> list[tuple[str, int]]:
-    devices = list(task_devices(task))
-    hardware = normalize_task_hardware_debug(task.get("hardware_debug"))
-    if hardware.get("mode") == "off":
-        return devices
-    for resource in hardware.get("resources") or []:
-        if not isinstance(resource, dict) or resource.get("type") != "serial_relay":
+    devices: list[tuple[str, int]] = []
+    for group in hardware.get("groups") or []:
+        if not isinstance(group, dict) or group.get("mode") not in {"serial", "both"}:
             continue
-        device = str(resource.get("device") or "").strip()
-        target = (device, int(resource.get("baudrate") or 9600))
+        serial = group.get("serial") if isinstance(group.get("serial"), dict) else {}
+        device = str(serial.get("device") or "").strip()
+        target = (device, int(serial.get("baudrate") or 115200))
         if device and target not in devices:
             devices.append(target)
     return devices
+
+
+def task_serial_group_target(task: dict, hardware_id: object = "") -> tuple[str, int] | None:
+    group = task_hardware_group(task, hardware_id)
+    if not group or group.get("mode") not in {"serial", "both"}:
+        return None
+    serial = group.get("serial") if isinstance(group.get("serial"), dict) else {}
+    device = str(serial.get("device") or "").strip()
+    return (device, int(serial.get("baudrate") or 115200)) if device else None
+
+
+def task_serial_resource_target(task: dict, resource_id: object) -> tuple[str, int] | None:
+    """Compatibility alias for the v0.1.160 named-resource CLI."""
+
+    return task_serial_group_target(task, resource_id)
+
+
+def task_referenced_serial_devices(task: dict) -> list[tuple[str, int]]:
+    return list(task_devices(task))
 
 
 def device_referenced_by_active_task(root: Path, device: str) -> bool:
@@ -1188,5 +1172,6 @@ __all__ = [
     "stop_all_hardware_bridges",
     "task_devices",
     "task_referenced_serial_devices",
+    "task_serial_group_target",
     "task_serial_resource_target",
 ]

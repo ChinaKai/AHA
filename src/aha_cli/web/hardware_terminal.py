@@ -6,13 +6,13 @@ import socket
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-from aha_cli.domain.models import task_hardware_debug_can_write
+from aha_cli.domain.models import task_hardware_debug_can_write, task_hardware_group
 from aha_cli.services.hardware_bridge import (
     bridge_status,
     device_stream_page,
     device_terminal_socket_path,
     ensure_bridge,
-    task_devices,
+    task_serial_group_target,
 )
 from aha_cli.services.serial_ports import list_serial_ports
 from aha_cli.web.http_utils import http_response
@@ -41,11 +41,15 @@ def hardware_serial_ports_response(method: str, path: str) -> bytes | None:
     return http_response("200 OK", body, "application/json; charset=utf-8")
 
 
-def hardware_terminal_target(task: dict, requested: object = "") -> dict | None:
+def hardware_terminal_target(task: dict, requested: object = "", hardware_id: object = "") -> dict | None:
     transports: list[str] = []
-    serial_devices = task_devices(task)
-    network_target = task_network_target(task)
-    if serial_devices:
+    group = task_hardware_group(task, hardware_id)
+    if not group:
+        return None
+    serial_target = task_serial_group_target(task, group.get("id"))
+    network_target = task_network_target(task, group.get("id"))
+    credentials = group.get("credentials") if isinstance(group.get("credentials"), dict) else {}
+    if serial_target:
         transports.append("serial")
     if network_target:
         transports.append("network")
@@ -67,19 +71,25 @@ def hardware_terminal_target(task: dict, requested: object = "") -> dict | None:
             "port": port,
             "username": username,
             "password": password,
+            "credentials": credentials,
+            "hardware": group.get("id"),
+            "description": group.get("description") or "",
         }
-    device, baudrate = serial_devices[0]
+    device, baudrate = serial_target or ("", 115200)
     return {
         "transport": transport,
         "transports": transports,
         "endpoint": device,
         "device": device,
         "baudrate": baudrate,
+        "credentials": credentials,
+        "hardware": group.get("id"),
+        "description": group.get("description") or "",
     }
 
 
-def _is_read_only(task: dict) -> bool:
-    return _is_archived(task) or not task_hardware_debug_can_write(task)
+def _is_read_only(task: dict, hardware_id: object = "") -> bool:
+    return _is_archived(task) or not task_hardware_debug_can_write(task, hardware_id)
 
 
 def _is_archived(task: dict) -> bool:
@@ -152,11 +162,9 @@ def _arm_auto_login(root: Path, task: dict, target: dict) -> None:
     # Best-effort: arm login/password rules from the task's credentials so opening
     # the terminal logs in automatically. Never let it block the terminal.
     try:
-        from aha_cli.domain.models import normalize_task_hardware_debug
         from aha_cli.services.hardware_login import arm_auto_login
 
-        hardware = normalize_task_hardware_debug(task.get("hardware_debug"))
-        credentials = hardware.get("credentials") if isinstance(hardware.get("credentials"), dict) else {}
+        credentials = target.get("credentials") if isinstance(target.get("credentials"), dict) else {}
         if target.get("transport") == "network":
             arm_auto_login(root, credentials, host=target.get("host"), port=target.get("port"))
         else:
@@ -205,6 +213,7 @@ async def handle_hardware_terminal_ws_connection(
     query = parse_qs(urlparse(target_url).query, keep_blank_values=True)
     task_id = str((query.get("task_id") or [""])[0] or "").strip()
     requested_transport = str((query.get("transport") or [""])[0] or "").strip()
+    hardware_id = str((query.get("hardware") or [""])[0] or "").strip()
     cols, rows = normalize_terminal_size(
         (query.get("cols") or [""])[0],
         (query.get("rows") or [""])[0],
@@ -217,11 +226,11 @@ async def handle_hardware_terminal_ws_connection(
             await _send_message(writer, "error", message="task_id is required")
             return
         task = task_snapshot(root, run_id, task_id)["task"]
-        target = hardware_terminal_target(task, requested_transport)
+        target = hardware_terminal_target(task, requested_transport, hardware_id)
         if not target:
             await _send_message(writer, "error", message="task has no hardware terminal configured")
             return
-        read_only = _is_read_only(task)
+        read_only = _is_read_only(task, target.get("hardware"))
         archived = _is_archived(task)
         replay_boundary: int | None = None
         ipc_reader: asyncio.StreamReader | None = None

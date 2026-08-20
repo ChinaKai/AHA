@@ -101,6 +101,10 @@
           : `Serial device is in use by ${ownerIdentity}. AHA has no permission to terminate it; close it manually.`
         : bridge.error ? String(bridge.error) : "";
       const transports = Array.isArray(state.transports) ? state.transports : [];
+      const groups = Array.isArray(state.groups) ? state.groups : [];
+      const hardwarePicker = groups.length > 1
+        ? `<span class="hardware-transport-picker">${groups.map(group => `<button type="button" class="hardware-transport-btn ${String(group?.id || "") === String(state.hardware || "") ? "active" : ""}" data-hardware-group-select="${escapeHtml(String(group?.id || ""))}" title="${escapeHtml(String(group?.description || ""))}">${escapeHtml(String(group?.id || "hardware"))}</button>`).join("")}</span>`
+        : `<span class="hardware-transport-label" title="${escapeHtml(String(groups[0]?.description || ""))}">${escapeHtml(String(state.hardware || groups[0]?.id || "hardware"))}</span>`;
       const transportPicker = transports.length > 1
         ? `<span class="hardware-transport-picker">${transports.map(item => (
             `<button type="button" class="hardware-transport-btn ${item === state.transport ? "active" : ""}" data-hardware-transport="${escapeHtml(item)}">${escapeHtml(item === "serial" ? "Serial" : "Network")}</button>`
@@ -111,6 +115,7 @@
       return `
         <div class="hardware-bridge-bar">
           <span class="hardware-bridge-identity">
+            ${hardwarePicker}
             ${transportPicker}
             <span class="hardware-bridge-device" title="${escapeHtml(String(state.endpoint || state.device))}">${escapeHtml(String(state.endpoint || state.device))}</span>
             <span class="status hardware-bridge-status ${variant}" data-hardware-terminal-status>${escapeHtml(label)}</span>
@@ -139,7 +144,7 @@
       if (!state.initialized && state.loading) return '<div class="empty loading">Loading hardware I/O...</div>';
       const toolbar = renderHardwareBridgeToolbarHtml(state);
       const bottomBar = renderHardwareBottomBarHtml(state);
-      const key = `${String(state.taskId || "")}:${String(state.transport || "serial")}`;
+      const key = `${String(state.taskId || "")}:${String(state.hardware || "")}:${String(state.transport || "serial")}`;
       return `
         <div class="hardware-io-view" data-hardware-terminal-root data-hardware-terminal-key="${escapeHtml(key)}">
           ${toolbar}

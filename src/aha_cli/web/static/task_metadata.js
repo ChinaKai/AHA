@@ -36,7 +36,6 @@
   const defaultTaskSupervisionMaxRounds = 99;
   const defaultTaskContextThresholdPercent = 75;
   const hardwareDebugChannelTypes = Object.freeze(["uart", "nfs", "telnet"]);
-  const hardwareResourceTypes = Object.freeze(["serial_relay"]);
   const hardwareDebugPermissionKeys = Object.freeze(["read", "write"]);
   const supervisionAskUserGateDefs = Object.freeze([
     Object.freeze(["real_ui_validation", "Real UI/device"]),
@@ -232,17 +231,21 @@
     };
   }
 
-  function normalizeHardwareResource(value, index = 0) {
+  function normalizeHardwareGroup(value, index = 0) {
     if (!value || typeof value !== "object") return null;
-    const type = String(value.type || value.kind || "").trim().toLowerCase().replaceAll("-", "_");
-    if (!hardwareResourceTypes.includes(type)) return null;
+    const mode = ["off", "serial", "network", "both"].includes(String(value.mode)) ? String(value.mode) : "off";
     return {
-      id: String(value.id || `relay-${index + 1}`),
-      type,
-      label: String(value.label || value.title || value.id || `Relay ${index + 1}`),
-      device: String(value.device || value.port || value.path || ""),
-      baudrate: Number(value.baudrate || value.baud || 9600) || 9600,
-      channel: String(value.channel || "")
+      id: String(value.id || `hardware-${index + 1}`),
+      description: String(value.description || value.label || value.title || ""),
+      mode,
+      serial: { device: String(value.serial?.device || ""), baudrate: Number(value.serial?.baudrate || 115200) || 115200 },
+      network: { device_ip: String(value.network?.device_ip || "") },
+      credentials: {
+        username: String(value.credentials?.username || ""),
+        password: String(value.credentials?.password || ""),
+        password_configured: Boolean(value.credentials?.password_configured || value.credentials?.password)
+      },
+      permissions: { access: hardwareDebugAccess(value.permissions, mode === "off" ? "read_only" : "read_write") }
     };
   }
 
@@ -280,6 +283,11 @@
 
   function taskHardwareDebugPolicy(task) {
     const policy = task?.hardware_debug && typeof task.hardware_debug === "object" ? task.hardware_debug : {};
+    if (Array.isArray(policy.groups)) {
+      const groups = policy.groups.map(normalizeHardwareGroup).filter(Boolean);
+      const primary = groups[0] || normalizeHardwareGroup({});
+      return { ...primary, enabled: groups.some(group => group.mode !== "off"), groups, resources: [] };
+    }
     if (Object.prototype.hasOwnProperty.call(policy, "mode")) {
       const mode = ["off", "serial", "network", "both", "tools"].includes(String(policy.mode)) ? String(policy.mode) : "off";
       return {
@@ -300,7 +308,8 @@
         permissions: {
           access: hardwareDebugAccess(policy.permissions, mode === "off" ? "read_only" : "read_write")
         },
-        resources: (Array.isArray(policy.resources) ? policy.resources : []).map(normalizeHardwareResource).filter(Boolean)
+        groups: [],
+        resources: []
       };
     }
     const rawChannels = Array.isArray(policy.channels) ? policy.channels : [];
@@ -333,16 +342,15 @@
       permissions: {
         access: channels.some(channel => channel.permissions?.write) ? "read_write" : "read_only"
       },
+      groups: [],
       resources: []
     };
   }
 
   function taskHardwareDebugSummary(task) {
     const policy = taskHardwareDebugPolicy(task);
-    const resourceCount = policy.resources.length;
-    return policy.enabled
-      ? `${policy.mode} · ${policy.permissions.access.replace("_", "-")}${resourceCount ? ` · ${resourceCount} tool${resourceCount === 1 ? "" : "s"}` : ""}`
-      : "off";
+    const groupCount = policy.groups?.length || 0;
+    return groupCount ? `${groupCount} hardware group${groupCount === 1 ? "" : "s"}` : "off";
   }
 
   function taskSupervisionPayloadFromMode(selectedMode, maxRoundsValue, askUserGates, hostOptions = {}) {
@@ -371,7 +379,6 @@
     defaultTaskSupervisionMaxRounds,
     defaultTaskContextThresholdPercent,
     hardwareDebugChannelTypes,
-    hardwareResourceTypes,
     hardwareDebugPermissionKeys,
     supervisionAskUserGateDefs,
     collaborationModeDescription,
@@ -397,7 +404,7 @@
     normalizeHardwareDebugPermissions,
     hardwareDebugAccess,
     normalizeHardwareDebugChannel,
-    normalizeHardwareResource,
+    normalizeHardwareGroup,
     splitTaskSkillPaths,
     taskSkillsPolicy,
     taskSkillsSummary,

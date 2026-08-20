@@ -9,7 +9,7 @@ from unittest import mock
 
 from aha_cli.cli import main
 from aha_cli.services.context_evidence import append_task_context_evidence
-from aha_cli.web.task_routes import route_task_agent_request
+from aha_cli.web.task_routes import _hardware_stream_payload, route_task_agent_request
 
 
 class WebTaskRouteTests(unittest.TestCase):
@@ -421,7 +421,42 @@ class WebTaskRouteTests(unittest.TestCase):
         self.assertEqual(response["payload"]["bridge"]["status"], "running")
         ensure.assert_called_once_with(root, device, 115200)
 
-    def test_hardware_send_routes_named_relay_resource_to_its_serial_device(self) -> None:
+    def test_hardware_stream_defaults_to_first_group_id(self) -> None:
+        task = {
+            "status": "running",
+            "hardware_debug": {
+                "groups": [
+                    {
+                        "id": "console",
+                        "mode": "serial",
+                        "serial": {"device": "COM6", "baudrate": 115200},
+                        "permissions": {"access": "read_write"},
+                    }
+                ]
+            },
+        }
+        with (
+            mock.patch("aha_cli.web.task_routes.task_snapshot", return_value={"task": task}),
+            mock.patch("aha_cli.web.task_routes.ensure_bridge"),
+            mock.patch(
+                "aha_cli.web.task_routes.device_stream_page",
+                return_value={"events": [], "after_offset": 0, "has_more": False},
+            ),
+            mock.patch("aha_cli.web.task_routes.bridge_status", return_value={"status": "running"}),
+        ):
+            payload = _hardware_stream_payload(
+                Path("/tmp/aha-test"),
+                "run-001",
+                "task-001",
+                after=None,
+                limit=100,
+            )
+
+        self.assertEqual(payload["hardware"], "console")
+        self.assertEqual(payload["transport"], "serial")
+        self.assertEqual(payload["endpoint"], "COM6")
+
+    def test_hardware_send_routes_named_hardware_group_to_its_serial_device(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             with mock.patch("pathlib.Path.cwd", return_value=root):
@@ -432,7 +467,7 @@ class WebTaskRouteTests(unittest.TestCase):
 
             with (
                 mock.patch("aha_cli.web.task_routes.task_hardware_debug_can_write", return_value=True),
-                mock.patch("aha_cli.web.task_routes.task_serial_resource_target", return_value=("COM7", 9600)),
+                mock.patch("aha_cli.web.task_routes.task_serial_group_target", return_value=("COM7", 9600)),
                 mock.patch("aha_cli.web.task_routes.ensure_bridge", return_value={"status": "running"}) as ensure,
                 mock.patch("aha_cli.web.task_routes.append_bridge_control", return_value={"id": 1}) as control,
             ):
@@ -441,11 +476,11 @@ class WebTaskRouteTests(unittest.TestCase):
                     run_id,
                     "POST",
                     "/api/task/task-001/hardware-send",
-                    {"resource": "power", "data": "\\xA0\\x01\\x01\\xA2"},
+                    {"hardware": "power", "data": "\\xA0\\x01\\x01\\xA2"},
                 )
 
         self.assertEqual(response["status"], "200 OK")
-        self.assertEqual(response["payload"]["resource"], "power")
+        self.assertEqual(response["payload"]["hardware"], "power")
         self.assertEqual(response["payload"]["device"], "COM7")
         ensure.assert_called_once_with(root, "COM7", 9600)
         control.assert_called_once_with(

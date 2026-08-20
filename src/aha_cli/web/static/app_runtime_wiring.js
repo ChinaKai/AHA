@@ -1113,6 +1113,7 @@ async function sendHardwareRawBytes(bytes) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(runScopedPayload({
         transport: hardwareIoState(taskId).transport || "",
+        hardware: hardwareIoState(taskId).hardware || "",
         data: bytes
       }))
     }, "Failed to send key");
@@ -1158,7 +1159,7 @@ window.AHAControllerRegistry.bindTopLevelEvents(domRefs, {
       await fetchJson(apiUrl(`/api/task/${encodeURIComponent(selectedTaskId)}/${endpoint}`), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(runScopedPayload({ transport: hardwareIoState(selectedTaskId).transport || "" }))
+        body: JSON.stringify(runScopedPayload({ transport: hardwareIoState(selectedTaskId).transport || "", hardware: hardwareIoState(selectedTaskId).hardware || "" }))
       }, "Failed to control hardware bridge");
     } catch (err) {
       return;
@@ -1178,7 +1179,7 @@ window.AHAControllerRegistry.bindTopLevelEvents(domRefs, {
       await fetchJson(apiUrl(`/api/task/${encodeURIComponent(selectedTaskId)}/hardware-takeover`), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(runScopedPayload({ transport: "serial" }))
+        body: JSON.stringify(runScopedPayload({ transport: "serial", hardware: hardwareIoState(selectedTaskId).hardware || "" }))
       }, "Failed to take over serial device");
     } catch (err) {
       alert(err?.message || String(err));
@@ -1197,6 +1198,23 @@ window.AHAControllerRegistry.bindTopLevelEvents(domRefs, {
     if (st.transport === transport) return;
     hardwareTerminalController.unmount();
     st.transport = transport;
+    st.events = [];
+    st.afterOffset = 0;
+    st.initialized = false;
+    try {
+      await conversationController.loadHardwareIoPage(selectedTaskId, true);
+    } catch (err) {
+      return;
+    }
+    if (activeTab === "hardware") renderPanel();
+  },
+  hardwareSelectGroup: async hardware => {
+    if (!selectedTaskId || !hardware) return;
+    const st = hardwareIoState(selectedTaskId);
+    if (st.hardware === hardware) return;
+    hardwareTerminalController.unmount();
+    st.hardware = hardware;
+    st.transport = "";
     st.events = [];
     st.afterOffset = 0;
     st.initialized = false;

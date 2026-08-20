@@ -504,7 +504,8 @@ def build_parser(handlers: Mapping[str, Callable[[argparse.Namespace], int]]) ->
     hardware_attach_p.add_argument("task_id")
     hardware_attach_p.add_argument("--channel", default="uart")
     hardware_attach_p.add_argument("--device", default="", help="Serial device path, e.g. /dev/ttyUSB0")
-    hardware_attach_p.add_argument("--resource", default="", help="Named serial tool resource id, e.g. power")
+    hardware_attach_p.add_argument("--hardware", default="", help="Hardware group id, e.g. console or power")
+    hardware_attach_p.add_argument("--resource", default="", help=argparse.SUPPRESS)
     hardware_attach_p.add_argument("--baudrate", type=int, default=115200)
     hardware_attach_p.add_argument("--agent-id", default="main")
     hardware_attach_p.add_argument("--idle-timeout", type=float, default=None, help="Stop after N idle seconds")
@@ -515,7 +516,8 @@ def build_parser(handlers: Mapping[str, Callable[[argparse.Namespace], int]]) ->
     hardware_send_p.add_argument("run_id")
     hardware_send_p.add_argument("task_id")
     hardware_send_p.add_argument("--channel", default="uart")
-    hardware_send_p.add_argument("--resource", default="", help="Named serial tool resource id, e.g. power")
+    hardware_send_p.add_argument("--hardware", default="", help="Hardware group id, e.g. console or power")
+    hardware_send_p.add_argument("--resource", default="", help=argparse.SUPPRESS)
     hardware_send_p.add_argument("--data", required=True, help="Text to send; backslash escapes like \\r are honored")
     hardware_send_p.set_defaults(func=handlers["hardware-send"])
 
@@ -528,6 +530,7 @@ def build_parser(handlers: Mapping[str, Callable[[argparse.Namespace], int]]) ->
     hardware_file_send_p.add_argument("path", help="Local source file")
     hardware_file_send_p.add_argument("destination", help="Destination path on the board")
     hardware_file_send_p.add_argument("--channel", default="serial", help="Hardware channel: serial or network")
+    hardware_file_send_p.add_argument("--hardware", default="", help="Hardware group id")
     hardware_file_send_p.add_argument(
         "--chunk-size",
         type=int,
@@ -547,6 +550,7 @@ def build_parser(handlers: Mapping[str, Callable[[argparse.Namespace], int]]) ->
     hardware_arm_p.add_argument("run_id")
     hardware_arm_p.add_argument("task_id")
     hardware_arm_p.add_argument("--channel", default="uart")
+    hardware_arm_p.add_argument("--hardware", default="", help="Hardware group id")
     hardware_arm_p.add_argument("--id", default="", help="Optional rule id (auto-assigned if omitted)")
     hardware_arm_p.add_argument("--pattern", default="", help="Substring/regex to watch for in the RX stream")
     hardware_arm_p.add_argument("--regex", action="store_true", help="Treat --pattern as a regular expression")
@@ -562,6 +566,7 @@ def build_parser(handlers: Mapping[str, Callable[[argparse.Namespace], int]]) ->
     hardware_disarm_p.add_argument("run_id")
     hardware_disarm_p.add_argument("task_id")
     hardware_disarm_p.add_argument("--channel", default="uart")
+    hardware_disarm_p.add_argument("--hardware", default="", help="Hardware group id")
     hardware_disarm_p.add_argument("--id", required=True)
     hardware_disarm_p.set_defaults(func=handlers["hardware-disarm"])
 
@@ -569,7 +574,8 @@ def build_parser(handlers: Mapping[str, Callable[[argparse.Namespace], int]]) ->
     hardware_rules_p.add_argument("run_id")
     hardware_rules_p.add_argument("task_id")
     hardware_rules_p.add_argument("--channel", default="uart")
-    hardware_rules_p.add_argument("--resource", default="", help="Named serial tool resource id")
+    hardware_rules_p.add_argument("--hardware", default="", help="Hardware group id")
+    hardware_rules_p.add_argument("--resource", default="", help=argparse.SUPPRESS)
     hardware_rules_p.add_argument("--json", action="store_true")
     hardware_rules_p.set_defaults(func=handlers["hardware-rules"])
 
@@ -577,7 +583,8 @@ def build_parser(handlers: Mapping[str, Callable[[argparse.Namespace], int]]) ->
     hardware_stop_p.add_argument("run_id")
     hardware_stop_p.add_argument("task_id")
     hardware_stop_p.add_argument("--channel", default="uart")
-    hardware_stop_p.add_argument("--resource", default="", help="Named serial tool resource id")
+    hardware_stop_p.add_argument("--hardware", default="", help="Hardware group id")
+    hardware_stop_p.add_argument("--resource", default="", help=argparse.SUPPRESS)
     hardware_stop_p.set_defaults(func=handlers["hardware-stop"])
 
     chat_p = sub.add_parser("chat")

@@ -42,7 +42,7 @@ from aha_cli.services.hardware_bridge import (
     ensure_bridge,
     stop_all_hardware_bridges,
     task_devices,
-    task_serial_resource_target,
+    task_serial_group_target,
 )
 from aha_cli.services.hardware_file_transfer import (
     DEFAULT_CHUNK_SIZE,
@@ -1383,8 +1383,8 @@ def cmd_hardware_network_bridge(args: argparse.Namespace) -> int:
     return 0
 
 
-def _bridge_target(root, run_id: str, task_id: str, resource_id: object = "") -> tuple[str | None, int]:
-    """Resolve the primary UART or a named serial tool resource.
+def _bridge_target(root, run_id: str, task_id: str, hardware_id: object = "") -> tuple[str | None, int]:
+    """Resolve the selected hardware group's UART.
 
     The CLI helpers drive the machine-level device bridge, so the device is taken
     from the task's hardware-channel config rather than re-supplied per command.
@@ -1396,35 +1396,36 @@ def _bridge_target(root, run_id: str, task_id: str, resource_id: object = "") ->
         _plan, task, _run = task_lookup(root, run_id, task_id)
     except Exception:
         return None, 115200
-    resource_target = task_serial_resource_target(task, resource_id)
-    if str(resource_id or "").strip():
-        return resource_target if resource_target else (None, 9600)
-    devices = task_devices(task)
-    return devices[0] if devices else (None, 115200)
+    target = task_serial_group_target(task, hardware_id)
+    return target if target else (None, 115200)
 
 
-def _network_bridge_target(root, run_id: str, task_id: str) -> tuple[str, int, str, str] | None:
+def _network_bridge_target(root, run_id: str, task_id: str, hardware_id: object = "") -> tuple[str, int, str, str] | None:
     from aha_cli.store.snapshots import task_lookup
 
     try:
         _plan, task, _run = task_lookup(root, run_id, task_id)
     except Exception:
         return None
-    return task_network_target(task)
+    return task_network_target(task, hardware_id)
 
 
 def _network_channel(value: object) -> bool:
     return str(value or "").strip().lower() in {"network", "telnet"}
 
 
-def _task_hardware_write_allowed(root, run_id: str, task_id: str) -> bool:
+def _task_hardware_write_allowed(root, run_id: str, task_id: str, hardware_id: object = "") -> bool:
     from aha_cli.store.snapshots import task_lookup
 
     try:
         _plan, task, _run = task_lookup(root, run_id, task_id)
     except Exception:
         return False
-    return task_hardware_debug_can_write(task)
+    return task_hardware_debug_can_write(task, hardware_id)
+
+
+def _hardware_group_arg(args: argparse.Namespace) -> str:
+    return str(getattr(args, "hardware", "") or getattr(args, "resource", "") or "").strip()
 
 
 def _forward_hardware_web(
@@ -1553,7 +1554,7 @@ def cmd_hardware_attach(args: argparse.Namespace) -> int:
                 query={"run_id": run_id},
                 payload={
                     "channel": args.channel,
-                    **({"resource": args.resource} if str(args.resource or "").strip() else {}),
+                    **({"hardware": _hardware_group_arg(args)} if _hardware_group_arg(args) else {}),
                 },
                 timeout=15.0,
             )
@@ -1582,8 +1583,8 @@ def cmd_hardware_attach(args: argparse.Namespace) -> int:
             except KeyboardInterrupt:
                 pass
         return 0
-    if _network_channel(args.channel) and not str(args.resource or "").strip():
-        target = _network_bridge_target(root, run_id, args.task_id)
+    if _network_channel(args.channel):
+        target = _network_bridge_target(root, run_id, args.task_id, _hardware_group_arg(args))
         if not target:
             print(f"No network device IP configured on task {args.task_id}.", file=sys.stderr)
             return 2
@@ -1601,9 +1602,9 @@ def cmd_hardware_attach(args: argparse.Namespace) -> int:
     device = str(args.device or "").strip()
     baudrate = int(args.baudrate)
     if not device:
-        device, baudrate = _bridge_target(root, run_id, args.task_id, args.resource)
+        device, baudrate = _bridge_target(root, run_id, args.task_id, _hardware_group_arg(args))
     if not device:
-        print("hardware-attach requires --device, a primary UART, or a valid --resource id", file=sys.stderr)
+        print("hardware-attach requires --device, a configured UART, or a valid --hardware id", file=sys.stderr)
         return 2
     status = ensure_bridge(root, device, baudrate, detach=True)
     print(
@@ -1622,7 +1623,7 @@ def cmd_hardware_send(args: argparse.Namespace) -> int:
     root = command_aha_home(args)
     run_id = resolve_run_id(root, args.run_id)
     require_plan(root, run_id)
-    if not _task_hardware_write_allowed(root, run_id, args.task_id):
+    if not _task_hardware_write_allowed(root, run_id, args.task_id, _hardware_group_arg(args)):
         print("Hardware debug permission is read-only.", file=sys.stderr)
         return 2
     if should_forward_to_windows_web(root):
@@ -1634,12 +1635,12 @@ def cmd_hardware_send(args: argparse.Namespace) -> int:
             {
                 "data": args.data,
                 "channel": args.channel,
-                **({"resource": args.resource} if str(args.resource or "").strip() else {}),
+                **({"hardware": _hardware_group_arg(args)} if _hardware_group_arg(args) else {}),
             },
             success=f"Queued send via Windows AHA: {args.data!r}",
         )
-    if _network_channel(args.channel) and not str(args.resource or "").strip():
-        target = _network_bridge_target(root, run_id, args.task_id)
+    if _network_channel(args.channel):
+        target = _network_bridge_target(root, run_id, args.task_id, _hardware_group_arg(args))
         if not target:
             print(f"No network device IP configured on task {args.task_id}.", file=sys.stderr)
             return 2
@@ -1648,7 +1649,7 @@ def cmd_hardware_send(args: argparse.Namespace) -> int:
         append_network_control(root, host, port, {"cmd": "send", "data": args.data, "source": "interactive"})
         print(f"Queued send on {host}:{port}: {args.data!r}")
         return 0
-    device, baudrate = _bridge_target(root, run_id, args.task_id, args.resource)
+    device, baudrate = _bridge_target(root, run_id, args.task_id, _hardware_group_arg(args))
     if not device:
         print(f"No UART device configured on task {args.task_id}.", file=sys.stderr)
         return 2
@@ -1676,6 +1677,7 @@ def _forward_literal_hardware_text(
     run_id: str,
     task_id: str,
     channel: str,
+    hardware_id: str,
     text: str,
     timeout: float,
 ) -> None:
@@ -1684,7 +1686,7 @@ def _forward_literal_hardware_text(
         "POST",
         f"/api/task/{task_id}/hardware-send",
         query={"run_id": run_id},
-        payload={"data": text.replace("\\", "\\\\"), "channel": channel},
+        payload={"data": text.replace("\\", "\\\\"), "channel": channel, "hardware": hardware_id},
         timeout=max(15.0, timeout),
     )
     if not result.get("ok"):
@@ -1696,6 +1698,7 @@ def _wait_forwarded_hardware_bridge(
     run_id: str,
     task_id: str,
     channel: str,
+    hardware_id: str,
     *,
     timeout: float = 10.0,
 ) -> dict:
@@ -1707,7 +1710,7 @@ def _wait_forwarded_hardware_bridge(
             "POST",
             f"/api/task/{task_id}/hardware-attach",
             query={"run_id": run_id},
-            payload={"channel": channel},
+            payload={"channel": channel, "hardware": hardware_id},
             timeout=15.0,
         )
         if not result.get("ok"):
@@ -1738,13 +1741,13 @@ def cmd_hardware_file_send(args: argparse.Namespace) -> int:
     root = command_aha_home(args)
     run_id = resolve_run_id(root, args.run_id)
     require_plan(root, run_id)
-    if not _task_hardware_write_allowed(root, run_id, args.task_id):
+    if not _task_hardware_write_allowed(root, run_id, args.task_id, _hardware_group_arg(args)):
         print("Hardware debug permission is read-only.", file=sys.stderr)
         return 2
 
     network_channel = _network_channel(args.channel)
     if network_channel:
-        target = _network_bridge_target(root, run_id, args.task_id)
+        target = _network_bridge_target(root, run_id, args.task_id, _hardware_group_arg(args))
         if not target:
             print(f"No network device IP configured on task {args.task_id}.", file=sys.stderr)
             return 2
@@ -1755,7 +1758,7 @@ def cmd_hardware_file_send(args: argparse.Namespace) -> int:
         transfer_capability = "network-transfer-v1"
         fast_transfer_capability = "network-transfer-v2"
     else:
-        device, baudrate = _bridge_target(root, run_id, args.task_id)
+        device, baudrate = _bridge_target(root, run_id, args.task_id, _hardware_group_arg(args))
         if not device:
             print(f"No UART device configured on task {args.task_id}.", file=sys.stderr)
             return 2
@@ -1769,7 +1772,9 @@ def cmd_hardware_file_send(args: argparse.Namespace) -> int:
     forwarded = should_forward_to_windows_web(root)
     try:
         if forwarded:
-            state = _wait_forwarded_hardware_bridge(root, run_id, args.task_id, args.channel)
+            state = _wait_forwarded_hardware_bridge(
+                root, run_id, args.task_id, args.channel, _hardware_group_arg(args)
+            )
         elif network_channel:
             ensure_network_terminal(root, host, port, username=username, password=password)
             state = _wait_network_bridge(root, host, port)
@@ -1816,7 +1821,9 @@ def cmd_hardware_file_send(args: argparse.Namespace) -> int:
                     append_bridge_control(root, device, command)
         elif forwarded:
             def send_text(text: str) -> None:
-                _forward_literal_hardware_text(root, run_id, args.task_id, args.channel, text, args.timeout)
+                _forward_literal_hardware_text(
+                    root, run_id, args.task_id, args.channel, _hardware_group_arg(args), text, args.timeout
+                )
         elif network_channel:
             def send_text(text: str) -> None:
                 append_network_control(root, host, port, {"cmd": "send_raw", "data": text, "source": "hardware-file-send"})
@@ -1921,7 +1928,7 @@ def cmd_hardware_arm(args: argparse.Namespace) -> int:
     root = command_aha_home(args)
     run_id = resolve_run_id(root, args.run_id)
     require_plan(root, run_id)
-    if not _task_hardware_write_allowed(root, run_id, args.task_id):
+    if not _task_hardware_write_allowed(root, run_id, args.task_id, _hardware_group_arg(args)):
         print("Hardware debug permission is read-only.", file=sys.stderr)
         return 2
     if should_forward_to_windows_web(root):
@@ -1956,8 +1963,8 @@ def cmd_hardware_arm(args: argparse.Namespace) -> int:
         "interval_seconds": args.interval,
         "duration_seconds": args.duration,
     }
-    if _network_channel(args.channel) and not str(args.resource or "").strip():
-        target = _network_bridge_target(root, run_id, args.task_id)
+    if _network_channel(args.channel):
+        target = _network_bridge_target(root, run_id, args.task_id, _hardware_group_arg(args))
         if not target:
             print(f"No network device IP configured on task {args.task_id}.", file=sys.stderr)
             return 2
@@ -1966,7 +1973,7 @@ def cmd_hardware_arm(args: argparse.Namespace) -> int:
         record = append_network_control(root, host, port, command)
         print(f"Queued arm on {host}:{port}: {json.dumps(record, ensure_ascii=False)}")
         return 0
-    device, baudrate = _bridge_target(root, run_id, args.task_id)
+    device, baudrate = _bridge_target(root, run_id, args.task_id, _hardware_group_arg(args))
     if not device:
         print(f"No serial device configured on task {args.task_id}.", file=sys.stderr)
         return 2
@@ -1989,8 +1996,8 @@ def cmd_hardware_disarm(args: argparse.Namespace) -> int:
             {"id": args.id, "channel": args.channel},
             success=f"Queued disarm via Windows AHA: rule {args.id}",
         )
-    if _network_channel(args.channel) and not str(args.resource or "").strip():
-        target = _network_bridge_target(root, run_id, args.task_id)
+    if _network_channel(args.channel):
+        target = _network_bridge_target(root, run_id, args.task_id, _hardware_group_arg(args))
         if not target:
             print(f"No network device IP configured on task {args.task_id}.", file=sys.stderr)
             return 2
@@ -1998,7 +2005,7 @@ def cmd_hardware_disarm(args: argparse.Namespace) -> int:
         append_network_control(root, host, port, {"cmd": "disarm", "id": args.id})
         print(f"Queued disarm on {host}:{port}: rule {args.id}")
         return 0
-    device, _baudrate = _bridge_target(root, run_id, args.task_id)
+    device, _baudrate = _bridge_target(root, run_id, args.task_id, _hardware_group_arg(args))
     if not device:
         print(f"No UART device configured on task {args.task_id}.", file=sys.stderr)
         return 2
@@ -2012,12 +2019,12 @@ def cmd_hardware_rules(args: argparse.Namespace) -> int:
     run_id = resolve_run_id(root, args.run_id)
     require_plan(root, run_id)
     if _network_channel(args.channel):
-        target = _network_bridge_target(root, run_id, args.task_id)
+        target = _network_bridge_target(root, run_id, args.task_id, _hardware_group_arg(args))
         host, port = (target[0], target[1]) if target else (None, 23)
         state = network_status(root, host, port) if host else {"status": "stopped", "rules": []}
         device = f"{host}:{port}" if host else None
     else:
-        device, _baudrate = _bridge_target(root, run_id, args.task_id, args.resource)
+        device, _baudrate = _bridge_target(root, run_id, args.task_id, _hardware_group_arg(args))
         state = bridge_status(root, device) if device else {"status": "stopped", "rules": []}
     if args.json:
         print(json.dumps(state, ensure_ascii=False))
@@ -2056,12 +2063,12 @@ def cmd_hardware_stop(args: argparse.Namespace) -> int:
             "hardware-stop",
             {
                 "channel": args.channel,
-                **({"resource": args.resource} if str(args.resource or "").strip() else {}),
+                **({"hardware": _hardware_group_arg(args)} if _hardware_group_arg(args) else {}),
             },
             success="Queued stop via Windows AHA (bridge will release the port).",
         )
     if _network_channel(args.channel):
-        target = _network_bridge_target(root, run_id, args.task_id)
+        target = _network_bridge_target(root, run_id, args.task_id, _hardware_group_arg(args))
         if not target:
             print(f"No network device IP configured on task {args.task_id}.", file=sys.stderr)
             return 2
@@ -2069,7 +2076,7 @@ def cmd_hardware_stop(args: argparse.Namespace) -> int:
         append_network_control(root, host, port, {"cmd": "stop"})
         print(f"Queued stop on {host}:{port}.")
         return 0
-    device, _baudrate = _bridge_target(root, run_id, args.task_id, args.resource)
+    device, _baudrate = _bridge_target(root, run_id, args.task_id, _hardware_group_arg(args))
     if not device:
         print(f"No UART device configured on task {args.task_id}.", file=sys.stderr)
         return 2

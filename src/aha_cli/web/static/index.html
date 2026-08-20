@@ -6,7 +6,7 @@
   <title>AHA Dashboard</title>
   <link rel="icon" href="/static/aha-favicon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="/static/xterm.css?v=6.0.0">
-  <link rel="stylesheet" href="/static/styles.css?v=hardware-resources-v1">
+  <link rel="stylesheet" href="/static/styles.css?v=hardware-groups-v2">
 </head>
 <body>
   <header>
@@ -412,58 +412,13 @@
           <section id="task-hardware-editor" class="task-detail-section task-hardware-editor">
             <h3 data-i18n="task.hardware_debug">Hardware debug</h3>
             <form id="task-hardware-form" class="hardware-form">
-              <label class="field-label">
-                <span data-i18n="task.hardware_mode">Hardware debug mode</span>
-                <select id="selected-task-hardware-mode" data-hardware-mode>
-                  <option value="off" data-i18n="task.hardware_mode_off">Off</option>
-                  <option value="serial" data-i18n="task.hardware_mode_serial">Serial</option>
-                  <option value="network" data-i18n="task.hardware_mode_network">Network</option>
-                  <option value="both" data-i18n="task.hardware_mode_both">Serial + Network</option>
-                  <option value="tools" data-i18n="task.hardware_mode_tools">Tools only</option>
-                </select>
-              </label>
-              <div class="hardware-terminal-settings" data-hardware-settings hidden>
-                <label class="field-label">
-                  <span data-i18n="task.hardware_access">Hardware access</span>
-                  <select id="selected-task-hardware-access" data-hardware-permission="access">
-                    <option value="read_only" data-i18n="task.hardware_access_read_only">Read only</option>
-                    <option value="read_write" data-i18n="task.hardware_access_read_write">Read and write</option>
-                  </select>
-                  <span class="field-help" data-i18n="task.hardware_access_help">Read and write also enables terminal input and state-changing skill tools.</span>
-                </label>
-                <div class="field-row" data-hardware-serial-settings hidden>
-                  <label class="field-label">
-                    <span data-i18n="task.hardware_serial_device">Serial device</span>
-                    <input id="selected-task-hardware-serial-device" data-hardware-field="serial.device" list="aha-serial-ports" placeholder="/dev/ttyUSB0 or COM3">
-                  </label>
-                  <label class="field-label">
-                    <span data-i18n="task.hardware_baudrate">Baudrate</span>
-                    <input id="selected-task-hardware-serial-baudrate" data-hardware-field="serial.baudrate" type="number" min="1" value="115200">
-                  </label>
+              <div class="hardware-resource-editor" data-hardware-groups>
+                <div class="hardware-resource-heading">
+                  <strong data-i18n="task.hardware_groups">Hardware groups</strong>
+                  <button type="button" data-hardware-group-add data-i18n="task.hardware_group_add">Add hardware</button>
                 </div>
-                <datalist id="aha-serial-ports"></datalist>
-                <label class="field-label" data-hardware-network-settings hidden>
-                  <span data-i18n="task.hardware_device_ip">Device IP</span>
-                  <input id="selected-task-hardware-device-ip" data-hardware-field="network.device_ip" placeholder="192.168.1.20">
-                </label>
-                <div class="field-row" data-hardware-login-settings>
-                  <label class="field-label">
-                    <span data-i18n="task.hardware_login_username">Login username</span>
-                    <input id="selected-task-hardware-username" data-hardware-field="credentials.username" autocomplete="off">
-                  </label>
-                  <label class="field-label">
-                    <span data-i18n="task.hardware_login_password">Login password</span>
-                    <input id="selected-task-hardware-password" data-hardware-field="credentials.password" type="password" autocomplete="new-password">
-                  </label>
-                </div>
-                <div class="hardware-resource-editor" data-hardware-resources>
-                  <div class="hardware-resource-heading">
-                    <strong data-i18n="task.hardware_tool_resources">Tool resources</strong>
-                    <button type="button" data-hardware-resource-add data-i18n="task.hardware_add_relay">Add relay</button>
-                  </div>
-                  <div class="hardware-resource-list" data-hardware-resource-list></div>
-                  <span class="field-help" data-i18n="task.hardware_tool_resources_help">Relay serial ports are reserved for enabled skills and are not opened by the terminal bridge.</span>
-                </div>
+                <div class="hardware-resource-list" data-hardware-group-list></div>
+                <span class="field-help" data-i18n="task.hardware_groups_help">Each group has its own connection, credentials, permission, and user-written description for the agent.</span>
               </div>
               <button type="submit" data-i18n="task.hardware_save">Save Hardware</button>
               <div id="task-hardware-state" class="meta"></div>
@@ -813,59 +768,14 @@
               </div>
               <div class="field-label">
                 <span data-i18n="task.hardware_debug">Hardware debug</span>
-                <label class="field-label">
-                  <span data-i18n="task.hardware_mode">Hardware debug mode</span>
-                  <select id="task-hardware-mode" data-hardware-mode>
-                    <option value="off" data-i18n="task.hardware_mode_off">Off</option>
-                    <option value="serial" data-i18n="task.hardware_mode_serial">Serial</option>
-                    <option value="network" data-i18n="task.hardware_mode_network">Network</option>
-                    <option value="both" data-i18n="task.hardware_mode_both">Serial + Network</option>
-                    <option value="tools" data-i18n="task.hardware_mode_tools">Tools only</option>
-                  </select>
-                </label>
-                <div class="hardware-terminal-settings compact" data-hardware-settings hidden>
-                  <label class="field-label">
-                    <span data-i18n="task.hardware_access">Hardware access</span>
-                    <select id="task-hardware-access" data-hardware-permission="access">
-                      <option value="read_only" data-i18n="task.hardware_access_read_only">Read only</option>
-                      <option value="read_write" data-i18n="task.hardware_access_read_write">Read and write</option>
-                    </select>
-                    <span class="field-help" data-i18n="task.hardware_access_help">Read and write also enables terminal input and state-changing skill tools.</span>
-                  </label>
-                  <div class="field-row task-defaults-grid" data-hardware-serial-settings hidden>
-                    <label class="field-label">
-                      <span data-i18n="task.hardware_serial_device">Serial device</span>
-                      <input id="task-hardware-serial-device" data-hardware-field="serial.device" list="aha-serial-ports" placeholder="/dev/ttyUSB0 or COM3">
-                    </label>
-                    <label class="field-label">
-                      <span data-i18n="task.hardware_baudrate">Baudrate</span>
-                      <input id="task-hardware-serial-baudrate" data-hardware-field="serial.baudrate" type="number" min="1" value="115200">
-                    </label>
+                <div class="hardware-resource-editor" data-hardware-groups>
+                  <div class="hardware-resource-heading">
+                    <strong data-i18n="task.hardware_groups">Hardware groups</strong>
+                    <button type="button" data-hardware-group-add data-i18n="task.hardware_group_add">Add hardware</button>
                   </div>
-                  <label class="field-label" data-hardware-network-settings hidden>
-                    <span data-i18n="task.hardware_device_ip">Device IP</span>
-                    <input id="task-hardware-device-ip" data-hardware-field="network.device_ip" placeholder="192.168.1.20">
-                  </label>
-                  <div class="field-row" data-hardware-login-settings>
-                    <label class="field-label">
-                      <span data-i18n="task.hardware_login_username">Login username</span>
-                      <input id="task-hardware-username" data-hardware-field="credentials.username" autocomplete="off">
-                    </label>
-                    <label class="field-label">
-                      <span data-i18n="task.hardware_login_password">Login password</span>
-                      <input id="task-hardware-password" data-hardware-field="credentials.password" type="password" autocomplete="new-password">
-                    </label>
-                  </div>
-                  <div class="hardware-resource-editor" data-hardware-resources>
-                    <div class="hardware-resource-heading">
-                      <strong data-i18n="task.hardware_tool_resources">Tool resources</strong>
-                      <button type="button" data-hardware-resource-add data-i18n="task.hardware_add_relay">Add relay</button>
-                    </div>
-                    <div class="hardware-resource-list" data-hardware-resource-list></div>
-                    <span class="field-help" data-i18n="task.hardware_tool_resources_help">Relay serial ports are reserved for enabled skills and are not opened by the terminal bridge.</span>
-                  </div>
+                  <div class="hardware-resource-list" data-hardware-group-list></div>
+                  <span class="field-help" data-i18n="task.hardware_groups_help">Each group has its own connection, credentials, permission, and user-written description for the agent.</span>
                 </div>
-                <div class="field-help" data-i18n="task.hardware_help">Choose serial and/or network terminal access for the board.</div>
               </div>
               <div class="field-label">
                 <span data-i18n="task.browser_control">Shared browser</span>
@@ -1073,18 +983,19 @@
     </form>
   </dialog>
   <script src="/static/time_format.js"></script>
-  <script src="/static/i18n.js?v=hardware-resources-v1"></script>
+  <script src="/static/i18n.js?v=hardware-groups-v2"></script>
   <script src="/static/app_helpers.js"></script>
-  <script src="/static/task_metadata.js?v=hardware-resources-v1"></script>
+  <script src="/static/task_metadata.js?v=hardware-groups-v1"></script>
+  <script src="/static/hardware_serial_picker.js?v=hardware-groups-v2"></script>
   <script src="/static/bootstrap_config.js?v=provider-models-v11"></script>
   <script src="/static/bootstrap_controller.js?v=provider-models-v11"></script>
   <script src="/static/task_form.js?v=hardware-terminal-v1"></script>
-  <script src="/static/task_config_controller.js?v=hardware-resources-v1"></script>
+  <script src="/static/task_config_controller.js?v=hardware-groups-v2"></script>
   <script src="/static/run_metadata.js"></script>
   <script src="/static/run_lifecycle_view.js"></script>
   <script src="/static/run_maintenance.js"></script>
   <script src="/static/agent_metadata.js"></script>
-  <script src="/static/task_list.js?v=hardware-resources-v1"></script>
+  <script src="/static/task_list.js?v=hardware-groups-v1"></script>
   <script src="/static/task_controller.js?v=token-saving-v8"></script>
   <script src="/static/agent_controller.js"></script>
     <script src="/static/conversation_metadata.js?v=token-saving-v8"></script>
@@ -1131,7 +1042,7 @@
   <script src="/static/status_controller.js"></script>
   <script src="/static/run_actions.js?v=web-upgrade-v12"></script>
   <script src="/static/app_actions.js"></script>
-  <script src="/static/task_create_controller.js?v=hardware-resources-v1"></script>
+  <script src="/static/task_create_controller.js?v=hardware-groups-v2"></script>
   <script src="/static/textarea_image_paste.js?v=clipboard-image-dedupe-v1"></script>
   <script src="/static/task_memo_markdown.js?v=underscore-literal-v1"></script>
   <script src="/static/search_highlight.js?v=global-search-v4"></script>

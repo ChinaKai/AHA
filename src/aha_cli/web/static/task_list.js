@@ -212,6 +212,7 @@
   function taskHardwareDebugEnabled(task) {
     const policy = task?.hardware_debug && typeof task.hardware_debug === "object" ? task.hardware_debug : null;
     if (!policy) return false;
+    if (Array.isArray(policy.groups)) return policy.groups.some(group => ["serial", "network", "both"].includes(String(group?.mode || "")));
     if (typeof policy.mode === "string") return ["serial", "network", "both"].includes(policy.mode);
     if (typeof policy.enabled === "boolean") return policy.enabled;
     return Array.isArray(policy.channels) && policy.channels.length > 0;

@@ -4,6 +4,7 @@
 
   function createTaskConfigController(options = {}) {
     const escapeHtml = options.escapeHtml || (value => String(value ?? ""));
+    const serialPortPicker = window.AHAHardwareSerialPortPicker || {};
     const els = options.els || {};
     const defaults = options.defaults || {};
     const helpers = options.helpers || {};
@@ -24,29 +25,6 @@
     let observeProxyEditingUntil = 0;
     let hardwareEditingUntil = 0;
     let taskSettingsEditorTaskId = "";
-    let serialPortsLoaded = false;
-
-    function loadSerialPortOptions() {
-      if (serialPortsLoaded) return;
-      serialPortsLoaded = true;
-      fetch("/api/hardware/serial-ports", { headers: { Accept: "application/json" } })
-        .then(resp => (resp.ok ? resp.json() : { ports: [] }))
-        .then(data => {
-          const datalist = document.getElementById("aha-serial-ports");
-          if (!datalist) return;
-          const ports = Array.isArray(data && data.ports) ? data.ports : [];
-          datalist.innerHTML = "";
-          for (const port of ports) {
-            const opt = document.createElement("option");
-            opt.value = port.device || "";
-            const desc = port.description && port.description !== port.device ? port.description : "";
-            if (desc) opt.label = desc;
-            datalist.appendChild(opt);
-          }
-        })
-        .catch(() => {});
-    }
-
     function taskById(taskId) {
       const id = String(taskId || "");
       if (!id) return null;
@@ -447,103 +425,79 @@
       }
     }
 
-    function readHardwareResources(form = els.taskHardwareFormEl) {
-      return Array.from(form?.querySelectorAll("[data-hardware-resource]") || []).map((row, index) => {
-        const value = key => String(row.querySelector(`[data-hardware-resource-field="${key}"]`)?.value || "").trim();
+    function readHardwareGroups(form = els.taskHardwareFormEl) {
+      return Array.from(form?.querySelectorAll("[data-hardware-group]") || []).map((row, index) => {
+        const value = key => String(row.querySelector(`[data-hardware-group-field="${key}"]`)?.value || "").trim();
+        const credentials = { username: value("credentials.username") };
+        const password = String(row.querySelector('[data-hardware-group-field="credentials.password"]')?.value || "");
+        if (password) credentials.password = password;
         return {
-          id: value("id") || `relay-${index + 1}`,
-          type: "serial_relay",
-          label: value("label") || value("id") || `Relay ${index + 1}`,
-          device: value("device"),
-          baudrate: Number(value("baudrate") || "9600") || 9600,
-          channel: value("channel")
+          id: value("id") || `hardware-${index + 1}`,
+          description: value("description"),
+          mode: value("mode") || "off",
+          serial: { device: value("serial.device"), baudrate: Number(value("serial.baudrate") || "115200") || 115200 },
+          network: { device_ip: value("network.device_ip") },
+          credentials,
+          permissions: { access: value("permissions.access") || "read_only" }
         };
       });
     }
 
-    function hardwareResourceCard(resource = {}, index = 0) {
-      const field = (key, label, value, attributes = "") => `
-        <label class="field-label">
-          <span>${escapeHtml(label)}</span>
-          <input data-hardware-resource-field="${key}" value="${escapeHtml(value)}" ${attributes}>
-        </label>`;
+    function hardwareGroupCard(group = {}, index = 0) {
+      const input = (key, label, value, attributes = "") => `<label class="field-label"><span>${escapeHtml(label)}</span><input data-hardware-group-field="${key}" value="${escapeHtml(value)}" ${attributes}></label>`;
+      const mode = String(group.mode || "off");
+      const access = String(group.permissions?.access || "read_only");
+      const passwordPlaceholder = group.credentials?.password_configured ? t("task.hardware_password_configured", "Configured — leave blank to keep") : "";
+      const serialPicker = serialPortPicker.markup?.({
+        value: group.serial?.device || "",
+        label: t("task.hardware_serial_device", "Serial device")
+      }) || input("serial.device", t("task.hardware_serial_device", "Serial device"), group.serial?.device || "", 'placeholder="COM3"');
       return `
-        <div class="hardware-resource-card" data-hardware-resource>
-          ${field("id", t("task.hardware_resource_id", "Resource ID"), resource.id || `relay-${index + 1}`)}
-          ${field("label", t("task.hardware_resource_label", "Label"), resource.label || `Relay ${index + 1}`)}
-          ${field("device", t("task.hardware_resource_device", "Relay serial device"), resource.device || "", 'list="aha-serial-ports" placeholder="COM4"')}
-          ${field("baudrate", t("task.hardware_resource_baudrate", "Baudrate"), resource.baudrate || 9600, 'type="number" min="1"')}
-          ${field("channel", t("task.hardware_resource_channel", "Channel"), resource.channel || "", 'placeholder="1"')}
-          <button type="button" class="hardware-resource-remove" data-hardware-resource-remove>${escapeHtml(t("task.hardware_resource_remove", "Remove"))}</button>
+        <div class="hardware-resource-card hardware-group-card" data-hardware-group>
+          <div class="hardware-resource-heading"><strong>${escapeHtml(group.id || `hardware-${index + 1}`)}</strong><button type="button" class="hardware-resource-remove" data-hardware-group-remove>${escapeHtml(t("task.hardware_group_remove", "Remove"))}</button></div>
+          ${input("id", t("task.hardware_group_id", "Hardware ID"), group.id || `hardware-${index + 1}`, 'placeholder="console"')}
+          <label class="field-label"><span>${escapeHtml(t("task.hardware_group_description", "Hardware description"))}</span><textarea data-hardware-group-field="description" rows="3" placeholder="${escapeHtml(t("task.hardware_group_description_placeholder", "Tell the agent what this hardware is used for"))}">${escapeHtml(group.description || "")}</textarea></label>
+          <label class="field-label"><span>${escapeHtml(t("task.hardware_mode", "Connection mode"))}</span><select data-hardware-group-field="mode"><option value="off" ${mode === "off" ? "selected" : ""}>${escapeHtml(t("task.hardware_mode_off", "Off"))}</option><option value="serial" ${mode === "serial" ? "selected" : ""}>${escapeHtml(t("task.hardware_mode_serial", "Serial"))}</option><option value="network" ${mode === "network" ? "selected" : ""}>${escapeHtml(t("task.hardware_mode_network", "Network"))}</option><option value="both" ${mode === "both" ? "selected" : ""}>${escapeHtml(t("task.hardware_mode_both", "Serial + Network"))}</option></select></label>
+          <div class="field-row" data-hardware-group-serial>${serialPicker}${input("serial.baudrate", t("task.hardware_baudrate", "Baudrate"), group.serial?.baudrate || 115200, 'type="number" min="1"')}</div>
+          <label class="field-label" data-hardware-group-network><span>${escapeHtml(t("task.hardware_device_ip", "Device IP"))}</span><input data-hardware-group-field="network.device_ip" value="${escapeHtml(group.network?.device_ip || "")}" placeholder="192.168.1.20"></label>
+          <div class="field-row">${input("credentials.username", t("task.hardware_login_username", "Login username"), group.credentials?.username || "", 'autocomplete="off"')}${input("credentials.password", t("task.hardware_login_password", "Login password"), "", `type="password" autocomplete="new-password" placeholder="${escapeHtml(passwordPlaceholder)}"`)}</div>
+          <label class="field-label"><span>${escapeHtml(t("task.hardware_access", "Hardware access"))}</span><select data-hardware-group-field="permissions.access"><option value="read_only" ${access === "read_only" ? "selected" : ""}>${escapeHtml(t("task.hardware_access_read_only", "Read only"))}</option><option value="read_write" ${access === "read_write" ? "selected" : ""}>${escapeHtml(t("task.hardware_access_read_write", "Read and write"))}</option></select></label>
         </div>`;
     }
 
-    function renderHardwareResources(resources = []) {
-      const list = els.taskHardwareFormEl?.querySelector("[data-hardware-resource-list]");
-      if (!list) return;
-      list.innerHTML = resources.map(hardwareResourceCard).join("");
+    function renderHardwareGroups(groups = []) {
+      const list = els.taskHardwareFormEl?.querySelector("[data-hardware-group-list]");
+      if (list) list.innerHTML = groups.map(hardwareGroupCard).join("");
+      serialPortPicker.mount?.(els.taskHardwareFormEl);
+    }
+
+    function syncHardwareGroupCard(row, disabled = false) {
+      const mode = String(row.querySelector('[data-hardware-group-field="mode"]')?.value || "off");
+      const serial = mode === "serial" || mode === "both";
+      const network = mode === "network" || mode === "both";
+      row.querySelectorAll("[data-hardware-group-serial]").forEach(item => { item.hidden = !serial; });
+      row.querySelectorAll("[data-hardware-group-network]").forEach(item => { item.hidden = !network; });
+      row.querySelectorAll('[data-hardware-group-field^="serial."]').forEach(input => { input.disabled = disabled || !serial; });
+      row.querySelectorAll('[data-hardware-group-field^="network."]').forEach(input => { input.disabled = disabled || !network; });
+      row.querySelectorAll("input, select, textarea, button").forEach(input => { if (!input.matches('[data-hardware-group-field^="serial."], [data-hardware-group-field^="network."]')) input.disabled = disabled; });
     }
 
     function syncTaskHardwareDebugFields(options = {}) {
       const disabled = Boolean(options.disabled);
-      const form = els.taskHardwareFormEl;
-      const modeEl = form?.querySelector("[data-hardware-mode]");
-      if (modeEl) modeEl.disabled = disabled;
-      const mode = String(modeEl?.value || "off");
-      const enabled = mode !== "off";
-      const serial = mode === "serial" || mode === "both";
-      const network = mode === "network" || mode === "both";
-      const settings = form?.querySelector("[data-hardware-settings]");
-      if (settings) settings.hidden = !enabled;
-      form?.querySelectorAll("[data-hardware-serial-settings]").forEach(item => { item.hidden = !serial; });
-      if (serial) loadSerialPortOptions();
-      form?.querySelectorAll("[data-hardware-network-settings]").forEach(item => { item.hidden = !network; });
-      form?.querySelectorAll('[data-hardware-field^="serial."]').forEach(input => { input.disabled = disabled || !serial; });
-      form?.querySelectorAll('[data-hardware-field^="network."]').forEach(input => { input.disabled = disabled || !network; });
-      form?.querySelectorAll('[data-hardware-field^="credentials."]').forEach(input => { input.disabled = disabled || !enabled; });
-      form?.querySelectorAll("[data-hardware-permission]").forEach(input => { input.disabled = disabled || !enabled; });
-      form?.querySelectorAll("[data-hardware-resource-field], [data-hardware-resource-add], [data-hardware-resource-remove]").forEach(input => {
-        input.disabled = disabled || !enabled;
-      });
-      if (enabled) loadSerialPortOptions();
+      const rows = els.taskHardwareFormEl?.querySelectorAll("[data-hardware-group]") || [];
+      rows.forEach(row => syncHardwareGroupCard(row, disabled));
+      els.taskHardwareFormEl?.querySelectorAll("[data-hardware-group-add]").forEach(item => { item.disabled = disabled; });
+      if (!disabled && Array.from(rows).some(row => ["serial", "both"].includes(String(row.querySelector('[data-hardware-group-field="mode"]')?.value || "")))) serialPortPicker.mount?.(els.taskHardwareFormEl);
       const submit = els.taskHardwareFormEl?.querySelector('button[type="submit"]');
       if (submit) submit.disabled = disabled;
     }
 
     function resetTaskHardwareForm() {
-      const form = els.taskHardwareFormEl;
-      const mode = form?.querySelector("[data-hardware-mode]");
-      if (mode) mode.value = "off";
-      const access = form?.querySelector('[data-hardware-permission="access"]');
-      if (access) access.value = "read_only";
-      form?.querySelectorAll("[data-hardware-field]").forEach(input => {
-        input.value = input.defaultValue || "";
-      });
-      renderHardwareResources([]);
+      renderHardwareGroups([]);
     }
 
     function setTaskHardwarePolicy(policy = {}) {
-      const form = els.taskHardwareFormEl;
-      const mode = form?.querySelector("[data-hardware-mode]");
-      if (mode) mode.value = policy.mode || "off";
-      const set = (key, value) => {
-        const input = form?.querySelector(`[data-hardware-field="${key}"]`);
-        if (input) input.value = value ?? input.defaultValue ?? "";
-      };
-      set("serial.device", policy.serial?.device || "");
-      set("serial.baudrate", policy.serial?.baudrate || 115200);
-      set("network.device_ip", policy.network?.device_ip || "");
-      set("credentials.username", policy.credentials?.username || "");
-      set("credentials.password", "");
-      const password = form?.querySelector('[data-hardware-field="credentials.password"]');
-      if (password) {
-        password.placeholder = policy.credentials?.password_configured
-          ? t("task.hardware_password_configured", "Configured — leave blank to keep")
-          : "";
-      }
-      const access = form?.querySelector('[data-hardware-permission="access"]');
-      if (access) access.value = policy.permissions?.access || "read_only";
-      renderHardwareResources(policy.resources || []);
+      renderHardwareGroups(policy.groups || []);
     }
 
     function renderTaskHardwareEditor(taskArg) {
@@ -820,21 +774,7 @@
     async function saveTaskHardwareConfig() {
       const task = getTaskSettingsTask();
       if (!task) return;
-      const form = els.taskHardwareFormEl;
-      const value = key => String(form?.querySelector(`[data-hardware-field="${key}"]`)?.value || "").trim();
-      const password = String(form?.querySelector('[data-hardware-field="credentials.password"]')?.value || "");
-      const credentials = { username: value("credentials.username") };
-      if (password) credentials.password = password;
-      const hardwareDebug = {
-        mode: String(form?.querySelector("[data-hardware-mode]")?.value || "off"),
-        serial: { device: value("serial.device"), baudrate: Number(value("serial.baudrate") || "115200") || 115200 },
-        network: { device_ip: value("network.device_ip") },
-        credentials,
-        resources: readHardwareResources(form),
-        permissions: {
-          access: String(form?.querySelector('[data-hardware-permission="access"]')?.value || "read_only")
-        }
-      };
+      const hardwareDebug = { groups: readHardwareGroups(els.taskHardwareFormEl) };
       await api.fetchJson(api.apiUrl(`/api/task/${encodeURIComponent(task.id)}/hardware-debug`), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -951,20 +891,18 @@
       els.taskHardwareFormEl?.addEventListener("input", () => markTaskHardwareEditing());
       els.taskHardwareFormEl?.addEventListener("change", event => {
         markTaskHardwareEditing();
-        if (event.target instanceof Element && event.target.matches("[data-hardware-mode]")) {
-          syncTaskHardwareDebugFields();
-        }
+        if (event.target instanceof Element && event.target.matches('[data-hardware-group-field="mode"]')) syncTaskHardwareDebugFields();
       });
       els.taskHardwareFormEl?.addEventListener("click", event => {
         const target = event.target instanceof Element ? event.target : null;
-        if (target?.closest("[data-hardware-resource-add]")) {
-          const resources = readHardwareResources();
-          resources.push({ id: `relay-${resources.length + 1}`, type: "serial_relay", label: `Relay ${resources.length + 1}`, device: "", baudrate: 9600, channel: "" });
-          renderHardwareResources(resources);
+        if (target?.closest("[data-hardware-group-add]")) {
+          const groups = readHardwareGroups();
+          groups.push({ id: `hardware-${groups.length + 1}`, description: "", mode: "serial", serial: { device: "", baudrate: 115200 }, network: { device_ip: "" }, credentials: { username: "" }, permissions: { access: "read_only" } });
+          renderHardwareGroups(groups);
           syncTaskHardwareDebugFields();
           markTaskHardwareEditing();
-        } else if (target?.closest("[data-hardware-resource-remove]")) {
-          target.closest("[data-hardware-resource]")?.remove();
+        } else if (target?.closest("[data-hardware-group-remove]")) {
+          target.closest("[data-hardware-group]")?.remove();
           markTaskHardwareEditing();
         }
       });

@@ -20,7 +20,7 @@ from pathlib import Path
 
 from aha_cli import platform, process_control
 from aha_cli.constants import AHA_WEB_INSTANCE_ENV, PLAN_FILE, RUNS_DIR
-from aha_cli.domain.models import normalize_task_hardware_debug, utc_now
+from aha_cli.domain.models import normalize_task_hardware_debug, task_hardware_group, utc_now
 from aha_cli.services.hardware_bridge import pid_alive
 from aha_cli.services.onebin import aha_cli_invocation
 from aha_cli.services.hardware_session import ArmedRuleEngine, decode_escapes
@@ -60,16 +60,26 @@ _BRIDGE_HEARTBEAT_INTERVAL = 2.0
 _CONTROL_OFFSET_PERSIST_INTERVAL = 1.0
 
 
-def task_network_target(task: dict) -> tuple[str, int, str, str] | None:
-    hardware = normalize_task_hardware_debug(task.get("hardware_debug"))
-    if hardware.get("mode") not in {"network", "both"}:
+def task_network_target(task: dict, hardware_id: object = "") -> tuple[str, int, str, str] | None:
+    group = task_hardware_group(task, hardware_id)
+    if not group or group.get("mode") not in {"network", "both"}:
         return None
-    network = hardware.get("network") if isinstance(hardware.get("network"), dict) else {}
+    network = group.get("network") if isinstance(group.get("network"), dict) else {}
     host = str(network.get("device_ip") or "").strip()
     if not host:
         return None
-    credentials = hardware.get("credentials") if isinstance(hardware.get("credentials"), dict) else {}
+    credentials = group.get("credentials") if isinstance(group.get("credentials"), dict) else {}
     return host, 23, str(credentials.get("username") or ""), str(credentials.get("password") or "")
+
+
+def task_network_targets(task: dict) -> list[tuple[str, int, str, str]]:
+    hardware = normalize_task_hardware_debug(task.get("hardware_debug"))
+    targets: list[tuple[str, int, str, str]] = []
+    for group in hardware.get("groups") or []:
+        target = task_network_target(task, group.get("id")) if isinstance(group, dict) else None
+        if target and target not in targets:
+            targets.append(target)
+    return targets
 
 
 def network_target_referenced_by_active_task(root: Path, host: str, port: int = 23) -> bool:
@@ -88,8 +98,7 @@ def network_target_referenced_by_active_task(root: Path, host: str, port: int = 
             for task in plan.get("tasks") or []:
                 if task.get("deleted_at") or str(task.get("status")) in _TERMINAL_TASK_STATUSES:
                     continue
-                target = task_network_target(task)
-                if target and target[0] == host and target[1] == int(port):
+                if any(target[0] == host and target[1] == int(port) for target in task_network_targets(task)):
                     return True
         return False
     except Exception:
@@ -1095,4 +1104,5 @@ __all__ = [
     "network_target_referenced_by_active_task",
     "stop_all_network_terminals",
     "task_network_target",
+    "task_network_targets",
 ]

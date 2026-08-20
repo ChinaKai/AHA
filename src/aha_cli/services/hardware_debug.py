@@ -6,41 +6,28 @@ from aha_cli.services.prompt_templates import render_prompt_template
 
 def hardware_debug_context_for_prompt(task: dict) -> str:
     config = normalize_task_hardware_debug(task.get("hardware_debug"))
-    mode = str(config.get("mode") or "off")
-    if mode == "off":
+    groups = [item for item in config.get("groups") or [] if isinstance(item, dict)]
+    if not any(str(group.get("mode") or "off") != "off" for group in groups):
         return ""
+    mode = "groups"
     lines: list[str] = []
-    serial = config.get("serial") if isinstance(config.get("serial"), dict) else {}
-    network = config.get("network") if isinstance(config.get("network"), dict) else {}
-    credentials = config.get("credentials") if isinstance(config.get("credentials"), dict) else {}
-    permissions = config.get("permissions") if isinstance(config.get("permissions"), dict) else {}
-    resources = config.get("resources") if isinstance(config.get("resources"), list) else []
-    lines.append(f"- access permission: {permissions.get('access') or 'read_only'}")
-    if mode in {"serial", "both"}:
-        lines.append(
-            f"- serial terminal: device={serial.get('device') or '(missing)'}, "
-            f"baudrate={int(serial.get('baudrate') or 115200)}"
-        )
-    if mode in {"network", "both"}:
-        lines.append(
-            f"- network terminal: device_ip={network.get('device_ip') or '(missing)'}, "
-            "transport=discover (SSH 22 preferred, Telnet 23 fallback)"
-        )
-    for resource in resources:
-        if not isinstance(resource, dict) or resource.get("type") != "serial_relay":
-            continue
-        lines.append(
-            f"- relay resource: id={resource.get('id') or '(missing)'}, "
-            f"label={resource.get('label') or resource.get('id') or '(unnamed)'}, "
-            f"device={resource.get('device') or '(missing)'}, "
-            f"baudrate={int(resource.get('baudrate') or 9600)}, "
-            f"channel={resource.get('channel') or '(skill-defined)'}, "
-            "owner=enabled relay skill/tool (not the terminal bridge)"
-        )
-    username = str(credentials.get("username") or "").strip()
-    if username:
-        lines.append(f"- login username: {username}")
-    lines.append(f"- login password configured: {bool(credentials.get('password'))}")
+    for group in groups:
+        group_mode = str(group.get("mode") or "off")
+        serial = group.get("serial") if isinstance(group.get("serial"), dict) else {}
+        network = group.get("network") if isinstance(group.get("network"), dict) else {}
+        credentials = group.get("credentials") if isinstance(group.get("credentials"), dict) else {}
+        permissions = group.get("permissions") if isinstance(group.get("permissions"), dict) else {}
+        lines.append(f"- hardware group: id={group.get('id') or '(missing)'}, mode={group_mode}")
+        lines.append(f"  description: {group.get('description') or '(not provided)'}")
+        lines.append(f"  access permission: {permissions.get('access') or 'read_only'}")
+        if group_mode in {"serial", "both"}:
+            lines.append(f"  serial: device={serial.get('device') or '(missing)'}, baudrate={int(serial.get('baudrate') or 115200)}")
+        if group_mode in {"network", "both"}:
+            lines.append(f"  network: device_ip={network.get('device_ip') or '(missing)'}, transport=discover (SSH 22 preferred, Telnet 23 fallback)")
+        username = str(credentials.get("username") or "").strip()
+        if username:
+            lines.append(f"  login username: {username}")
+        lines.append(f"  login password configured: {bool(credentials.get('password'))}")
 
     return render_prompt_template(
         "hardware_debug_context.md",

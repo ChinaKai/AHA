@@ -1106,6 +1106,7 @@ def update_task_hardware_debug_config(
     serial: object = UNSET,
     network: object = UNSET,
     credentials: object = UNSET,
+    groups: object = UNSET,
     resources: object = UNSET,
     channels: object = UNSET,
     enabled: object = UNSET,
@@ -1119,27 +1120,65 @@ def update_task_hardware_debug_config(
             raise SystemExit(f"Task not found: {task_id}")
         hardware_debug = normalize_task_hardware_debug(task.get("hardware_debug"))
         canonical_permissions_only = permissions is not UNSET and channels is UNSET and devices is UNSET
-        if any(item is not UNSET for item in (mode, serial, network, credentials, resources)) or canonical_permissions_only:
-            if mode is not UNSET:
-                hardware_debug["mode"] = mode
-            if serial is not UNSET:
-                hardware_debug["serial"] = serial
-            if network is not UNSET:
-                hardware_debug["network"] = network
-            if credentials is not UNSET:
-                next_credentials = dict(credentials) if isinstance(credentials, dict) else credentials
-                if isinstance(next_credentials, dict):
-                    existing_password = str(hardware_debug.get("credentials", {}).get("password") or "")
+        if groups is not UNSET:
+            existing_groups = {
+                str(item.get("id") or ""): item
+                for item in hardware_debug.get("groups") or []
+                if isinstance(item, dict)
+            }
+            next_groups = list(groups) if isinstance(groups, list) else groups
+            if isinstance(next_groups, list):
+                for item in next_groups:
+                    if not isinstance(item, dict):
+                        continue
+                    group_id = str(item.get("id") or "")
+                    next_credentials = dict(item.get("credentials") or {})
+                    existing_password = str(existing_groups.get(group_id, {}).get("credentials", {}).get("password") or "")
                     clear_password = bool(next_credentials.pop("clear_password", False))
                     if clear_password:
                         next_credentials["password"] = ""
                     elif not str(next_credentials.get("password") or "") and existing_password:
                         next_credentials["password"] = existing_password
-                hardware_debug["credentials"] = next_credentials
-            if resources is not UNSET:
-                hardware_debug["resources"] = resources
+                    item["credentials"] = next_credentials
+            hardware_debug = {"groups": next_groups}
+        elif any(item is not UNSET for item in (mode, serial, network, credentials, resources)) or canonical_permissions_only:
+            current_groups = [dict(item) for item in hardware_debug.get("groups") or [] if isinstance(item, dict)]
+            primary = current_groups[0] if current_groups else {
+                "id": "default",
+                "description": "",
+                "mode": "off",
+                "serial": {"device": "", "baudrate": 115200},
+                "network": {"device_ip": ""},
+                "credentials": {"username": "", "password": ""},
+                "permissions": {"access": "read_only"},
+            }
+            if mode is not UNSET:
+                primary["mode"] = mode
+            if serial is not UNSET:
+                primary["serial"] = serial
+            if network is not UNSET:
+                primary["network"] = network
+            if credentials is not UNSET:
+                next_credentials = dict(credentials) if isinstance(credentials, dict) else credentials
+                if isinstance(next_credentials, dict):
+                    existing_password = str(primary.get("credentials", {}).get("password") or "")
+                    clear_password = bool(next_credentials.pop("clear_password", False))
+                    if clear_password:
+                        next_credentials["password"] = ""
+                    elif not str(next_credentials.get("password") or "") and existing_password:
+                        next_credentials["password"] = existing_password
+                primary["credentials"] = next_credentials
             if permissions is not UNSET:
-                hardware_debug["permissions"] = permissions
+                primary["permissions"] = permissions
+            current_groups = [primary, *current_groups[1:]]
+            if resources is not UNSET:
+                migrated = normalize_task_hardware_debug(
+                    {"mode": "tools", "resources": resources, "permissions": primary.get("permissions")}
+                ).get("groups") or []
+                migrated_ids = {str(item.get("id") or "") for item in migrated if isinstance(item, dict)}
+                current_groups = [item for item in current_groups if str(item.get("id") or "") not in migrated_ids]
+                current_groups.extend(migrated)
+            hardware_debug = {"groups": current_groups}
         elif channels is not UNSET:
             hardware_debug = normalize_task_hardware_debug(
                 {
@@ -1195,6 +1234,7 @@ def update_task_hardware_debug_config(
             "mode": mode_value,
             "transports": transports,
             "access": task["hardware_debug"].get("permissions", {}).get("access"),
+            "group_count": len(task["hardware_debug"].get("groups") or []),
             "resource_count": len(task["hardware_debug"].get("resources") or []),
         },
     )

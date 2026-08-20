@@ -282,11 +282,14 @@ executables. Skill instructions resolve those tools relative to their selected
 
 Tasks may also carry optional board-side automation context under
 `hardware_debug`. The setting is disabled by default for archive and old-plan
-compatibility. New tasks select `off`, `serial`, `network`, or `both`. The task
-stores only the connection facts needed to reach the board: the host serial
-device and baudrate, the board IP, optional board login credentials, and a task
-access level. New tasks default to `read_only`; existing active v2 records that
-predate the field retain write-compatible behavior during normalization.
+compatibility. New tasks store up to 16 named entries in
+`hardware_debug.groups`. Every hardware group has the same shape: a stable `id`,
+a user-written `description`, `mode=off|serial|network|both`, Serial and Network
+connection fields, optional login credentials, and its own access level. The
+description tells the agent what the hardware is used for; it does not authorize
+the agent to invent device protocols or unsafe operations. New groups default to
+`read_only`; existing active records that predate the field retain write-compatible
+behavior during normalization.
 Hardware operation instructions and tools such as NFS belong in task-level
 skills under `task_skills`. AHA injects a compact terminal summary into task
 assignment and chat prompts; the password value is never included. Web task
@@ -295,21 +298,46 @@ and status responses return an empty password plus `password_configured`:
 ```json
 {
   "hardware_debug": {
-    "mode": "both",
-    "serial": {
-      "device": "/dev/ttyUSB0",
-      "baudrate": 115200
-    },
-    "network": {
-      "device_ip": "192.168.1.20"
-    },
-    "credentials": {
-      "username": "root",
-      "password": "secret"
-    },
-    "permissions": {
-      "access": "read_only"
-    }
+    "groups": [
+      {
+        "id": "console",
+        "description": "Main board log and command console",
+        "mode": "both",
+        "serial": {
+          "device": "/dev/ttyUSB0",
+          "baudrate": 115200
+        },
+        "network": {
+          "device_ip": "192.168.1.20"
+        },
+        "credentials": {
+          "username": "root",
+          "password": "secret"
+        },
+        "permissions": {
+          "access": "read_only"
+        }
+      },
+      {
+        "id": "power",
+        "description": "USB serial controller for board power",
+        "mode": "serial",
+        "serial": {
+          "device": "COM7",
+          "baudrate": 9600
+        },
+        "network": {
+          "device_ip": ""
+        },
+        "credentials": {
+          "username": "",
+          "password": ""
+        },
+        "permissions": {
+          "access": "read_write"
+        }
+      }
+    ]
   }
 }
 ```
@@ -327,8 +355,10 @@ The current shared Network bridge implements Telnet; an SSH result uses the
 recommended system `ssh` command in Local Terminal. The Web Terminal view and the
 `hardware-attach`/`hardware-send` helpers use the same machine-level bridge for
 agent and manual interaction. In `both` mode the view can switch between Serial
-and Network. Future network transports can be added without changing the task's
-board IP.
+and Network. Multiple groups are selected with `--hardware <id>` in CLI commands
+or from the Hardware Terminal group selector; omitting the ID selects the first
+group for compatibility. Future network transports can be added without changing
+the group's board IP.
 
 Serial and Telnet Network tasks with `read_write` access can also transfer a file
 through the board shell without a preinstalled `rz`, `scp`, `tftp`, Python, or
@@ -408,22 +438,23 @@ export path, board mount path, module-loading requirements, and cleanup workflow
 belong in an enabled board skill. Reset, entering U-Boot, relay control,
 flashing, and env inspection likewise remain skill/tool workflows.
 
-`hardware_debug.resources` adds named skill-owned hardware endpoints without
-turning them into Web Terminal transports. The initial resource type is
-`serial_relay`, with `id`, `label`, `device`, `baudrate`, and optional `channel`.
-The primary `serial` device remains the board console; relay devices are not
-opened during normal terminal startup. An enabled relay skill sends its
-protocol bytes through `aha hardware-send <run> <task> --resource <id> --data '<bytes>'`,
-which lets a WSL backend route the request to the Windows-owned serial
-bridge. `hardware-attach` and `hardware-stop` accept the same `--resource` for
-bounded response inspection and explicit release. The bridge lifecycle still
-tracks active task references, while relay protocol, timing, safety checks, and
-power-cycle policy remain the skill's responsibility.
+Hardware groups are intentionally generic. A group may represent a board console,
+a second UART, a serial relay, a programmable power supply, or another endpoint
+that uses the same Serial/Network connection model. For example, a relay skill may
+send its exact protocol bytes with
+`aha hardware-send <run> <task> --hardware power --channel serial --data '<bytes>'`.
+WSL backends forward the selected group to the Windows-owned bridge when required.
+The user-written description helps select the right group, but relay protocol,
+timing, safety checks, and power-cycle policy remain the responsibility of an
+explicitly enabled skill or direct user instructions. AHA must never infer those
+details from the description alone.
 
 Legacy `enabled`/`devices`/`channels` payloads remain accepted as compatibility
-input. UART becomes `serial`; Telnet becomes `network`; an old NFS server is
-used only as a migration fallback for the board IP. Newly saved task state uses
-only `mode`/`serial`/`network`/`credentials`.
+input. UART becomes a default hardware group; Telnet and an old NFS server become
+that group's Network endpoint. The v0.1.160 `resources[]/serial_relay` shape is
+migrated to additional Serial groups. Top-level `mode`/`serial`/`network`/
+`credentials`/`permissions` and `--resource` remain compatibility projections or
+aliases; newly saved task state uses `groups[]` as the canonical model.
 
 ## Shared Browser Protocol
 

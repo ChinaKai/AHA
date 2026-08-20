@@ -188,19 +188,9 @@ class TaskSchemaTests(unittest.TestCase):
         self.assertEqual(canonical["serial"]["baudrate"], 9600)
         self.assertEqual(canonical["network"]["device_ip"], "192.168.1.21")
         self.assertEqual(canonical["permissions"], {"access": "read_write"})
-        self.assertEqual(
-            canonical["resources"],
-            [
-                {
-                    "id": "power-relay",
-                    "type": "serial_relay",
-                    "label": "Board power",
-                    "device": "/dev/ttyUSB1",
-                    "baudrate": 9600,
-                    "channel": "1",
-                }
-            ],
-        )
+        self.assertEqual([group["id"] for group in canonical["groups"]], ["default", "power-relay"])
+        self.assertEqual(canonical["groups"][1]["description"], "Board power")
+        self.assertEqual(canonical["groups"][1]["serial"], {"device": "/dev/ttyUSB1", "baudrate": 9600})
 
         tools_only = normalize_task_hardware_debug(
             {
@@ -209,8 +199,9 @@ class TaskSchemaTests(unittest.TestCase):
                 "permissions": {"access": "read_write"},
             }
         )
-        self.assertEqual(tools_only["mode"], "tools")
-        self.assertEqual(tools_only["resources"][0]["type"], "serial_relay")
+        self.assertEqual(tools_only["mode"], "serial")
+        self.assertEqual(tools_only["groups"][0]["id"], "power")
+        self.assertEqual(tools_only["groups"][0]["serial"]["device"], "COM7")
 
         explicit_read_only = normalize_task_hardware_debug(
             {

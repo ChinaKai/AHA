@@ -4,7 +4,7 @@ from pathlib import Path
 from urllib.parse import unquote
 
 from aha_cli.backends.registry import CODEX_DEFAULT_MODEL, agent_backend_names, normalize_reasoning_effort
-from aha_cli.domain.models import task_hardware_debug_can_write
+from aha_cli.domain.models import task_hardware_debug_can_write, task_hardware_group
 from aha_cli.services.browser_bridge import browser_bridge_request_sync, browser_bridge_status
 from aha_cli.services.browser_bookmarks import browser_bookmarks_snapshot, update_browser_bookmarks
 from aha_cli.services.browser_io import browser_io_page
@@ -22,7 +22,7 @@ from aha_cli.services.hardware_bridge import (
     device_stream_page,
     ensure_bridge,
     task_devices,
-    task_serial_resource_target,
+    task_serial_group_target,
 )
 from aha_cli.services.hardware_io import append_hardware_io_record
 from aha_cli.services.network_terminal import (
@@ -111,29 +111,27 @@ def _ensure_task_named_browser_profile(root: Path, task: dict) -> None:
         ensure_named_browser_profile(root, browser.get("profile_name"))
 
 
-def _resolve_task_device(task: dict, resource_id: object = "") -> tuple[str | None, int]:
-    if str(resource_id or "").strip():
-        target = task_serial_resource_target(task, resource_id)
-        return target if target else (None, 9600)
-    devices = task_devices(task)
+def _resolve_task_device(task: dict, hardware_id: object = "") -> tuple[str | None, int]:
+    target = task_serial_group_target(task, hardware_id)
+    if target:
+        return target
+    devices = task_devices(task) if not str(hardware_id or "").strip() else []
     return devices[0] if devices else (None, 115200)
 
 
-def _hardware_transports(task: dict) -> list[str]:
+def _hardware_transports(task: dict, hardware_id: object = "") -> list[str]:
     transports: list[str] = []
-    if task_devices(task):
+    if task_serial_group_target(task, hardware_id) or (not str(hardware_id or "").strip() and task_devices(task)):
         transports.append("serial")
-    if task_network_target(task):
+    if task_network_target(task, hardware_id):
         transports.append("network")
     return transports
 
 
-def _requested_transport(value: object, task: dict, resource_id: object = "") -> str | None:
-    if str(resource_id or "").strip():
-        return "serial" if task_serial_resource_target(task, resource_id) else None
+def _requested_transport(value: object, task: dict, hardware_id: object = "") -> str | None:
     requested = str(value or "").strip().lower()
     requested = {"uart": "serial", "telnet": "network"}.get(requested, requested)
-    transports = _hardware_transports(task)
+    transports = _hardware_transports(task, hardware_id)
     return requested if requested in transports else (transports[0] if transports else None)
 
 
@@ -141,8 +139,12 @@ def _task_is_terminal(task: dict) -> bool:
     return bool(task.get("deleted_at")) or str(task.get("status")) in _TERMINAL_TASK_STATUSES
 
 
-def _hardware_is_read_only(task: dict) -> bool:
-    return _task_is_terminal(task) or not task_hardware_debug_can_write(task)
+def _hardware_is_read_only(task: dict, hardware_id: object = "") -> bool:
+    return _task_is_terminal(task) or not task_hardware_debug_can_write(task, hardware_id)
+
+
+def _requested_hardware_id(payload: dict) -> str:
+    return str(payload.get("hardware") or payload.get("resource") or "").strip()
 
 
 def _hardware_stream_payload(
@@ -150,15 +152,18 @@ def _hardware_stream_payload(
     run_id: str,
     task_id: str,
     *,
+    hardware_id: str = "",
     transport: str = "",
     after: int | None,
     limit: int,
 ) -> dict:
     task = task_snapshot(root, run_id, task_id)["task"]
-    transports = _hardware_transports(task)
-    selected = _requested_transport(transport, task)
+    group = task_hardware_group(task, hardware_id)
+    selected_hardware_id = str(group.get("id") or "") if group else ""
+    transports = _hardware_transports(task, selected_hardware_id)
+    selected = _requested_transport(transport, task, selected_hardware_id)
     archived = _task_is_terminal(task)
-    read_only = _hardware_is_read_only(task)
+    read_only = _hardware_is_read_only(task, selected_hardware_id)
     if not selected:
         return {
             "events": [],
@@ -170,9 +175,10 @@ def _hardware_stream_payload(
             "device": None,
             "read_only": read_only,
             "bridge": None,
+            "hardware": selected_hardware_id,
         }
     if selected == "network":
-        host, port, username, password = task_network_target(task) or ("", 23, "", "")
+        host, port, username, password = task_network_target(task, selected_hardware_id) or ("", 23, "", "")
         if not archived:
             try:
                 ensure_network_terminal(root, host, port, username=username, password=password)
@@ -182,7 +188,7 @@ def _hardware_stream_payload(
         endpoint = f"{host}:{port}"
         status = network_status(root, host, port)
     else:
-        device, baudrate = _resolve_task_device(task)
+        device, baudrate = _resolve_task_device(task, selected_hardware_id)
         if not archived and device:
             try:
                 ensure_bridge(root, device, baudrate)
@@ -197,6 +203,7 @@ def _hardware_stream_payload(
     page["device"] = endpoint
     page["read_only"] = read_only
     page["bridge"] = status
+    page["hardware"] = selected_hardware_id
     return page
 
 
@@ -574,24 +581,27 @@ def task_detail_payload(root: Path, run_id: str, task_id: str, detail_name: str,
         except ValueError:
             after = None
         transport = query.get("transport", [""])[0] or ""
-        return _hardware_stream_payload(root, run_id, task_id, transport=transport, after=after, limit=limit)
+        hardware_id = query.get("hardware", [""])[0] or ""
+        return _hardware_stream_payload(root, run_id, task_id, hardware_id=hardware_id, transport=transport, after=after, limit=limit)
     if detail_name == "hardware-session":
         task = task_snapshot(root, run_id, task_id)["task"]
-        transport = _requested_transport(query.get("transport", [""])[0], task)
+        hardware_id = query.get("hardware", [""])[0] or ""
+        transport = _requested_transport(query.get("transport", [""])[0], task, hardware_id)
         if transport == "network":
-            target = task_network_target(task)
+            target = task_network_target(task, hardware_id)
             device = f"{target[0]}:{target[1]}" if target else None
             status = network_status(root, target[0], target[1]) if target else None
         else:
-            device, _baudrate = _resolve_task_device(task)
+            device, _baudrate = _resolve_task_device(task, hardware_id)
             status = bridge_status(root, device) if device else None
         return {
             "device": device,
             "endpoint": device,
             "transport": transport,
-            "transports": _hardware_transports(task),
+            "transports": _hardware_transports(task, hardware_id),
+            "hardware": hardware_id,
             "bridge": status,
-            "read_only": _task_is_terminal(task),
+            "read_only": _hardware_is_read_only(task, hardware_id),
             "attached": bool(
                 status
                 and status.get("alive")
@@ -795,81 +805,83 @@ def handle_task_action_route(root: Path, run_id: str, path: str, body: bytes) ->
             return route_result({"ok": True, **result})
         elif action == "hardware-send":
             payload = parse_json_body(body)
-            resource_id = str(payload.get("resource") or "").strip()
+            hardware_id = _requested_hardware_id(payload)
             data = str(payload.get("data") or "")
             if not data:
                 return route_result({"ok": False, "error": "data is required"}, "400 Bad Request")
             task = task_snapshot(root, run_id, task_id)["task"]
             if _task_is_terminal(task):
                 return route_result({"ok": False, "error": "Task is terminal; hardware console is read-only."}, "409 Conflict")
-            if not task_hardware_debug_can_write(task):
+            if not task_hardware_debug_can_write(task, hardware_id):
                 return route_result({"ok": False, "error": "Hardware debug permission is read-only."}, "403 Forbidden")
-            transport = _requested_transport(payload.get("transport", payload.get("channel")), task, resource_id)
+            transport = _requested_transport(payload.get("transport", payload.get("channel")), task, hardware_id)
             if not transport:
                 return route_result({"ok": False, "error": "Task has no hardware terminal configured."}, "400 Bad Request")
             if transport == "network":
-                host, port, username, password = task_network_target(task) or ("", 23, "", "")
+                host, port, username, password = task_network_target(task, hardware_id) or ("", 23, "", "")
                 status = ensure_network_terminal(root, host, port, username=username, password=password)
                 if status.get("paused"):
                     return route_result({"ok": False, "error": "Terminal is paused; resume it to send.", "bridge": status}, "409 Conflict")
                 record = append_network_control(root, host, port, {"cmd": "send", "data": data, "source": "web"})
                 return route_result({"ok": True, "transport": transport, "endpoint": f"{host}:{port}", "record": record})
-            device, baudrate = _resolve_task_device(task, resource_id)
+            device, baudrate = _resolve_task_device(task, hardware_id)
             if not device:
-                return route_result({"ok": False, "error": "Task has no matching serial device or resource configured."}, "400 Bad Request")
+                return route_result({"ok": False, "error": "Task has no matching serial device in the selected hardware group configured."}, "400 Bad Request")
             status = ensure_bridge(root, device, baudrate)
             if status.get("paused"):
                 return route_result({"ok": False, "error": "Bridge is paused; resume it to send.", "bridge": status}, "409 Conflict")
             if status.get("error") or status.get("status") == "blocked":
                 return route_result({"ok": False, "error": status.get("error") or "Serial device is occupied.", "bridge": status}, "409 Conflict")
             record = append_bridge_control(root, device, {"cmd": "send", "data": data, "source": "web"})
-            return route_result({"ok": True, "transport": transport, "endpoint": device, "device": device, "resource": resource_id, "record": record})
+            return route_result({"ok": True, "transport": transport, "endpoint": device, "device": device, "hardware": hardware_id, "record": record})
         elif action == "hardware-attach":
             payload = parse_json_body(body)
-            resource_id = str(payload.get("resource") or "").strip()
+            hardware_id = _requested_hardware_id(payload)
             task = task_snapshot(root, run_id, task_id)["task"]
-            transport = _requested_transport(payload.get("transport", payload.get("channel")), task, resource_id)
+            transport = _requested_transport(payload.get("transport", payload.get("channel")), task, hardware_id)
             if not transport:
                 return route_result({"ok": False, "error": "Task has no hardware terminal configured."}, "400 Bad Request")
             if transport == "network":
-                target = task_network_target(task)
+                target = task_network_target(task, hardware_id)
                 if not target:
                     return route_result({"ok": False, "error": "Task has no network device IP configured."}, "400 Bad Request")
                 host, port, username, password = target
                 status = ensure_network_terminal(root, host, port, username=username, password=password)
                 return route_result({"ok": True, "transport": transport, "endpoint": f"{host}:{port}", "bridge": status})
-            device, baudrate = _resolve_task_device(task, resource_id)
+            device, baudrate = _resolve_task_device(task, hardware_id)
             if not device:
-                return route_result({"ok": False, "error": "Task has no matching serial device or resource configured."}, "400 Bad Request")
+                return route_result({"ok": False, "error": "Task has no matching serial device in the selected hardware group configured."}, "400 Bad Request")
             status = ensure_bridge(root, device, baudrate)
-            return route_result({"ok": True, "transport": transport, "endpoint": device, "device": device, "resource": resource_id, "bridge": status})
+            return route_result({"ok": True, "transport": transport, "endpoint": device, "device": device, "hardware": hardware_id, "bridge": status})
         elif action in {"hardware-pause", "hardware-resume"}:
             payload = parse_json_body(body)
+            hardware_id = _requested_hardware_id(payload)
             task = task_snapshot(root, run_id, task_id)["task"]
-            transport = _requested_transport(payload.get("transport", payload.get("channel")), task)
+            transport = _requested_transport(payload.get("transport", payload.get("channel")), task, hardware_id)
             if not transport:
                 return route_result({"ok": False, "error": "Task has no hardware terminal configured."}, "400 Bad Request")
             cmd = "pause" if action == "hardware-pause" else "resume"
             if transport == "network":
-                target = task_network_target(task)
+                target = task_network_target(task, hardware_id)
                 if not target:
                     return route_result({"ok": False, "error": "Task has no network device IP configured."}, "400 Bad Request")
                 host, port, _username, _password = target
                 append_network_control(root, host, port, {"cmd": cmd})
                 return route_result({"ok": True, "transport": transport, "endpoint": f"{host}:{port}", "command": cmd})
-            device, _baudrate = _resolve_task_device(task)
+            device, _baudrate = _resolve_task_device(task, hardware_id)
             if not device:
                 return route_result({"ok": False, "error": "Task has no serial device configured."}, "400 Bad Request")
             append_bridge_control(root, device, {"cmd": cmd})
             return route_result({"ok": True, "transport": transport, "endpoint": device, "device": device, "command": cmd})
         elif action == "hardware-arm":
             payload = parse_json_body(body)
+            hardware_id = _requested_hardware_id(payload)
             task = task_snapshot(root, run_id, task_id)["task"]
             if _task_is_terminal(task):
                 return route_result({"ok": False, "error": "Task is terminal; hardware console is read-only."}, "409 Conflict")
-            if not task_hardware_debug_can_write(task):
+            if not task_hardware_debug_can_write(task, hardware_id):
                 return route_result({"ok": False, "error": "Hardware debug permission is read-only."}, "403 Forbidden")
-            transport = _requested_transport(payload.get("transport", payload.get("channel")), task)
+            transport = _requested_transport(payload.get("transport", payload.get("channel")), task, hardware_id)
             if not transport:
                 return route_result({"ok": False, "error": "Task has no hardware terminal configured."}, "400 Bad Request")
             command = {
@@ -885,66 +897,68 @@ def handle_task_action_route(root: Path, run_id: str, path: str, body: bytes) ->
                 "duration_seconds": payload.get("duration_seconds"),
             }
             if transport == "network":
-                target = task_network_target(task)
+                target = task_network_target(task, hardware_id)
                 if not target:
                     return route_result({"ok": False, "error": "Task has no network device IP configured."}, "400 Bad Request")
                 host, port, _username, _password = target
                 record = append_network_control(root, host, port, command)
                 return route_result({"ok": True, "transport": transport, "endpoint": f"{host}:{port}", "record": record})
-            device, _baudrate = _resolve_task_device(task)
+            device, _baudrate = _resolve_task_device(task, hardware_id)
             if not device:
                 return route_result({"ok": False, "error": "Task has no serial device configured."}, "400 Bad Request")
             record = append_bridge_control(root, device, command)
             return route_result({"ok": True, "transport": transport, "endpoint": device, "device": device, "record": record})
         elif action == "hardware-disarm":
             payload = parse_json_body(body)
+            hardware_id = _requested_hardware_id(payload)
             task = task_snapshot(root, run_id, task_id)["task"]
-            transport = _requested_transport(payload.get("transport", payload.get("channel")), task)
+            transport = _requested_transport(payload.get("transport", payload.get("channel")), task, hardware_id)
             if not transport:
                 return route_result({"ok": False, "error": "Task has no hardware terminal configured."}, "400 Bad Request")
             rule_id = str(payload.get("id") or "").strip()
             if transport == "network":
-                target = task_network_target(task)
+                target = task_network_target(task, hardware_id)
                 if not target:
                     return route_result({"ok": False, "error": "Task has no network device IP configured."}, "400 Bad Request")
                 host, port, _username, _password = target
                 append_network_control(root, host, port, {"cmd": "disarm", "id": rule_id})
                 return route_result({"ok": True, "transport": transport, "endpoint": f"{host}:{port}", "command": "disarm", "id": rule_id})
-            device, _baudrate = _resolve_task_device(task)
+            device, _baudrate = _resolve_task_device(task, hardware_id)
             if not device:
                 return route_result({"ok": False, "error": "Task has no serial device configured."}, "400 Bad Request")
             append_bridge_control(root, device, {"cmd": "disarm", "id": rule_id})
             return route_result({"ok": True, "transport": transport, "endpoint": device, "device": device, "command": "disarm", "id": rule_id})
         elif action == "hardware-stop":
             payload = parse_json_body(body)
-            resource_id = str(payload.get("resource") or "").strip()
+            hardware_id = _requested_hardware_id(payload)
             task = task_snapshot(root, run_id, task_id)["task"]
-            transport = _requested_transport(payload.get("transport", payload.get("channel")), task, resource_id)
+            transport = _requested_transport(payload.get("transport", payload.get("channel")), task, hardware_id)
             if not transport:
                 return route_result({"ok": False, "error": "Task has no hardware terminal configured."}, "400 Bad Request")
             if transport == "network":
-                target = task_network_target(task)
+                target = task_network_target(task, hardware_id)
                 if not target:
                     return route_result({"ok": False, "error": "Task has no network device IP configured."}, "400 Bad Request")
                 host, port, _username, _password = target
                 append_network_control(root, host, port, {"cmd": "stop"})
                 return route_result({"ok": True, "transport": transport, "endpoint": f"{host}:{port}", "command": "stop"})
-            device, _baudrate = _resolve_task_device(task, resource_id)
+            device, _baudrate = _resolve_task_device(task, hardware_id)
             if not device:
-                return route_result({"ok": False, "error": "Task has no matching serial device or resource configured."}, "400 Bad Request")
+                return route_result({"ok": False, "error": "Task has no matching serial device in the selected hardware group configured."}, "400 Bad Request")
             append_bridge_control(root, device, {"cmd": "stop"})
-            return route_result({"ok": True, "transport": transport, "endpoint": device, "device": device, "resource": resource_id, "command": "stop"})
+            return route_result({"ok": True, "transport": transport, "endpoint": device, "device": device, "hardware": hardware_id, "command": "stop"})
         elif action == "hardware-takeover":
             payload = parse_json_body(body)
+            hardware_id = _requested_hardware_id(payload)
             task = task_snapshot(root, run_id, task_id)["task"]
             if _task_is_terminal(task):
                 return route_result({"ok": False, "error": "Task is terminal; hardware console is read-only."}, "409 Conflict")
-            if not task_hardware_debug_can_write(task):
+            if not task_hardware_debug_can_write(task, hardware_id):
                 return route_result({"ok": False, "error": "Hardware debug permission is read-only."}, "403 Forbidden")
-            transport = _requested_transport(payload.get("transport", payload.get("channel")), task)
+            transport = _requested_transport(payload.get("transport", payload.get("channel")), task, hardware_id)
             if transport != "serial":
                 return route_result({"ok": False, "error": "Device takeover is only available for Serial."}, "400 Bad Request")
-            device, baudrate = _resolve_task_device(task)
+            device, baudrate = _resolve_task_device(task, hardware_id)
             if not device:
                 return route_result({"ok": False, "error": "Task has no serial device configured."}, "400 Bad Request")
             try:

@@ -177,6 +177,12 @@
         handlers.hardwareSelectTransport?.(hardwareTransport.getAttribute("data-hardware-transport"));
         return;
       }
+      const hardwareGroup = target?.closest("[data-hardware-group-select]");
+      if (hardwareGroup) {
+        event.preventDefault();
+        handlers.hardwareSelectGroup?.(hardwareGroup.getAttribute("data-hardware-group-select"));
+        return;
+      }
       const hardwareKey = target?.closest("[data-hardware-key]");
       if (hardwareKey) {
         event.preventDefault();

@@ -256,7 +256,9 @@
       } else if (tab === "hardware") {
         const state = hardwareIoState(task.id);
         state.taskId = task.id;
-        const expectedKey = `${task.id}:${String(state.transport || "serial")}`;
+        state.groups = Array.isArray(task?.hardware_debug?.groups) ? task.hardware_debug.groups : [];
+        if (!state.hardware && state.groups.length) state.hardware = String(state.groups[0]?.id || "");
+        const expectedKey = `${task.id}:${String(state.hardware || "")}:${String(state.transport || "serial")}`;
         const root = panelEl.querySelector("[data-hardware-terminal-root]");
         if (!root || root.dataset.hardwareTerminalKey !== expectedKey) {
           hardwareTerminalController?.unmount?.();

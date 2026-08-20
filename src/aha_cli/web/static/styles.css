@@ -3499,6 +3499,38 @@ body.auth-required .login-view:not(.hidden) {
 .hardware-resource-card .field-label {
   min-width: 0;
 }
+.hardware-group-card {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-items: start;
+}
+.hardware-group-card > .hardware-resource-heading,
+.hardware-group-card > .field-label:has(textarea),
+.hardware-group-card > [data-hardware-group-serial] {
+  grid-column: 1 / -1;
+}
+.hardware-group-card textarea {
+  min-height: 72px;
+  resize: vertical;
+}
+.hardware-serial-picker-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 6px;
+}
+.hardware-serial-picker-row select {
+  min-width: 0;
+}
+.hardware-serial-refresh {
+  width: auto;
+  min-width: 72px;
+  padding-inline: 10px;
+}
+.hardware-serial-refresh[aria-busy="true"] {
+  opacity: 0.65;
+}
+.hardware-serial-manual:not([hidden]) {
+  margin-top: 6px;
+}
 @media (max-width: 820px) {
   .hardware-resource-card {
     grid-template-columns: 1fr 1fr;

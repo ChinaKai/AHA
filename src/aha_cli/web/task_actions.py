@@ -6,6 +6,7 @@ from aha_cli.domain.models import (
     DEFAULT_TASK_CONTEXT_THRESHOLD_PERCENT,
     DEFAULT_TASK_SUPERVISION_MAX_ROUNDS,
     TASK_HARDWARE_DEBUG_ACCESS_MODES,
+    TASK_HARDWARE_GROUP_MODES,
     TASK_HARDWARE_DEBUG_PERMISSION_KEYS,
     TASK_HARDWARE_DEBUG_MODES,
     TASK_HARDWARE_RESOURCE_TYPES,
@@ -139,6 +140,34 @@ def parse_task_observe_proxy_fields(payload: dict) -> dict[str, object]:
 
 def parse_task_hardware_debug_fields(payload: dict) -> dict[str, object]:
     update: dict[str, object] = {}
+    if "groups" in payload:
+        groups = payload.get("groups")
+        if not isinstance(groups, list):
+            raise ValueError("groups must be a list")
+        if len(groups) > 16:
+            raise ValueError("groups supports at most 16 entries")
+        seen_ids: set[str] = set()
+        for index, group in enumerate(groups):
+            if not isinstance(group, dict):
+                raise ValueError(f"groups[{index}] must be an object")
+            group_id = str(group.get("id") or "").strip().lower()
+            if not group_id:
+                raise ValueError(f"groups[{index}].id is required")
+            if group_id in seen_ids:
+                raise ValueError(f"groups[{index}].id must be unique")
+            seen_ids.add(group_id)
+            mode = str(group.get("mode") or "off").strip().lower()
+            if mode not in TASK_HARDWARE_GROUP_MODES:
+                raise ValueError(f"groups[{index}].mode must be one of: {', '.join(TASK_HARDWARE_GROUP_MODES)}")
+            for key in ("serial", "network", "credentials", "permissions"):
+                if key in group and not isinstance(group.get(key), dict):
+                    raise ValueError(f"groups[{index}].{key} must be an object")
+            if mode in {"serial", "both"} and not str((group.get("serial") or {}).get("device") or "").strip():
+                raise ValueError(f"groups[{index}].serial.device is required")
+            if mode in {"network", "both"} and not str((group.get("network") or {}).get("device_ip") or "").strip():
+                raise ValueError(f"groups[{index}].network.device_ip is required")
+        update["groups"] = groups
+        return update
     if "mode" in payload:
         mode = str(payload.get("mode") or "off").strip().lower()
         if mode not in TASK_HARDWARE_DEBUG_MODES:

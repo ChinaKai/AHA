@@ -42,20 +42,37 @@ class HardwareTerminalTests(unittest.TestCase):
     def test_target_selects_serial_and_network_transports(self) -> None:
         task = {
             "hardware_debug": {
-                "mode": "both",
-                "serial": {"device": "/dev/ttyUSB0", "baudrate": 115200},
-                "network": {"device_ip": "192.168.1.20"},
-                "credentials": {"username": "root", "password": "secret"},
-                "permissions": {"access": "read_write"},
+                "groups": [
+                    {
+                        "id": "console",
+                        "description": "Main board console",
+                        "mode": "both",
+                        "serial": {"device": "/dev/ttyUSB0", "baudrate": 115200},
+                        "network": {"device_ip": "192.168.1.20"},
+                        "credentials": {"username": "root", "password": "secret"},
+                        "permissions": {"access": "read_write"},
+                    },
+                    {
+                        "id": "power",
+                        "description": "Board power controller",
+                        "mode": "serial",
+                        "serial": {"device": "/dev/ttyUSB1", "baudrate": 9600},
+                        "permissions": {"access": "read_write"},
+                    },
+                ]
             }
         }
-        serial = hardware_terminal_target(task, "uart")
-        network = hardware_terminal_target(task, "telnet")
+        serial = hardware_terminal_target(task, "uart", "console")
+        network = hardware_terminal_target(task, "telnet", "console")
+        power = hardware_terminal_target(task, "serial", "power")
         self.assertEqual(serial["transport"], "serial")
         self.assertEqual(serial["endpoint"], "/dev/ttyUSB0")
         self.assertEqual(serial["transports"], ["serial", "network"])
         self.assertEqual(network["transport"], "network")
         self.assertEqual(network["endpoint"], "192.168.1.20:23")
+        self.assertEqual(power["endpoint"], "/dev/ttyUSB1")
+        self.assertEqual(power["hardware"], "power")
+        self.assertEqual(power["description"], "Board power controller")
 
     def test_websocket_stream_preserves_ansi_and_accepts_raw_input(self) -> None:
         sent: list[dict] = []

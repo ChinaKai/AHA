@@ -347,6 +347,7 @@ DEFAULT_TASK_SANDBOX = "danger-full-access"
 DEFAULT_TASK_SUPERVISION_MAX_ROUNDS = 99
 DEFAULT_TASK_CONTEXT_THRESHOLD_PERCENT = 75
 TASK_HARDWARE_DEBUG_MODES = ("off", "serial", "network", "both", "tools")
+TASK_HARDWARE_GROUP_MODES = ("off", "serial", "network", "both")
 TASK_HARDWARE_DEBUG_ACCESS_MODES = ("read_only", "read_write")
 TASK_HARDWARE_RESOURCE_TYPES = ("serial_relay",)
 # Compatibility-only input vocabulary. New task state uses mode/serial/network/credentials.
@@ -816,6 +817,7 @@ def default_task_hardware_debug() -> dict:
         "permissions": {
             "access": "read_only",
         },
+        "groups": [],
         "resources": [],
     }
 
@@ -878,9 +880,11 @@ def normalize_task_hardware_debug_access(value: object | None, *, default: str =
     return {"access": access}
 
 
-def task_hardware_debug_can_write(task: dict) -> bool:
+def task_hardware_debug_can_write(task: dict, hardware_id: object = "") -> bool:
     hardware = normalize_task_hardware_debug(task.get("hardware_debug"))
-    return hardware.get("permissions", {}).get("access") == "read_write"
+    group = task_hardware_group(task, hardware_id)
+    permissions = group.get("permissions", {}) if group else hardware.get("permissions", {})
+    return permissions.get("access") == "read_write"
 
 
 def normalize_task_hardware_debug_uart_settings(value: object) -> dict:
@@ -972,6 +976,57 @@ def normalize_task_hardware_resources(value: object) -> list[dict]:
     return resources
 
 
+def _normalize_hardware_group_id(value: object, *, index: int) -> str:
+    raw_id = unicodedata.normalize("NFKC", str(value or "")).strip().lower()
+    group_id = "".join(character if character.isalnum() or character in {"-", "_"} else "-" for character in raw_id)
+    return "-".join(part for part in group_id.split("-") if part)[:64] or f"hardware-{index + 1}"
+
+
+def normalize_task_hardware_group(value: object, *, index: int = 0) -> dict:
+    raw = value if isinstance(value, dict) else {}
+    mode = str(raw.get("mode") or "off").strip().lower()
+    if mode == "tools":
+        mode = "serial" if str((raw.get("serial") or {}).get("device") or "").strip() else "off"
+    if mode not in TASK_HARDWARE_GROUP_MODES:
+        mode = "off"
+    compatibility_default = "read_write" if mode != "off" and not isinstance(raw.get("permissions"), dict) else "read_only"
+    return {
+        "id": _normalize_hardware_group_id(raw.get("id") or raw.get("name"), index=index),
+        "description": str(raw.get("description") or raw.get("label") or raw.get("title") or "").strip()[:2000],
+        "mode": mode,
+        "serial": normalize_task_hardware_debug_serial(raw.get("serial")),
+        "network": normalize_task_hardware_debug_network(raw.get("network")),
+        "credentials": normalize_task_hardware_debug_credentials(raw.get("credentials")),
+        "permissions": normalize_task_hardware_debug_access(raw.get("permissions"), default=compatibility_default),
+    }
+
+
+def normalize_task_hardware_groups(value: object) -> list[dict]:
+    raw_groups = value if isinstance(value, list) else ([value] if isinstance(value, dict) else [])
+    groups: list[dict] = []
+    seen_ids: set[str] = set()
+    for index, item in enumerate(raw_groups[:16]):
+        group = normalize_task_hardware_group(item, index=index)
+        group_id = group["id"]
+        if group_id in seen_ids:
+            suffix = 2
+            while f"{group_id}-{suffix}" in seen_ids:
+                suffix += 1
+            group["id"] = f"{group_id}-{suffix}"[:64]
+        seen_ids.add(group["id"])
+        groups.append(group)
+    return groups
+
+
+def task_hardware_group(task: dict, hardware_id: object = "") -> dict | None:
+    hardware = normalize_task_hardware_debug(task.get("hardware_debug"))
+    groups = hardware.get("groups") if isinstance(hardware.get("groups"), list) else []
+    requested = str(hardware_id or "").strip().lower()
+    if requested:
+        return next((group for group in groups if str(group.get("id") or "").lower() == requested), None)
+    return groups[0] if groups else None
+
+
 def normalize_task_hardware_debug_nfs_settings(value: object) -> dict:
     raw = value if isinstance(value, dict) else {}
     return {
@@ -1023,24 +1078,57 @@ def normalize_task_hardware_debug(value: object | None = None) -> dict:
     # Canonical v2 state: connection facts only. Terminal protocol details and tools
     # (Telnet port, NFS exports, board-specific workflows) live in runtime/skills.
     legacy_shape = any(key in raw for key in ("enabled", "hardware_debug_enabled", "devices", "channels"))
-    canonical_shape = any(key in raw for key in ("mode", "serial", "network", "credentials", "resources")) or (
+    canonical_shape = any(key in raw for key in ("mode", "serial", "network", "credentials", "groups", "resources")) or (
         "permissions" in raw and not legacy_shape
     )
     if canonical_shape:
+        groups = normalize_task_hardware_groups(raw.get("groups"))
         mode = str(raw.get("mode") or "off").strip().lower()
         if mode not in TASK_HARDWARE_DEBUG_MODES:
             mode = "off"
+        if not groups:
+            serial = normalize_task_hardware_debug_serial(raw.get("serial"))
+            network = normalize_task_hardware_debug_network(raw.get("network"))
+            has_primary = mode != "off" and mode != "tools" and (
+                bool(serial.get("device")) or bool(network.get("device_ip"))
+            )
+            if has_primary:
+                groups.append(
+                    normalize_task_hardware_group(
+                        {
+                            "id": "default",
+                            "description": raw.get("description") or "",
+                            "mode": mode,
+                            "serial": serial,
+                            "network": network,
+                            "credentials": raw.get("credentials"),
+                            "permissions": raw.get("permissions"),
+                        }
+                    )
+                )
+            for resource in normalize_task_hardware_resources(raw.get("resources")):
+                groups.append(
+                    normalize_task_hardware_group(
+                        {
+                            "id": resource.get("id"),
+                            "description": resource.get("label") or "",
+                            "mode": "serial",
+                            "serial": {
+                                "device": resource.get("device"),
+                                "baudrate": resource.get("baudrate"),
+                            },
+                            "permissions": raw.get("permissions"),
+                        },
+                        index=len(groups),
+                    )
+                )
+            groups = normalize_task_hardware_groups(groups)
         hardware_debug = default_task_hardware_debug()
-        hardware_debug["mode"] = mode
-        hardware_debug["serial"] = normalize_task_hardware_debug_serial(raw.get("serial"))
-        hardware_debug["network"] = normalize_task_hardware_debug_network(raw.get("network"))
-        hardware_debug["credentials"] = normalize_task_hardware_debug_credentials(raw.get("credentials"))
-        hardware_debug["resources"] = normalize_task_hardware_resources(raw.get("resources"))
-        compatibility_default = "read_write" if mode != "off" and "permissions" not in raw else "read_only"
-        hardware_debug["permissions"] = normalize_task_hardware_debug_access(
-            raw.get("permissions"),
-            default=compatibility_default,
-        )
+        hardware_debug["groups"] = groups
+        if groups:
+            primary = groups[0]
+            for key in ("mode", "serial", "network", "credentials", "permissions"):
+                hardware_debug[key] = primary[key]
         return hardware_debug
 
     # Compatibility upgrade for the previous UART/NFS/Telnet channel schema.
@@ -1104,12 +1192,23 @@ def normalize_task_hardware_debug(value: object | None = None) -> dict:
         mode = "network"
     else:
         mode = "serial"
+    group = normalize_task_hardware_group(
+        {
+            "id": "default",
+            "mode": mode,
+            "serial": serial,
+            "network": network,
+            "credentials": credentials,
+            "permissions": {"access": access},
+        }
+    )
     return {
         "mode": mode,
         "serial": serial,
         "network": network,
         "credentials": credentials,
         "permissions": {"access": access},
+        "groups": [group] if mode != "off" else [],
         "resources": [],
     }
 
