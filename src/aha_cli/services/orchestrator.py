@@ -1170,7 +1170,13 @@ def request_round_summary_if_ready(root: Path, run_id: str, task_id: str) -> boo
     if task.get("status") in TERMINAL_AGENT_STATUSES:
         return False
     task = mark_task_coordination(root, run_id, task_id, round_summary_requested_at=utc_now())
-    prompt = render_prompt_template("task_round_summary.md", task_id=task_id)
+    round_agent_ids = [str(agent.get("id") or "").strip() for agent in agents]
+    round_agent_ids = [agent_id for agent_id in round_agent_ids if agent_id]
+    prompt = render_prompt_template(
+        "task_round_summary.md",
+        task_id=task_id,
+        round_agent_ids=", ".join(round_agent_ids),
+    )
     save_chat_offset(root, run_id, "main", task_id)
     append_message(
         root,
@@ -1185,7 +1191,13 @@ def request_round_summary_if_ready(root: Path, run_id: str, task_id: str) -> boo
         reply_target="browser",
         coordination="subagents_complete",
     )
-    event_data = {"task_id": task_id, "target": "main", "reason": "subagents_complete", "policy": "round_summary"}
+    event_data = {
+        "task_id": task_id,
+        "target": "main",
+        "reason": "subagents_complete",
+        "policy": "round_summary",
+        "agent_ids": round_agent_ids,
+    }
     append_event(root, run_id, "task_round_summary_requested", event_data)
     append_event(root, run_id, "task_final_requested", event_data)
     start_task_main_backend_if_stopped(root, run_id, task_id, task)

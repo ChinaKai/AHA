@@ -19,6 +19,7 @@ from aha_cli.services.orchestrator import (
     extract_action_payload,
     monitor_task_coordination,
     record_sub_agent_report,
+    request_round_summary_if_ready,
 )
 from aha_cli.store.event_views import conversation_events_page
 from aha_cli.store.io import write_json
@@ -1662,6 +1663,62 @@ class OrchestratorTests(unittest.TestCase):
                 self.assertNotIn("result_policy", main_messages[-1])
                 self.assertEqual(main_messages[-1]["reply_target"], "browser")
                 self.assertIn("round summary", main_messages[-1]["message"])
+
+    def test_round_summary_prompt_lists_only_current_round_sub_agents(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Current round summary", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                for _ in range(3):
+                    add_agent(root, run_id, "task-001", backend="codex", role="sub")
+                for agent_id in ("sub-001", "sub-002"):
+                    set_agent_status(root, run_id, "task-001", agent_id, "completed", 0)
+                    update_agent_runtime(
+                        root,
+                        run_id,
+                        "task-001",
+                        agent_id,
+                        last_active_at="2026-08-20T10:00:00+00:00",
+                        status_started_at="2026-08-20T10:00:00+00:00",
+                        started_at="2026-08-20T10:00:00+00:00",
+                        finished_at="2026-08-20T10:00:00+00:00",
+                        reused_at="",
+                    )
+                set_agent_status(root, run_id, "task-001", "sub-003", "completed", 0)
+                update_agent_runtime(
+                    root,
+                    run_id,
+                    "task-001",
+                    "sub-003",
+                    status_started_at="9999-01-02T00:00:00+00:00",
+                    started_at="9999-01-02T00:00:00+00:00",
+                    finished_at="9999-01-02T00:00:00+00:00",
+                    reused_at="9999-01-02T00:00:00+00:00",
+                )
+                set_task_status(root, run_id, "task-001", "running")
+                mark_task_coordination(
+                    root,
+                    run_id,
+                    "task-001",
+                    final_summary_requested_at="",
+                    final_summary_completed_at="",
+                    round_summary_requested_at="",
+                    round_summary_completed_at="",
+                    followup_started_at="9999-01-01T00:00:00+00:00",
+                )
+
+                self.assertTrue(request_round_summary_if_ready(root, run_id, "task-001"))
+                main_messages, _ = iter_jsonl_from(inbox_path(root, run_id, "main", "task-001"), 0)
+                prompt = main_messages[-1]["message"]
+                self.assertIn("This round's sub-agents: sub-003", prompt)
+                self.assertNotIn("sub-001", prompt)
+                self.assertNotIn("sub-002", prompt)
+                events, _ = iter_jsonl_from(event_path(root, run_id), 0)
+                summary_event = next(event for event in events if event["type"] == "task_round_summary_requested")
+                self.assertEqual(summary_event["data"]["agent_ids"], ["sub-003"])
 
     def test_round_summary_request_offsets_main_and_restarts_stopped_backend(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

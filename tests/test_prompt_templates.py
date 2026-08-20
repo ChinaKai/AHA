@@ -147,6 +147,7 @@ SAMPLE_VALUES = {
     "requested_at": "2026-01-01T00:00:00+00:00",
     "role": "main",
     "round_id": "round-001",
+    "round_agent_ids": "sub-001",
     "round_ids": "round-001",
     "rounds": "- round-001 [main_turn] Done",
     "round_sequence": "1",
