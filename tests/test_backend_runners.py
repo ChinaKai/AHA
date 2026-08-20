@@ -1517,6 +1517,51 @@ class BackendRunnerSessionTests(unittest.TestCase):
         self.assertGreater(analysis["tool_output_chars"], 0)
         self.assertGreater(analysis["assistant_message_chars"], 0)
 
+    def test_backend_session_jsonl_info_uses_wsl_lookup_context(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            session_file = Path(tmp) / "rollout-wsl-session.jsonl"
+            append_jsonl(session_file, {"type": "session_meta", "payload": {"id": "wsl-session"}})
+            with mock.patch(
+                "aha_cli.web.session_debug.backend_session_jsonl_path",
+                return_value=session_file,
+            ) as resolve:
+                info = backend_session_jsonl_info(
+                    {"backend": "codex", "backend_session_id": "wsl-session"},
+                    distro="Ubuntu-24.04",
+                    native_home="/home/kaikai",
+                )
+
+        self.assertTrue(info["exists"])
+        resolve.assert_called_once_with(
+            "wsl-session",
+            "codex",
+            distro="Ubuntu-24.04",
+            native_home="/home/kaikai",
+        )
+
+    def test_backend_session_jsonl_info_caches_unchanged_analysis(self) -> None:
+        from aha_cli.web import session_debug
+
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            session_id = "cached-session"
+            session_file = home / ".codex" / "sessions" / f"rollout-{session_id}.jsonl"
+            append_jsonl(session_file, {"type": "session_meta", "payload": {"id": session_id}})
+            session_debug._cached_backend_session_analysis.cache_clear()
+            with (
+                mock.patch("aha_cli.web.session_debug.Path.home", return_value=home),
+                mock.patch(
+                    "aha_cli.web.session_debug.analyze_backend_session_jsonl",
+                    wraps=session_debug.analyze_backend_session_jsonl,
+                ) as analyze,
+            ):
+                first = backend_session_jsonl_info({"backend": "codex", "backend_session_id": session_id})
+                second = backend_session_jsonl_info({"backend": "codex", "backend_session_id": session_id})
+
+        self.assertTrue(first["exists"])
+        self.assertEqual(first["analysis"], second["analysis"])
+        self.assertEqual(analyze.call_count, 1)
+
     def test_compact_reset_archives_backend_session_and_keeps_prompt_lean(self) -> None:
         with tempfile.TemporaryDirectory() as tmp, tempfile.TemporaryDirectory() as home_tmp:
             root = Path(tmp)

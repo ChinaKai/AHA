@@ -126,6 +126,24 @@
       if (visible) positionConversationScrollBottom();
     }
 
+    function updateContextPanelInPlace(rawPromptHtml, promptMetricsHtml) {
+      const currentRoot = panelEl?.querySelector?.(".context-view");
+      if (!currentRoot || !documentRef?.createElement) return false;
+      const scratch = documentRef.createElement("div");
+      scratch.innerHTML = renderContextPanelHtml({ rawPromptHtml, promptMetricsHtml });
+      const nextRoot = scratch.firstElementChild;
+      const currentRaw = currentRoot.querySelector?.(".raw-prompt-section");
+      const nextRaw = nextRoot?.querySelector?.(".raw-prompt-section");
+      const currentMetrics = currentRoot.querySelector?.(".prompt-metrics");
+      const nextMetrics = nextRoot?.querySelector?.(".prompt-metrics");
+      if (!nextRoot || !currentRaw || !nextRaw || !currentMetrics || !nextMetrics) return false;
+      if (currentRaw.dataset?.promptRenderKey !== nextRaw.dataset?.promptRenderKey) {
+        currentRaw.replaceWith(nextRaw);
+      }
+      currentMetrics.replaceWith(nextMetrics);
+      return true;
+    }
+
     function queueConversationScrollBottomSync() {
       if (typeof windowRef?.requestAnimationFrame === "function") {
         windowRef.requestAnimationFrame(syncConversationScrollBottom);
@@ -282,9 +300,12 @@
           ? captureContextScrollState()
           : null;
         const metrics = promptMetricsState(task.id);
+        const rawPromptHtml = renderRawPromptSection(metrics.data, metrics.total);
+        const promptMetricsHtml = renderPromptMetricsPanel(task.id);
+        if (updateContextPanelInPlace(rawPromptHtml, promptMetricsHtml)) return;
         panelEl.innerHTML = renderContextPanelHtml({
-          rawPromptHtml: renderRawPromptSection(metrics.data, metrics.total),
-          promptMetricsHtml: renderPromptMetricsPanel(task.id)
+          rawPromptHtml,
+          promptMetricsHtml
         });
         restoreContextScrollState(contextScrollState);
       } else if (tab === "context-evidence") {

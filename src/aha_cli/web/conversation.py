@@ -109,7 +109,15 @@ def conversation_view_page(
     view["turn_events"] = conversation_turn_events(root, run_id, task_id, target) if before is None else []
     session_file = session_path(root, run_id, task_id, target)
     backend_state = backend_status(root, run_id, target, task_id=task_id)
-    session_info = backend_session_jsonl_info(read_json(session_file)) if session_file.exists() else {}
+    session_info = (
+        backend_session_jsonl_info(
+            read_json(session_file),
+            distro=str(backend_state.get("wsl_distro") or "").strip() or None,
+            native_home=str(backend_state.get("wsl_native_home") or "").strip() or None,
+        )
+        if session_file.exists()
+        else {}
+    )
     session_info["runtime"] = backend_state
     session_info["context_pressure"] = backend_state.get("context_pressure")
     session_info["runtime_context_usage"] = backend_state.get("runtime_context_usage")

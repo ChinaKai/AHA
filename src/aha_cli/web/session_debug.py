@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+from functools import lru_cache
 import json
 from pathlib import Path
 
+from aha_cli.services.backend_runtime import backend_session_jsonl_path
 from aha_cli.services.prompt_templates import render_prompt_template
 from aha_cli.web.realtime_debug import realtime_debug_log
 
@@ -143,7 +145,23 @@ def analyze_backend_session_jsonl(path: Path, backend: str = "") -> dict:
     }
 
 
-def backend_session_jsonl_info(session: dict) -> dict:
+@lru_cache(maxsize=64)
+def _cached_backend_session_analysis(
+    path_text: str,
+    backend: str,
+    size_bytes: int,
+    modified_ns: int,
+) -> dict:
+    del size_bytes, modified_ns
+    return analyze_backend_session_jsonl(Path(path_text), backend)
+
+
+def backend_session_jsonl_info(
+    session: dict,
+    *,
+    distro: str | None = None,
+    native_home: str | None = None,
+) -> dict:
     session_id = str(session.get("backend_session_id") or "").strip()
     backend = str(session.get("backend") or "").strip()
     history = session.get("history_backend_sessions") if isinstance(session.get("history_backend_sessions"), list) else []
@@ -151,14 +169,12 @@ def backend_session_jsonl_info(session: dict) -> dict:
     if not session_id:
         return {"id": "", "backend": backend, "path": "", "size_bytes": None, "exists": False, "analysis": {}, "history": history, "compact_summary": compact_summary}
 
-    candidates: list[Path] = []
-    home = Path.home()
-    if backend == "claude":
-        candidates.extend((home / ".claude" / "projects").glob(f"*/*{session_id}.jsonl"))
-    else:
-        candidates.extend((home / ".codex" / "sessions").glob(f"**/*{session_id}.jsonl"))
-
-    path = candidates[0] if candidates else None
+    path = backend_session_jsonl_path(
+        session_id,
+        backend,
+        distro=distro,
+        native_home=native_home,
+    )
     if not path or not path.exists():
         return {"id": session_id, "backend": backend, "path": "", "size_bytes": None, "exists": False, "analysis": {}, "history": history, "compact_summary": compact_summary}
     try:
@@ -166,7 +182,12 @@ def backend_session_jsonl_info(session: dict) -> dict:
     except OSError:
         return {"id": session_id, "backend": backend, "path": str(path), "size_bytes": None, "exists": False, "analysis": {}, "history": history, "compact_summary": compact_summary}
     try:
-        analysis = analyze_backend_session_jsonl(path, backend)
+        analysis = _cached_backend_session_analysis(
+            str(path),
+            backend,
+            stat.st_size,
+            stat.st_mtime_ns,
+        )
     except OSError as exc:
         analysis = {"error": str(exc)}
     return {

@@ -14,6 +14,7 @@ from aha_cli.services.context_evidence import (
     record_agent_kb_feedback,
     task_context_evidence_path,
 )
+from aha_cli.services.context_evidence_paths import _path_prefixes
 from aha_cli.store.filesystem import append_event, load_config, update_task_token_saving_config
 from aha_cli.store.io import write_json
 from aha_cli.store.knowledge import list_pending
@@ -60,6 +61,18 @@ def _prompt_metrics(home: Path, run_id: str, evidence: dict) -> tuple[dict, dict
         prompt_metrics=metrics,
     )
     return prompt_event, metrics
+
+
+def test_context_evidence_path_prefixes_are_cached(tmp_path: Path) -> None:
+    _path_prefixes.cache_clear()
+    path = tmp_path / "workspace"
+    first = _path_prefixes(path)
+    second = _path_prefixes(path)
+    cache = _path_prefixes.cache_info()
+
+    assert first == second
+    assert cache.misses == 1
+    assert cache.hits == 1
 
 
 def test_context_evidence_missing_nav_records_task_scoped_update_without_candidate(tmp_path: Path):

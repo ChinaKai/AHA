@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from functools import lru_cache
 import re
 from pathlib import Path
 
@@ -330,7 +331,8 @@ def _classify_command_path(path: str, *, workspace: Path, root: Path) -> tuple[s
     return "ignored", clean
 
 
-def _path_prefixes(path: Path) -> list[str]:
+@lru_cache(maxsize=128)
+def _path_prefixes(path: Path) -> tuple[str, ...]:
     prefixes: list[str] = []
     try:
         resolved = path.expanduser().resolve()
@@ -340,7 +342,7 @@ def _path_prefixes(path: Path) -> list[str]:
         clean = value.replace("\\", "/").strip("/")
         if clean:
             prefixes.append(clean)
-    return _ordered_unique(prefixes, limit=4)
+    return tuple(_ordered_unique(prefixes, limit=4))
 
 
 def _looks_like_knowledge_path(path: str, root: Path) -> bool:

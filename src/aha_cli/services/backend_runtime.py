@@ -65,6 +65,7 @@ __all__ = [
     "locked_backend",
     "pid_is_running",
     "detect_runtime_context_compaction",
+    "backend_session_jsonl_path",
     "backend_status",
     "ensure_backend_wsl_state",
     "mark_backend_stopped",
@@ -304,6 +305,19 @@ def _wsl_session_paths(distro: str, native_home: str, rel: Path, pattern: str) -
     if not unc:
         return []
     return list((Path(unc) / rel).glob(pattern))
+
+
+def backend_session_jsonl_path(
+    session_id: str,
+    backend: str,
+    *,
+    distro: str | None = None,
+    native_home: str | None = None,
+) -> Path | None:
+    normalized_backend = str(backend or "").strip().lower().removesuffix("-chat")
+    if normalized_backend == "claude":
+        return _claude_session_jsonl_path(session_id, distro=distro, native_home=native_home)
+    return _codex_session_jsonl_path(session_id, distro=distro, native_home=native_home)
 
 
 def _claude_assistant_usage(record: dict) -> tuple[str, dict] | None:
@@ -811,6 +825,8 @@ def backend_status(root: Path, run_id: str, target: str = "main", task_id: str |
         "requested_model": state.get("requested_model"),
         "resolved_model": state.get("resolved_model"),
         "reasoning_effort": state.get("reasoning_effort"),
+        "wsl_distro": wsl_distro,
+        "wsl_native_home": wsl_native_home,
         "runtime_context_window": runtime_context_window,
         "runtime_context_usage": pressure_runtime_usage,
         "latest_usage": latest_usage,

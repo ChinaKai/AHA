@@ -235,6 +235,12 @@
       if (ref) ensurePromptArtifactLoaded(promptRef);
       const artifact = ref ? promptArtifactCache.get(promptArtifactCacheKey(ref)) : null;
       const prompt = artifact?.prompt || "";
+      const renderState = artifact?.loaded
+        ? `loaded:${prompt.length}`
+        : artifact?.error
+          ? `error:${artifact.error}`
+          : artifact?.loading ? "loading" : "missing";
+      const renderKey = `${ref || "none"}|${renderState}`;
       const copyKey = prompt ? `raw-prompt:${ref}` : "";
       if (copyKey) copyTextByKey.set(copyKey, prompt);
       const detailParts = [
@@ -255,7 +261,7 @@
             ? ref
             : "Loading raw prompt...";
       return `
-        <section class="raw-prompt-section">
+        <section class="raw-prompt-section" data-prompt-render-key="${deps.escapeHtml(renderKey)}">
           <div class="prompt-metrics-head">
             <div>
               <span>Latest assembled prompt</span>

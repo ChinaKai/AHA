@@ -145,6 +145,39 @@ class WebEventsApiTests(unittest.TestCase):
         self.assertEqual(body["prompt_ref"]["chars"], len(body["prompt"]))
         self.assertTrue(invalid_response.startswith(b"HTTP/1.1 400 Bad Request"))
 
+    def test_conversation_view_passes_wsl_context_to_session_debug(self) -> None:
+        from aha_cli.web.conversation import conversation_view_page
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            run_id = "run-001"
+            task_id = "task-001"
+            write_json(
+                session_path(root, run_id, task_id, "main"),
+                {"backend": "codex", "backend_session_id": "wsl-session"},
+            )
+            with (
+                mock.patch(
+                    "aha_cli.web.conversation.backend_status",
+                    return_value={
+                        "wsl_distro": "Ubuntu-24.04",
+                        "wsl_native_home": "/home/kaikai",
+                    },
+                ),
+                mock.patch(
+                    "aha_cli.web.conversation.backend_session_jsonl_info",
+                    return_value={"id": "wsl-session", "exists": True},
+                ) as session_info,
+            ):
+                payload = conversation_view_page(root, run_id, task_id, "main")
+
+        self.assertTrue(payload["backend_session"]["exists"])
+        session_info.assert_called_once_with(
+            {"backend": "codex", "backend_session_id": "wsl-session"},
+            distro="Ubuntu-24.04",
+            native_home="/home/kaikai",
+        )
+
     def test_api_events_uses_snapshot_and_limit(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

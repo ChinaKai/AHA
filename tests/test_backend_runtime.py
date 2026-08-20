@@ -278,7 +278,7 @@ class BackendRuntimeTests(unittest.TestCase):
                 mock.patch("aha_cli.services.backend_runtime.subprocess.Popen", return_value=FakeProcess()),
                 mock.patch("aha_cli.services.backend_runtime.pid_is_running", side_effect=lambda pid: bool(pid)),
             ):
-                start_backend(root / ".aha", run_id, "main", task_id="task-001")
+                status = start_backend(root / ".aha", run_id, "main", task_id="task-001")
 
             state = read_json(
                 backend_runtime_module.backend_state_path(root / ".aha", run_id, "main", "task-001")
@@ -288,6 +288,8 @@ class BackendRuntimeTests(unittest.TestCase):
         self.assertEqual(state["wsl_native_home"], "/home/kaikai")
         self.assertEqual(state["wsl_aha_bin"], "/mnt/c/Users/toope/AppData/Local/AHA/aha")
         self.assertNotEqual(state["command"][0], "wsl.exe")
+        self.assertEqual(status["wsl_distro"], "Ubuntu-24.04")
+        self.assertEqual(status["wsl_native_home"], "/home/kaikai")
 
     def test_worker_self_heals_missing_wsl_session_lookup_context(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
