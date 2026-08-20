@@ -504,6 +504,7 @@ def build_parser(handlers: Mapping[str, Callable[[argparse.Namespace], int]]) ->
     hardware_attach_p.add_argument("task_id")
     hardware_attach_p.add_argument("--channel", default="uart")
     hardware_attach_p.add_argument("--device", default="", help="Serial device path, e.g. /dev/ttyUSB0")
+    hardware_attach_p.add_argument("--resource", default="", help="Named serial tool resource id, e.g. power")
     hardware_attach_p.add_argument("--baudrate", type=int, default=115200)
     hardware_attach_p.add_argument("--agent-id", default="main")
     hardware_attach_p.add_argument("--idle-timeout", type=float, default=None, help="Stop after N idle seconds")
@@ -514,6 +515,7 @@ def build_parser(handlers: Mapping[str, Callable[[argparse.Namespace], int]]) ->
     hardware_send_p.add_argument("run_id")
     hardware_send_p.add_argument("task_id")
     hardware_send_p.add_argument("--channel", default="uart")
+    hardware_send_p.add_argument("--resource", default="", help="Named serial tool resource id, e.g. power")
     hardware_send_p.add_argument("--data", required=True, help="Text to send; backslash escapes like \\r are honored")
     hardware_send_p.set_defaults(func=handlers["hardware-send"])
 
@@ -567,6 +569,7 @@ def build_parser(handlers: Mapping[str, Callable[[argparse.Namespace], int]]) ->
     hardware_rules_p.add_argument("run_id")
     hardware_rules_p.add_argument("task_id")
     hardware_rules_p.add_argument("--channel", default="uart")
+    hardware_rules_p.add_argument("--resource", default="", help="Named serial tool resource id")
     hardware_rules_p.add_argument("--json", action="store_true")
     hardware_rules_p.set_defaults(func=handlers["hardware-rules"])
 
@@ -574,6 +577,7 @@ def build_parser(handlers: Mapping[str, Callable[[argparse.Namespace], int]]) ->
     hardware_stop_p.add_argument("run_id")
     hardware_stop_p.add_argument("task_id")
     hardware_stop_p.add_argument("--channel", default="uart")
+    hardware_stop_p.add_argument("--resource", default="", help="Named serial tool resource id")
     hardware_stop_p.set_defaults(func=handlers["hardware-stop"])
 
     chat_p = sub.add_parser("chat")

@@ -192,6 +192,43 @@
       };
     }
 
+    function readHardwareResources(form = elements.taskFormEl) {
+      return Array.from(form?.querySelectorAll("[data-hardware-resource]") || []).map((row, index) => {
+        const value = key => String(row.querySelector(`[data-hardware-resource-field="${key}"]`)?.value || "").trim();
+        return {
+          id: value("id") || `relay-${index + 1}`,
+          type: "serial_relay",
+          label: value("label") || value("id") || `Relay ${index + 1}`,
+          device: value("device"),
+          baudrate: Number(value("baudrate") || "9600") || 9600,
+          channel: value("channel")
+        };
+      });
+    }
+
+    function hardwareResourceCard(resource = {}, index = 0) {
+      const field = (key, label, value, attributes = "") => `
+        <label class="field-label">
+          <span>${escapeHtml(label)}</span>
+          <input data-hardware-resource-field="${key}" value="${escapeHtml(value)}" ${attributes}>
+        </label>`;
+      return `
+        <div class="hardware-resource-card" data-hardware-resource>
+          ${field("id", t("task.hardware_resource_id", "Resource ID"), resource.id || `relay-${index + 1}`)}
+          ${field("label", t("task.hardware_resource_label", "Label"), resource.label || `Relay ${index + 1}`)}
+          ${field("device", t("task.hardware_resource_device", "Relay serial device"), resource.device || "", 'list="aha-serial-ports" placeholder="COM4"')}
+          ${field("baudrate", t("task.hardware_resource_baudrate", "Baudrate"), resource.baudrate || 9600, 'type="number" min="1"')}
+          ${field("channel", t("task.hardware_resource_channel", "Channel"), resource.channel || "", 'placeholder="1"')}
+          <button type="button" class="hardware-resource-remove" data-hardware-resource-remove>${escapeHtml(t("task.hardware_resource_remove", "Remove"))}</button>
+        </div>`;
+    }
+
+    function renderHardwareResources(resources = []) {
+      const list = elements.taskFormEl?.querySelector("[data-hardware-resource-list]");
+      if (!list) return;
+      list.innerHTML = resources.map(hardwareResourceCard).join("");
+    }
+
     function createHardwareDebugPayload() {
       const form = elements.taskFormEl;
       const value = key => String(form?.querySelector(`[data-hardware-field="${key}"]`)?.value || "").trim();
@@ -208,6 +245,7 @@
           username: value("credentials.username"),
           password: String(form?.querySelector('[data-hardware-field="credentials.password"]')?.value || "")
         },
+        resources: readHardwareResources(form),
         permissions: {
           access: String(form?.querySelector('[data-hardware-permission="access"]')?.value || "read_only")
         }
@@ -324,6 +362,7 @@
       form?.querySelectorAll('[data-hardware-field^="network."]').forEach(input => { input.disabled = !network; });
       form?.querySelectorAll('[data-hardware-field^="credentials."]').forEach(input => { input.disabled = !enabled; });
       form?.querySelectorAll("[data-hardware-permission]").forEach(input => { input.disabled = !enabled; });
+      form?.querySelectorAll("[data-hardware-resource-field], [data-hardware-resource-add], [data-hardware-resource-remove]").forEach(input => { input.disabled = !enabled; });
     }
 
     function setHardwareDebugValues(value = {}) {
@@ -342,6 +381,7 @@
       set("credentials.password", policy.credentials?.password || "");
       const access = form?.querySelector('[data-hardware-permission="access"]');
       if (access) access.value = policy.permissions?.access || "read_only";
+      renderHardwareResources(policy.resources || []);
       syncCreateHardwareDebugFields();
     }
 
@@ -867,6 +907,17 @@
       });
       elements.taskContextAutoCompactEnabledEl?.addEventListener("change", syncCreateTaskContextFields);
       elements.taskFormEl?.querySelector("[data-hardware-mode]")?.addEventListener("change", syncCreateHardwareDebugFields);
+      elements.taskFormEl?.addEventListener("click", event => {
+        const target = event.target instanceof Element ? event.target : null;
+        if (target?.closest("[data-hardware-resource-add]")) {
+          const resources = readHardwareResources();
+          resources.push({ id: `relay-${resources.length + 1}`, type: "serial_relay", label: `Relay ${resources.length + 1}`, device: "", baudrate: 9600, channel: "" });
+          renderHardwareResources(resources);
+          syncCreateHardwareDebugFields();
+        } else if (target?.closest("[data-hardware-resource-remove]")) {
+          target.closest("[data-hardware-resource]")?.remove();
+        }
+      });
       elements.taskFormEl?.querySelector("[data-browser-mode]")?.addEventListener("change", syncCreateBrowserControlFields);
       elements.taskFormEl?.querySelector('[data-browser-field="profile"]')?.addEventListener("change", syncCreateBrowserControlFields);
       elements.taskFormEl?.querySelector("[data-browser-profile-select]")?.addEventListener("change", syncCreateBrowserControlFields);

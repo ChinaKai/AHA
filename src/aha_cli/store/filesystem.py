@@ -1106,6 +1106,7 @@ def update_task_hardware_debug_config(
     serial: object = UNSET,
     network: object = UNSET,
     credentials: object = UNSET,
+    resources: object = UNSET,
     channels: object = UNSET,
     enabled: object = UNSET,
     devices: object = UNSET,
@@ -1118,7 +1119,7 @@ def update_task_hardware_debug_config(
             raise SystemExit(f"Task not found: {task_id}")
         hardware_debug = normalize_task_hardware_debug(task.get("hardware_debug"))
         canonical_permissions_only = permissions is not UNSET and channels is UNSET and devices is UNSET
-        if any(item is not UNSET for item in (mode, serial, network, credentials)) or canonical_permissions_only:
+        if any(item is not UNSET for item in (mode, serial, network, credentials, resources)) or canonical_permissions_only:
             if mode is not UNSET:
                 hardware_debug["mode"] = mode
             if serial is not UNSET:
@@ -1135,6 +1136,8 @@ def update_task_hardware_debug_config(
                     elif not str(next_credentials.get("password") or "") and existing_password:
                         next_credentials["password"] = existing_password
                 hardware_debug["credentials"] = next_credentials
+            if resources is not UNSET:
+                hardware_debug["resources"] = resources
             if permissions is not UNSET:
                 hardware_debug["permissions"] = permissions
         elif channels is not UNSET:
@@ -1175,7 +1178,8 @@ def update_task_hardware_debug_config(
             elif hardware_debug.get("mode") == "off":
                 has_serial = bool(hardware_debug.get("serial", {}).get("device"))
                 has_network = bool(hardware_debug.get("network", {}).get("device_ip"))
-                hardware_debug["mode"] = "both" if has_serial and has_network else "network" if has_network else "serial"
+                has_resources = bool(hardware_debug.get("resources"))
+                hardware_debug["mode"] = "both" if has_serial and has_network else "network" if has_network else "serial" if has_serial else "tools" if has_resources else "off"
         task["hardware_debug"] = normalize_task_hardware_debug(hardware_debug)
         plan["updated_at"] = utc_now()
         save_plan(root, plan)
@@ -1191,6 +1195,7 @@ def update_task_hardware_debug_config(
             "mode": mode_value,
             "transports": transports,
             "access": task["hardware_debug"].get("permissions", {}).get("access"),
+            "resource_count": len(task["hardware_debug"].get("resources") or []),
         },
     )
     return task

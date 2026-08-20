@@ -8,6 +8,7 @@ from aha_cli.domain.models import (
     TASK_HARDWARE_DEBUG_ACCESS_MODES,
     TASK_HARDWARE_DEBUG_PERMISSION_KEYS,
     TASK_HARDWARE_DEBUG_MODES,
+    TASK_HARDWARE_RESOURCE_TYPES,
     TASK_BROWSER_ACCESS_MODES,
     TASK_BROWSER_CHANNEL_MODES,
     TASK_BROWSER_CONTROL_MODES,
@@ -150,6 +151,28 @@ def parse_task_hardware_debug_fields(payload: dict) -> dict[str, object]:
         if not isinstance(value, dict):
             raise ValueError(f"{key} must be an object")
         update[key] = value
+    if "resources" in payload:
+        resources = payload.get("resources")
+        if not isinstance(resources, list):
+            raise ValueError("resources must be a list")
+        if len(resources) > 16:
+            raise ValueError("resources supports at most 16 entries")
+        seen_ids: set[str] = set()
+        for index, resource in enumerate(resources):
+            if not isinstance(resource, dict):
+                raise ValueError(f"resources[{index}] must be an object")
+            resource_type = str(resource.get("type") or resource.get("kind") or "").strip().lower().replace("-", "_")
+            if resource_type not in TASK_HARDWARE_RESOURCE_TYPES:
+                raise ValueError(f"resources[{index}].type must be one of: {', '.join(TASK_HARDWARE_RESOURCE_TYPES)}")
+            resource_id = str(resource.get("id") or "").strip().lower()
+            if not resource_id:
+                raise ValueError(f"resources[{index}].id is required")
+            if resource_id in seen_ids:
+                raise ValueError(f"resources[{index}].id must be unique")
+            seen_ids.add(resource_id)
+            if not str(resource.get("device") or resource.get("port") or "").strip():
+                raise ValueError(f"resources[{index}].device is required")
+        update["resources"] = resources
     mode = update.get("mode")
     if mode in {"serial", "both"}:
         serial = update.get("serial") or {}
@@ -159,6 +182,8 @@ def parse_task_hardware_debug_fields(payload: dict) -> dict[str, object]:
         network = update.get("network") or {}
         if not str(network.get("device_ip") or network.get("host") or "").strip():
             raise ValueError("network.device_ip is required for network hardware debug")
+    if mode == "tools" and not update.get("resources"):
+        raise ValueError("resources is required for tools hardware debug")
     if "channels" in payload:
         channels = payload.get("channels")
         if not isinstance(channels, (list, dict)):

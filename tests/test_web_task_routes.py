@@ -421,6 +421,39 @@ class WebTaskRouteTests(unittest.TestCase):
         self.assertEqual(response["payload"]["bridge"]["status"], "running")
         ensure.assert_called_once_with(root, device, 115200)
 
+    def test_hardware_send_routes_named_relay_resource_to_its_serial_device(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "stub")
+                code, plan_output = self.run_cli("plan", "Relay route", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+
+            with (
+                mock.patch("aha_cli.web.task_routes.task_hardware_debug_can_write", return_value=True),
+                mock.patch("aha_cli.web.task_routes.task_serial_resource_target", return_value=("COM7", 9600)),
+                mock.patch("aha_cli.web.task_routes.ensure_bridge", return_value={"status": "running"}) as ensure,
+                mock.patch("aha_cli.web.task_routes.append_bridge_control", return_value={"id": 1}) as control,
+            ):
+                response = self.route(
+                    root,
+                    run_id,
+                    "POST",
+                    "/api/task/task-001/hardware-send",
+                    {"resource": "power", "data": "\\xA0\\x01\\x01\\xA2"},
+                )
+
+        self.assertEqual(response["status"], "200 OK")
+        self.assertEqual(response["payload"]["resource"], "power")
+        self.assertEqual(response["payload"]["device"], "COM7")
+        ensure.assert_called_once_with(root, "COM7", 9600)
+        control.assert_called_once_with(
+            root,
+            "COM7",
+            {"cmd": "send", "data": "\\xA0\\x01\\x01\\xA2", "source": "web"},
+        )
+
     def test_hardware_disarm_route_writes_bridge_control(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

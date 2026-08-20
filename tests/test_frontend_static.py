@@ -367,7 +367,7 @@ if (customStartRoot.children[0].start !== 3) {
             )
             self.assertEqual(result.returncode, 0, f"inline script {index} failed to parse: {result.stderr}")
 
-    def test_markdown_preserves_intraword_underscores(self) -> None:
+    def test_markdown_preserves_literal_underscores(self) -> None:
         node = shutil.which("node")
         if not node:
             self.skipTest("node is not available")
@@ -419,8 +419,11 @@ const expected = new Map([
   ["foo_bar_baz", "foo_bar_baz"],
   ["snake_case_identifier", "snake_case_identifier"],
   ["foo__bar__baz", "foo__bar__baz"],
-  ["_emphasis_", "<EM>emphasis</EM>"],
-  ["__strong__", "<STRONG>strong</STRONG>"]
+  ["_下划线_", "_下划线_"],
+  ["_emphasis_", "_emphasis_"],
+  ["__strong__", "__strong__"],
+  ["*emphasis*", "<EM>emphasis</EM>"],
+  ["**strong**", "<STRONG>strong</STRONG>"]
 ]);
 for (const [input, output] of expected) {
   const actual = renderInline(input);
@@ -1737,8 +1740,8 @@ controller.unmount();
         self.assertIn('id="token-usage"', integration_actions)
         self.assertNotIn('id="token-usage-popover"', integration_actions)
         self.assertLess(html.index('id="skills-console-popover"'), html.index('id="token-usage-popover"'))
-        self.assertIn('<link rel="stylesheet" href="/static/styles.css?v=chat-scroll-v1">', html)
-        self.assertIn('<script src="/static/i18n.js?v=chat-scroll-v1"></script>', html)
+        self.assertIn('<link rel="stylesheet" href="/static/styles.css?v=hardware-resources-v1">', html)
+        self.assertIn('<script src="/static/i18n.js?v=hardware-resources-v1"></script>', html)
         self.assertIn('"task.open": "任务"', i18n)
         self.assertIn('"agents.open": "智能体"', i18n)
         self.assertIn('"agents.title": "智能体"', i18n)
@@ -1940,7 +1943,7 @@ controller.unmount();
         self.assertIn('"knowledge.git_proxy": "Git 同步使用共享代理"', i18n)
         # Capture notes reuse the shared memo markdown renderer for in-body images.
         self.assertIn('<script src="/static/textarea_image_paste.js?v=clipboard-image-dedupe-v1"></script>', html)
-        self.assertIn('<script src="/static/task_memo_markdown.js"></script>', html)
+        self.assertIn('<script src="/static/task_memo_markdown.js?v=underscore-literal-v1"></script>', html)
         self.assertIn("AHATaskMemoMarkdown.renderMarkdownPreview", html)
         self.assertIn("function localTime(value)", html)
         self.assertIn("date.toLocaleString()", html)
@@ -2893,6 +2896,7 @@ controller.unmount();
         create_controller = (root / "task_create_controller.js").read_text(encoding="utf-8")
         config_controller = (root / "task_config_controller.js").read_text(encoding="utf-8")
         metadata = (root / "task_metadata.js").read_text(encoding="utf-8")
+        task_list = (root / "task_list.js").read_text(encoding="utf-8")
         wiring = (root / "app_runtime_wiring.js").read_text(encoding="utf-8")
         styles = (root / "styles.css").read_text(encoding="utf-8")
 
@@ -2905,6 +2909,7 @@ controller.unmount();
         self.assertIn('<option value="serial"', html)
         self.assertIn('<option value="network"', html)
         self.assertIn('<option value="both"', html)
+        self.assertIn('<option value="tools"', html)
         self.assertIn('id="task-hardware-serial-device"', html)
         self.assertIn('data-hardware-field="serial.baudrate"', html)
         self.assertIn('id="task-hardware-device-ip"', html)
@@ -2924,6 +2929,16 @@ controller.unmount();
         self.assertIn('id="selected-task-hardware-device-ip"', html)
         self.assertIn('id="selected-task-hardware-username"', html)
         self.assertIn('id="selected-task-hardware-password"', html)
+        self.assertEqual(html.count("data-hardware-resource-list"), 2)
+        self.assertEqual(html.count("data-hardware-resource-add"), 2)
+        self.assertIn("hardware-resource-card", styles)
+        self.assertIn("readHardwareResources", create_controller)
+        self.assertIn("readHardwareResources", config_controller)
+        self.assertIn('type: "serial_relay"', create_controller + config_controller)
+        self.assertIn("policy.resources || []", create_controller + config_controller)
+        self.assertIn('mode = ["off", "serial", "network", "both", "tools"]', metadata)
+        self.assertIn("normalizeHardwareResource", metadata)
+        self.assertIn('["serial", "network", "both"].includes(policy.mode)', task_list)
         self.assertNotIn('id="task-hardware-skill-paths"', html)
         self.assertNotIn('id="selected-task-hardware-skill-paths"', html)
         self.assertNotIn('id="task-hardware-uart-operation-skill"', html)
@@ -6239,19 +6254,19 @@ if (resetCount !== 1 || emptyWorkspaceCount !== 1) {
         self.assertIn("task-supervision-mode", create_form)
         self.assertNotIn("selected-task-supervision-mode", create_form)
         self.assertIn('<script src="/static/time_format.js"></script>', html)
-        self.assertIn('<script src="/static/i18n.js?v=chat-scroll-v1"></script>', html)
+        self.assertIn('<script src="/static/i18n.js?v=hardware-resources-v1"></script>', html)
         self.assertIn('<script src="/static/app_helpers.js"></script>', html)
-        self.assertIn('<script src="/static/task_metadata.js?v=hardware-terminal-v1"></script>', html)
+        self.assertIn('<script src="/static/task_metadata.js?v=hardware-resources-v1"></script>', html)
         self.assertIn('<script src="/static/bootstrap_config.js?v=provider-models-v11"></script>', html)
         self.assertIn('<script src="/static/bootstrap_controller.js?v=provider-models-v11"></script>', html)
         self.assertIn('<script src="/static/task_form.js?v=hardware-terminal-v1"></script>', html)
-        self.assertIn('<script src="/static/task_config_controller.js?v=browser-profile-select-v47"></script>', html)
+        self.assertIn('<script src="/static/task_config_controller.js?v=hardware-resources-v1"></script>', html)
         self.assertIn('<script src="/static/agent_config_controller.js?v=reasoning-effort-v1"></script>', html)
         self.assertIn('<script src="/static/run_metadata.js"></script>', html)
         self.assertIn('<script src="/static/run_lifecycle_view.js"></script>', html)
         self.assertIn('<script src="/static/run_maintenance.js"></script>', html)
         self.assertIn('<script src="/static/agent_metadata.js"></script>', html)
-        self.assertIn('<script src="/static/task_list.js?v=kb-impact-v1"></script>', html)
+        self.assertIn('<script src="/static/task_list.js?v=hardware-resources-v1"></script>', html)
         self.assertIn('<script src="/static/task_controller.js?v=token-saving-v8"></script>', html)
         self.assertIn('<script src="/static/agent_controller.js"></script>', html)
         self.assertIn('<script src="/static/conversation_metadata.js?v=token-saving-v8"></script>', html)
@@ -6286,7 +6301,7 @@ if (resetCount !== 1 || emptyWorkspaceCount !== 1) {
         self.assertIn('<script src="/static/status_store.js"></script>', html)
         self.assertIn('<script src="/static/status_controller.js"></script>', html)
         self.assertIn('<script src="/static/run_actions.js?v=web-upgrade-v12"></script>', html)
-        self.assertIn('<script src="/static/task_create_controller.js?v=browser-profile-select-v47"></script>', html)
+        self.assertIn('<script src="/static/task_create_controller.js?v=hardware-resources-v1"></script>', html)
         self.assertIn('<script src="/static/app_actions.js"></script>', html)
         self.assertIn('<script src="/static/settings_controller.js?v=provider-models-v11"></script>', html)
         self.assertIn('<script src="/static/run_controller.js?v=permissions-v1"></script>', html)

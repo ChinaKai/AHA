@@ -194,13 +194,7 @@
     const documentRef = options.documentRef || parent?.ownerDocument;
     if (!documentRef) return;
     const source = String(text || "");
-    const hasWordBoundaryConflict = match => {
-      const before = match.index > 0 ? source[match.index - 1] : "";
-      const afterIndex = match.index + match[0].length;
-      const after = afterIndex < source.length ? source[afterIndex] : "";
-      return /[A-Za-z0-9_]/.test(before) || /[A-Za-z0-9_]/.test(after);
-    };
-    const pattern = /!\[([^\]]*)\]\(([^)\s]+)(?:\s+["'][^)]*["'])?\)|\[([^\]]+)\]\(([^)\s]+)\)|`([^`]+)`|\*\*([^*]+)\*\*|__([^_]+)__|~~([^~]+)~~|<((?:https?:\/\/|mailto:)[^>\s]+)>|((?:https?:\/\/|www\.)[^\s<]+)|\*([^*]+)\*|_([^_]+)_/g;
+    const pattern = /!\[([^\]]*)\]\(([^)\s]+)(?:\s+["'][^)]*["'])?\)|\[([^\]]+)\]\(([^)\s]+)\)|`([^`]+)`|\*\*([^*]+)\*\*|~~([^~]+)~~|<((?:https?:\/\/|mailto:)[^>\s]+)>|((?:https?:\/\/|www\.)[^\s<]+)|\*([^*]+)\*/g;
     let cursor = 0;
     let match = pattern.exec(source);
     while (match) {
@@ -218,30 +212,26 @@
         const code = documentRef.createElement("code");
         code.textContent = match[5];
         parent.appendChild(code);
-      } else if (match[7] !== undefined && hasWordBoundaryConflict(match)) {
-        parent.appendChild(documentRef.createTextNode(match[0]));
-      } else if (match[6] !== undefined || match[7] !== undefined) {
+      } else if (match[6] !== undefined) {
         const strong = documentRef.createElement("strong");
-        strong.textContent = match[6] || match[7] || "";
+        strong.textContent = match[6] || "";
         parent.appendChild(strong);
-      } else if (match[8] !== undefined) {
+      } else if (match[7] !== undefined) {
         const deleted = documentRef.createElement("del");
-        deleted.textContent = match[8] || "";
+        deleted.textContent = match[7] || "";
         parent.appendChild(deleted);
-      } else if (match[9] !== undefined) {
-        const link = createMarkdownLinkNode(documentRef, match[9], match[9], options);
+      } else if (match[8] !== undefined) {
+        const link = createMarkdownLinkNode(documentRef, match[8], match[8], options);
         parent.appendChild(link || documentRef.createTextNode(match[0]));
-      } else if (match[10] !== undefined) {
-        const trailing = /[),.;:!?]+$/.exec(match[10])?.[0] || "";
-        const href = trailing ? match[10].slice(0, -trailing.length) : match[10];
+      } else if (match[9] !== undefined) {
+        const trailing = /[),.;:!?]+$/.exec(match[9])?.[0] || "";
+        const href = trailing ? match[9].slice(0, -trailing.length) : match[9];
         const link = createMarkdownLinkNode(documentRef, href, href, options);
         parent.appendChild(link || documentRef.createTextNode(match[0]));
         if (trailing) parent.appendChild(documentRef.createTextNode(trailing));
-      } else if (match[12] !== undefined && hasWordBoundaryConflict(match)) {
-        parent.appendChild(documentRef.createTextNode(match[0]));
       } else {
         const emphasis = documentRef.createElement("em");
-        emphasis.textContent = match[11] || match[12] || "";
+        emphasis.textContent = match[10] || "";
         parent.appendChild(emphasis);
       }
       cursor = match.index + match[0].length;

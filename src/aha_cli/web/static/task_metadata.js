@@ -36,6 +36,7 @@
   const defaultTaskSupervisionMaxRounds = 99;
   const defaultTaskContextThresholdPercent = 75;
   const hardwareDebugChannelTypes = Object.freeze(["uart", "nfs", "telnet"]);
+  const hardwareResourceTypes = Object.freeze(["serial_relay"]);
   const hardwareDebugPermissionKeys = Object.freeze(["read", "write"]);
   const supervisionAskUserGateDefs = Object.freeze([
     Object.freeze(["real_ui_validation", "Real UI/device"]),
@@ -231,6 +232,20 @@
     };
   }
 
+  function normalizeHardwareResource(value, index = 0) {
+    if (!value || typeof value !== "object") return null;
+    const type = String(value.type || value.kind || "").trim().toLowerCase().replaceAll("-", "_");
+    if (!hardwareResourceTypes.includes(type)) return null;
+    return {
+      id: String(value.id || `relay-${index + 1}`),
+      type,
+      label: String(value.label || value.title || value.id || `Relay ${index + 1}`),
+      device: String(value.device || value.port || value.path || ""),
+      baudrate: Number(value.baudrate || value.baud || 9600) || 9600,
+      channel: String(value.channel || "")
+    };
+  }
+
   function legacyHardwareDebugChannels(policy) {
     if (!policy || typeof policy !== "object" || !policy.enabled) return [];
     const devices = Array.isArray(policy.devices)
@@ -266,7 +281,7 @@
   function taskHardwareDebugPolicy(task) {
     const policy = task?.hardware_debug && typeof task.hardware_debug === "object" ? task.hardware_debug : {};
     if (Object.prototype.hasOwnProperty.call(policy, "mode")) {
-      const mode = ["off", "serial", "network", "both"].includes(String(policy.mode)) ? String(policy.mode) : "off";
+      const mode = ["off", "serial", "network", "both", "tools"].includes(String(policy.mode)) ? String(policy.mode) : "off";
       return {
         mode,
         enabled: mode !== "off",
@@ -284,7 +299,8 @@
         },
         permissions: {
           access: hardwareDebugAccess(policy.permissions, mode === "off" ? "read_only" : "read_write")
-        }
+        },
+        resources: (Array.isArray(policy.resources) ? policy.resources : []).map(normalizeHardwareResource).filter(Boolean)
       };
     }
     const rawChannels = Array.isArray(policy.channels) ? policy.channels : [];
@@ -316,13 +332,17 @@
       },
       permissions: {
         access: channels.some(channel => channel.permissions?.write) ? "read_write" : "read_only"
-      }
+      },
+      resources: []
     };
   }
 
   function taskHardwareDebugSummary(task) {
     const policy = taskHardwareDebugPolicy(task);
-    return policy.enabled ? `${policy.mode} · ${policy.permissions.access.replace("_", "-")}` : "off";
+    const resourceCount = policy.resources.length;
+    return policy.enabled
+      ? `${policy.mode} · ${policy.permissions.access.replace("_", "-")}${resourceCount ? ` · ${resourceCount} tool${resourceCount === 1 ? "" : "s"}` : ""}`
+      : "off";
   }
 
   function taskSupervisionPayloadFromMode(selectedMode, maxRoundsValue, askUserGates, hostOptions = {}) {
@@ -351,6 +371,7 @@
     defaultTaskSupervisionMaxRounds,
     defaultTaskContextThresholdPercent,
     hardwareDebugChannelTypes,
+    hardwareResourceTypes,
     hardwareDebugPermissionKeys,
     supervisionAskUserGateDefs,
     collaborationModeDescription,
@@ -376,6 +397,7 @@
     normalizeHardwareDebugPermissions,
     hardwareDebugAccess,
     normalizeHardwareDebugChannel,
+    normalizeHardwareResource,
     splitTaskSkillPaths,
     taskSkillsPolicy,
     taskSkillsSummary,

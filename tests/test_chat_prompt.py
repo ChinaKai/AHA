@@ -755,6 +755,21 @@ class ChatPromptTests(unittest.TestCase):
                     "task-001",
                     enabled_paths=["/repo/.aha/skills/board-debug/SKILL.md"],
                 )
+                update_task_hardware_debug_config(
+                    root,
+                    run_id,
+                    "task-001",
+                    resources=[
+                        {
+                            "id": "power",
+                            "type": "serial_relay",
+                            "label": "Board power",
+                            "device": "COM7",
+                            "baudrate": 9600,
+                            "channel": "1",
+                        }
+                    ],
+                )
                 item = append_message(root, run_id, "main", "use hardware", sender="browser", task_id="task-001", role="main")
                 prompt, full_metrics = chat_prompt_with_metrics(root, run_id, "main", item, "")
                 session_file = run_dir(root, run_id) / "tasks" / "task-001" / "sessions" / "main.json"
@@ -783,6 +798,9 @@ class ChatPromptTests(unittest.TestCase):
         self.assertIn("baudrate=115200", prompt)
         self.assertIn("login username: admin", prompt)
         self.assertIn("login password configured: True", prompt)
+        self.assertIn("relay resource: id=power", prompt)
+        self.assertIn("device=COM7", prompt)
+        self.assertIn("owner=enabled relay skill/tool (not the terminal bridge)", prompt)
         self.assertIn("aha hardware-file-send <run> <task>", prompt)
         self.assertIn("--channel network", prompt)
         self.assertIn("`mode=both` still supports file transfer", prompt)

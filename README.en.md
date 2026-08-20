@@ -106,23 +106,63 @@ a user systemd service.
 
 ## Windows Installation and Startup
 
-Run the following commands in PowerShell. Install Python first; skip this step
-if Python 3.10 or newer is already installed:
-
-```powershell
-winget install --id Python.Python.3.12 -e
-# Reopen PowerShell
-```
-
-Download the official installer. It creates an isolated Python environment,
-installs the onebin, and starts the AHA system tray application without a
-console window:
+Run the following commands in PowerShell. The default `Full` mode creates an
+isolated Python environment, verifies and installs the onebin, installs Git plus
+serial and Feishu modules, and installs Codex and its Node.js runtime when no
+Codex or Claude CLI is available. The larger Playwright/Chromium payload is not
+downloaded by default. Agent login and credentials always remain user-managed:
 
 ```powershell
 $Installer = Join-Path $env:TEMP "install_aha.ps1"
 Invoke-WebRequest "https://github.com/ChinaKai/AHA/releases/latest/download/install_windows.ps1" -OutFile $Installer
 powershell.exe -ExecutionPolicy Bypass -File $Installer
 ```
+
+Installation modes:
+
+| Mode | Behavior |
+| --- | --- |
+| `Full` (default) | Installs Python, Git, pyserial, Feishu SDK, and at least one Agent CLI; adds Node.js when Codex needs it, without downloading Chromium |
+| `Minimal` | Creates the runtime and installs only the AHA onebin |
+| `Offline` | Disables downloads and reads the onebin, wheels, browser, and optional Python installer from a local directory |
+
+Common examples:
+
+```powershell
+& $Installer -Mode Minimal
+& $Installer -Mode Full -AgentBackend Claude
+& $Installer -Mode Full -AgentBackend Both
+& $Installer -Mode Full -WithBrowser
+& $Installer -Mode Minimal -Modules Browser,Hardware
+& $Installer -Mode Full -Repair
+```
+
+The installer writes `%LOCALAPPDATA%\AHA\install-report.json` with the core
+version, SHA-256 result, Python path, module status, and remaining login or
+configuration actions. Optional module failures are reported without rolling
+back the installed core; pass `-StrictModules` to fail when any requested
+module is unavailable. Install the shared browser explicitly with `-WithBrowser`
+or `-Modules Browser`; the first Chromium install commonly downloads several
+hundred MB. `-SkipBrowserDownload` installs only the Playwright Python module.
+
+Offline bundle layout:
+
+```text
+D:\AHA-offline\
+  aha
+  SHA256SUMS
+  python-installer.exe      # only needed when Python is absent
+  wheels\                  # Playwright, pyserial, lark-channel-sdk and dependencies
+  ms-playwright\           # only for -WithBrowser / -Modules Browser
+```
+
+```powershell
+& $Installer -Mode Offline -OfflineDir D:\AHA-offline -AgentBackend None
+```
+
+Offline mode never downloads an Agent CLI. Preinstall Codex/Claude, or use
+`-AgentBackend None` to skip the Agent CLI requirement. No mode writes model
+credentials or performs third-party login.
 
 The tray uses the AHA logo. Double-click it to open AHA. Its context menu can
 open the dashboard, restart the service, toggle "Start at login", or exit. The
@@ -148,21 +188,17 @@ administrator privileges. In tray mode, Git checks, backend discovery, and
 other helper processes started by Web requests run without flashing console
 windows.
 
-Install at least one of Codex and Claude:
+Full mode detects existing Codex/Claude installations. When neither is found,
+`-AgentBackend Auto` installs Codex. Run the selected CLI once to complete
+login:
 
 ```powershell
-# Codex: reopen PowerShell after installing Node.js
-winget install --id OpenJS.NodeJS.LTS -e
-npm install --global @openai/codex
 codex
-
-# Claude Code
-winget install --id Anthropic.ClaudeCode -e
 claude
 ```
 
-Claude Code works directly in PowerShell on Windows. For Bash support, also run
-`winget install --id Git.Git -e`.
+Claude Code works directly in PowerShell. Full mode also installs Git for
+Knowledge synchronization and Bash-oriented workflows.
 
 When an agent needs a preview server, watcher, or tunnel to survive across chat
 turns, use an AHA Web-managed process instead of the Codex/Claude tool's own
@@ -178,7 +214,8 @@ Inside an AHA backend session, run/task/agent scope is inherited from the
 environment. A managed process survives model turns but is stopped cleanly when
 its task becomes terminal or the AHA Web service restarts/exits.
 
-Optional features:
+Advanced users can still maintain modules directly in the AHA venv; this is
+normally unnecessary:
 
 ```powershell
 $AhaPython = "$env:USERPROFILE\.venvs\aha\Scripts\python.exe"

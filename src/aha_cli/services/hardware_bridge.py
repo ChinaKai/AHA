@@ -101,7 +101,7 @@ _CONTROL_OFFSET_PERSIST_INTERVAL = 1.0
 
 
 def task_devices(task: dict) -> list[tuple[str, int]]:
-    """Serial devices a task references through its UART hardware channels."""
+    """Terminal UART devices referenced by a task; skill-owned relay ports stay free."""
 
     hardware = normalize_task_hardware_debug(task.get("hardware_debug"))
     if hardware.get("mode") not in {"serial", "both"}:
@@ -109,6 +109,45 @@ def task_devices(task: dict) -> list[tuple[str, int]]:
     serial = hardware.get("serial") if isinstance(hardware.get("serial"), dict) else {}
     device = str(serial.get("device") or "").strip()
     return [(device, int(serial.get("baudrate") or 115200))] if device else []
+
+
+def task_serial_resource_target(task: dict, resource_id: object) -> tuple[str, int] | None:
+    hardware = normalize_task_hardware_debug(task.get("hardware_debug"))
+    if hardware.get("mode") == "off":
+        return None
+    requested = str(resource_id or "").strip().lower()
+    if not requested:
+        return None
+    resources = hardware.get("resources") if isinstance(hardware.get("resources"), list) else []
+    resource = next(
+        (
+            item
+            for item in resources
+            if isinstance(item, dict)
+            and str(item.get("id") or "").strip().lower() == requested
+            and item.get("type") == "serial_relay"
+        ),
+        None,
+    )
+    if not resource:
+        return None
+    device = str(resource.get("device") or "").strip()
+    return (device, int(resource.get("baudrate") or 9600)) if device else None
+
+
+def task_referenced_serial_devices(task: dict) -> list[tuple[str, int]]:
+    devices = list(task_devices(task))
+    hardware = normalize_task_hardware_debug(task.get("hardware_debug"))
+    if hardware.get("mode") == "off":
+        return devices
+    for resource in hardware.get("resources") or []:
+        if not isinstance(resource, dict) or resource.get("type") != "serial_relay":
+            continue
+        device = str(resource.get("device") or "").strip()
+        target = (device, int(resource.get("baudrate") or 9600))
+        if device and target not in devices:
+            devices.append(target)
+    return devices
 
 
 def device_referenced_by_active_task(root: Path, device: str) -> bool:
@@ -133,7 +172,7 @@ def device_referenced_by_active_task(root: Path, device: str) -> bool:
             for task in plan.get("tasks") or []:
                 if task.get("deleted_at") or str(task.get("status")) in _TERMINAL_TASK_STATUSES:
                     continue
-                if any(dev == device for dev, _ in task_devices(task)):
+                if any(dev == device for dev, _ in task_referenced_serial_devices(task)):
                     return True
         return False
     except Exception:
@@ -1147,4 +1186,7 @@ __all__ = [
     "read_bridge_state",
     "set_parent_death_signal",
     "stop_all_hardware_bridges",
+    "task_devices",
+    "task_referenced_serial_devices",
+    "task_serial_resource_target",
 ]

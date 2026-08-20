@@ -172,12 +172,45 @@ class TaskSchemaTests(unittest.TestCase):
                 "serial": {"device": "/dev/ttyUSB0", "baudrate": 9600},
                 "network": {"device_ip": "192.168.1.21"},
                 "credentials": {"username": "admin", "password": "pw"},
+                "resources": [
+                    {
+                        "id": "Power Relay",
+                        "type": "serial_relay",
+                        "label": "Board power",
+                        "device": "/dev/ttyUSB1",
+                        "baudrate": 9600,
+                        "channel": 1,
+                    }
+                ],
             }
         )
         self.assertEqual(canonical["mode"], "network")
         self.assertEqual(canonical["serial"]["baudrate"], 9600)
         self.assertEqual(canonical["network"]["device_ip"], "192.168.1.21")
         self.assertEqual(canonical["permissions"], {"access": "read_write"})
+        self.assertEqual(
+            canonical["resources"],
+            [
+                {
+                    "id": "power-relay",
+                    "type": "serial_relay",
+                    "label": "Board power",
+                    "device": "/dev/ttyUSB1",
+                    "baudrate": 9600,
+                    "channel": "1",
+                }
+            ],
+        )
+
+        tools_only = normalize_task_hardware_debug(
+            {
+                "mode": "tools",
+                "resources": [{"id": "power", "type": "relay", "port": "COM7"}],
+                "permissions": {"access": "read_write"},
+            }
+        )
+        self.assertEqual(tools_only["mode"], "tools")
+        self.assertEqual(tools_only["resources"][0]["type"], "serial_relay")
 
         explicit_read_only = normalize_task_hardware_debug(
             {

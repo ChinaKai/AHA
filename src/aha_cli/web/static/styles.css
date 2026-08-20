@@ -3465,6 +3465,48 @@ body.auth-required .login-view:not(.hidden) {
   display: grid;
   gap: 10px;
 }
+.hardware-resource-editor,
+.hardware-resource-list {
+  display: grid;
+  gap: 7px;
+}
+.hardware-resource-editor {
+  padding-top: 8px;
+  border-top: 1px solid var(--color-border-subtle);
+}
+.hardware-resource-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.hardware-resource-heading > button,
+.hardware-resource-remove {
+  width: auto;
+  min-height: 28px;
+  padding: 0 9px;
+}
+.hardware-resource-card {
+  display: grid;
+  grid-template-columns: minmax(90px, 0.8fr) minmax(110px, 1.2fr) minmax(110px, 1fr) minmax(84px, 0.65fr) minmax(70px, 0.55fr) auto;
+  gap: 6px;
+  align-items: end;
+  padding: 8px;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+}
+.hardware-resource-card .field-label {
+  min-width: 0;
+}
+@media (max-width: 820px) {
+  .hardware-resource-card {
+    grid-template-columns: 1fr 1fr;
+  }
+  .hardware-resource-remove {
+    grid-column: 1 / -1;
+  }
+}
 .browser-control-settings {
   display: grid;
   gap: 10px;

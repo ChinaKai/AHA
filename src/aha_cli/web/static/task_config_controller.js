@@ -447,6 +447,43 @@
       }
     }
 
+    function readHardwareResources(form = els.taskHardwareFormEl) {
+      return Array.from(form?.querySelectorAll("[data-hardware-resource]") || []).map((row, index) => {
+        const value = key => String(row.querySelector(`[data-hardware-resource-field="${key}"]`)?.value || "").trim();
+        return {
+          id: value("id") || `relay-${index + 1}`,
+          type: "serial_relay",
+          label: value("label") || value("id") || `Relay ${index + 1}`,
+          device: value("device"),
+          baudrate: Number(value("baudrate") || "9600") || 9600,
+          channel: value("channel")
+        };
+      });
+    }
+
+    function hardwareResourceCard(resource = {}, index = 0) {
+      const field = (key, label, value, attributes = "") => `
+        <label class="field-label">
+          <span>${escapeHtml(label)}</span>
+          <input data-hardware-resource-field="${key}" value="${escapeHtml(value)}" ${attributes}>
+        </label>`;
+      return `
+        <div class="hardware-resource-card" data-hardware-resource>
+          ${field("id", t("task.hardware_resource_id", "Resource ID"), resource.id || `relay-${index + 1}`)}
+          ${field("label", t("task.hardware_resource_label", "Label"), resource.label || `Relay ${index + 1}`)}
+          ${field("device", t("task.hardware_resource_device", "Relay serial device"), resource.device || "", 'list="aha-serial-ports" placeholder="COM4"')}
+          ${field("baudrate", t("task.hardware_resource_baudrate", "Baudrate"), resource.baudrate || 9600, 'type="number" min="1"')}
+          ${field("channel", t("task.hardware_resource_channel", "Channel"), resource.channel || "", 'placeholder="1"')}
+          <button type="button" class="hardware-resource-remove" data-hardware-resource-remove>${escapeHtml(t("task.hardware_resource_remove", "Remove"))}</button>
+        </div>`;
+    }
+
+    function renderHardwareResources(resources = []) {
+      const list = els.taskHardwareFormEl?.querySelector("[data-hardware-resource-list]");
+      if (!list) return;
+      list.innerHTML = resources.map(hardwareResourceCard).join("");
+    }
+
     function syncTaskHardwareDebugFields(options = {}) {
       const disabled = Boolean(options.disabled);
       const form = els.taskHardwareFormEl;
@@ -465,6 +502,10 @@
       form?.querySelectorAll('[data-hardware-field^="network."]').forEach(input => { input.disabled = disabled || !network; });
       form?.querySelectorAll('[data-hardware-field^="credentials."]').forEach(input => { input.disabled = disabled || !enabled; });
       form?.querySelectorAll("[data-hardware-permission]").forEach(input => { input.disabled = disabled || !enabled; });
+      form?.querySelectorAll("[data-hardware-resource-field], [data-hardware-resource-add], [data-hardware-resource-remove]").forEach(input => {
+        input.disabled = disabled || !enabled;
+      });
+      if (enabled) loadSerialPortOptions();
       const submit = els.taskHardwareFormEl?.querySelector('button[type="submit"]');
       if (submit) submit.disabled = disabled;
     }
@@ -478,6 +519,7 @@
       form?.querySelectorAll("[data-hardware-field]").forEach(input => {
         input.value = input.defaultValue || "";
       });
+      renderHardwareResources([]);
     }
 
     function setTaskHardwarePolicy(policy = {}) {
@@ -501,6 +543,7 @@
       }
       const access = form?.querySelector('[data-hardware-permission="access"]');
       if (access) access.value = policy.permissions?.access || "read_only";
+      renderHardwareResources(policy.resources || []);
     }
 
     function renderTaskHardwareEditor(taskArg) {
@@ -787,6 +830,7 @@
         serial: { device: value("serial.device"), baudrate: Number(value("serial.baudrate") || "115200") || 115200 },
         network: { device_ip: value("network.device_ip") },
         credentials,
+        resources: readHardwareResources(form),
         permissions: {
           access: String(form?.querySelector('[data-hardware-permission="access"]')?.value || "read_only")
         }
@@ -909,6 +953,19 @@
         markTaskHardwareEditing();
         if (event.target instanceof Element && event.target.matches("[data-hardware-mode]")) {
           syncTaskHardwareDebugFields();
+        }
+      });
+      els.taskHardwareFormEl?.addEventListener("click", event => {
+        const target = event.target instanceof Element ? event.target : null;
+        if (target?.closest("[data-hardware-resource-add]")) {
+          const resources = readHardwareResources();
+          resources.push({ id: `relay-${resources.length + 1}`, type: "serial_relay", label: `Relay ${resources.length + 1}`, device: "", baudrate: 9600, channel: "" });
+          renderHardwareResources(resources);
+          syncTaskHardwareDebugFields();
+          markTaskHardwareEditing();
+        } else if (target?.closest("[data-hardware-resource-remove]")) {
+          target.closest("[data-hardware-resource]")?.remove();
+          markTaskHardwareEditing();
         }
       });
       els.taskHardwareFormEl?.addEventListener("submit", async event => {

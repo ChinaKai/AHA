@@ -337,6 +337,56 @@ class ServiceInstallerTests(unittest.TestCase):
 
 
 class WindowsServiceInstallerContractTests(unittest.TestCase):
+    def test_windows_installer_supports_full_minimal_offline_and_repair_modes(self) -> None:
+        installer = INSTALL_WINDOWS.read_text(encoding="utf-8")
+
+        self.assertIn('[ValidateSet("Minimal", "Full", "Offline")][string]$Mode = "Full"', installer)
+        self.assertIn('[ValidateSet("Auto", "Codex", "Claude", "Both", "None")]', installer)
+        self.assertIn('[ValidateSet("Browser", "Hardware", "Feishu")][string[]]$Modules', installer)
+        self.assertIn('[switch]$Repair', installer)
+        self.assertIn('[switch]$StrictModules', installer)
+        self.assertIn('[switch]$WithBrowser', installer)
+        self.assertIn('@("Hardware", "Feishu")', installer)
+        self.assertIn('$RequestedModules = @($RequestedModules + "Browser")', installer)
+        self.assertIn('Optional; rerun with -WithBrowser or -Modules Browser', installer)
+        self.assertIn('-Mode Offline requires -OfflineDir', installer)
+        self.assertIn('Join-Path $OfflineRoot "wheels"', installer)
+        self.assertIn('Join-Path $OfflineRoot "ms-playwright"', installer)
+        self.assertIn('Join-Path $OfflineRoot "python-installer.exe"', installer)
+        self.assertIn('"--no-index", "--find-links"', installer)
+        self.assertIn('network installation is disabled', installer)
+        self.assertLess(
+            installer.index('network installation is disabled'),
+            installer.index('Install-AhaWingetPackage -PackageId "Python.Python.3.12"'),
+        )
+
+    def test_windows_full_installer_manages_modules_agents_and_integrity_without_login(self) -> None:
+        installer = INSTALL_WINDOWS.read_text(encoding="utf-8")
+
+        self.assertIn('"playwright>=1.45,<2"', installer)
+        self.assertIn('"pyserial>=3.5"', installer)
+        self.assertIn('"lark-channel-sdk>=1.2,<2"', installer)
+        self.assertIn('OpenJS.NodeJS.LTS', installer)
+        self.assertIn('@openai/codex', installer)
+        self.assertIn('Anthropic.ClaudeCode', installer)
+        self.assertIn('Git.Git', installer)
+        self.assertIn('login remains user-managed', installer)
+        self.assertNotIn('codex login', installer.casefold())
+        self.assertNotIn('claude login', installer.casefold())
+        self.assertIn('Get-FileHash -LiteralPath $Path -Algorithm SHA256', installer)
+        self.assertIn('install-report.json', installer)
+        self.assertIn('schema_version = 1', installer)
+        self.assertIn('$installExitCode = $LASTEXITCODE', installer)
+
+    def test_windows_strict_dependency_failure_happens_after_service_restart(self) -> None:
+        installer = INSTALL_WINDOWS.read_text(encoding="utf-8")
+
+        restart_index = installer.index(
+            'Start-ScheduledTask -TaskPath $StartupTaskPath -TaskName $StartupTaskName'
+        )
+        strict_index = installer.index('if ($StrictModules -and -not $ModuleInstallOk)')
+        self.assertLess(restart_index, strict_index)
+
     def test_windows_installer_uses_prelogin_user_task_and_idempotent_cleanup(self) -> None:
         installer = INSTALL_WINDOWS.read_text(encoding="utf-8")
 

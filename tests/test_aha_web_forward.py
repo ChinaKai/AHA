@@ -100,6 +100,7 @@ class AhaWebForwardCliTests(unittest.TestCase):
                 self.assertEqual(path, "/api/task/task-001/hardware-send")
                 self.assertEqual(query, {"run_id": run_id})
                 self.assertEqual(payload["data"], "printenv\\r")
+                self.assertEqual(payload["resource"], "power")
                 return {"ok": True, "device": "COM3", "record": {"id": 1}}
 
             with (
@@ -116,6 +117,8 @@ class AhaWebForwardCliTests(unittest.TestCase):
                     "task-001",
                     "--data",
                     "printenv\\r",
+                    "--resource",
+                    "power",
                     aha_home=root,
                 )
 

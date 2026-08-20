@@ -30,6 +30,9 @@ from aha_cli.services.hardware_bridge import (
     pid_alive,
     read_bridge_state,
     stop_all_hardware_bridges,
+    task_devices,
+    task_referenced_serial_devices,
+    task_serial_resource_target,
 )
 from aha_cli.store.io import append_jsonl, iter_jsonl_from
 from aha_cli.services.serial_lock import SerialDeviceBusyError
@@ -60,6 +63,24 @@ def _wait_until(predicate, *, timeout: float) -> bool:
 
 
 class DeviceKeyTests(unittest.TestCase):
+    def test_task_devices_excludes_skill_owned_relay_serial_ports(self) -> None:
+        task = {
+            "hardware_debug": {
+                "mode": "serial",
+                "serial": {"device": "/dev/ttyUSB0", "baudrate": 115200},
+                "resources": [
+                    {"id": "power", "type": "serial_relay", "device": "/dev/ttyUSB1", "baudrate": 9600}
+                ],
+            }
+        }
+
+        self.assertEqual(task_devices(task), [("/dev/ttyUSB0", 115200)])
+        self.assertEqual(task_serial_resource_target(task, "power"), ("/dev/ttyUSB1", 9600))
+        self.assertEqual(
+            task_referenced_serial_devices(task),
+            [("/dev/ttyUSB0", 115200), ("/dev/ttyUSB1", 9600)],
+        )
+
     def test_device_key_is_filesystem_safe(self) -> None:
         self.assertEqual(device_key("/dev/ttyUSB0"), "dev-ttyUSB0")
         self.assertEqual(device_key("/dev/serial/by-id/usb-X"), "dev-serial-by-id-usb-X")

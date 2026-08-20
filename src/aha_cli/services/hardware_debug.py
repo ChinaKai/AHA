@@ -14,6 +14,7 @@ def hardware_debug_context_for_prompt(task: dict) -> str:
     network = config.get("network") if isinstance(config.get("network"), dict) else {}
     credentials = config.get("credentials") if isinstance(config.get("credentials"), dict) else {}
     permissions = config.get("permissions") if isinstance(config.get("permissions"), dict) else {}
+    resources = config.get("resources") if isinstance(config.get("resources"), list) else []
     lines.append(f"- access permission: {permissions.get('access') or 'read_only'}")
     if mode in {"serial", "both"}:
         lines.append(
@@ -24,6 +25,17 @@ def hardware_debug_context_for_prompt(task: dict) -> str:
         lines.append(
             f"- network terminal: device_ip={network.get('device_ip') or '(missing)'}, "
             "transport=discover (SSH 22 preferred, Telnet 23 fallback)"
+        )
+    for resource in resources:
+        if not isinstance(resource, dict) or resource.get("type") != "serial_relay":
+            continue
+        lines.append(
+            f"- relay resource: id={resource.get('id') or '(missing)'}, "
+            f"label={resource.get('label') or resource.get('id') or '(unnamed)'}, "
+            f"device={resource.get('device') or '(missing)'}, "
+            f"baudrate={int(resource.get('baudrate') or 9600)}, "
+            f"channel={resource.get('channel') or '(skill-defined)'}, "
+            "owner=enabled relay skill/tool (not the terminal bridge)"
         )
     username = str(credentials.get("username") or "").strip()
     if username:

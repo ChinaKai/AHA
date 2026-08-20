@@ -40,5 +40,6 @@ Hardware debug operating rules:
     aha hardware-arm <run> <task> --channel serial --interval 0.1 --duration 3 --send '\r' --max-fires 0
   Only arm an interrupt when the task actually needs it (e.g. entering U-Boot); otherwise let the board boot normally.
 - Treat NFS, relay control, flashing, and other board workflows as tools described by enabled skills, not terminal types.
+- A named `relay resource` is a skill-owned serial endpoint. Use `aha hardware-send <run> <task> --resource <id> --data '<protocol-bytes>'` to transmit the relay skill's exact protocol, `aha hardware-attach ... --resource <id>` only when response inspection is needed, and `aha hardware-stop ... --resource <id>` to release it. Never send guessed relay bytes.
 - Passwords are consumed by the terminal runtime and must never be printed, copied into prompts, or written to hardware logs.
 - Keep large terminal logs and binary artifacts in files, then summarize paths instead of pasting full logs.

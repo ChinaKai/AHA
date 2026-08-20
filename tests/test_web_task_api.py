@@ -304,6 +304,16 @@ class WebTaskApiTests(unittest.TestCase):
                                 "serial": {"device": "/dev/ttyUSB0", "baudrate": "115200"},
                                 "network": {"device_ip": "192.168.1.20"},
                                 "credentials": {"username": "admin", "password": "telnetpw"},
+                                "resources": [
+                                    {
+                                        "id": "power",
+                                        "type": "serial_relay",
+                                        "label": "Board power",
+                                        "device": "COM7",
+                                        "baudrate": 9600,
+                                        "channel": "1",
+                                    }
+                                ],
                                 "permissions": {"access": "read_only"},
                             },
                         },
@@ -358,6 +368,8 @@ class WebTaskApiTests(unittest.TestCase):
         self.assertEqual(hardware["network"], {"device_ip": "192.168.1.20"})
         self.assertEqual(hardware["credentials"], {"username": "admin", "password": "", "password_configured": True})
         self.assertEqual(hardware["permissions"], {"access": "read_only"})
+        self.assertEqual(hardware["resources"][0]["id"], "power")
+        self.assertEqual(hardware["resources"][0]["device"], "COM7")
         self.assertNotIn("channels", hardware)
         self.assertTrue(update_body["ok"])
         self.assertEqual(update_body["task"]["hardware_debug"]["mode"], "network")
@@ -365,6 +377,7 @@ class WebTaskApiTests(unittest.TestCase):
         self.assertEqual(skills_body["task"]["task_skills"]["enabled_paths"], ["/repo/.aha/skills/board-debug/SKILL.md", "/repo/.aha/skills/log/SKILL.md"])
         self.assertEqual(update_body["task"]["hardware_debug"]["network"]["device_ip"], "192.168.1.21")
         self.assertEqual(update_body["task"]["hardware_debug"]["permissions"], {"access": "read_write"})
+        self.assertEqual(update_body["task"]["hardware_debug"]["resources"][0]["channel"], "1")
         self.assertEqual(stored_password, "telnetpw")
         self.assertEqual(status_task["hardware_debug"]["credentials"]["password"], "")
         self.assertTrue(status_task["hardware_debug"]["credentials"]["password_configured"])
@@ -374,6 +387,7 @@ class WebTaskApiTests(unittest.TestCase):
         self.assertEqual(hardware_events[-1]["data"]["mode"], "network")
         self.assertEqual(hardware_events[-1]["data"]["transports"], ["network"])
         self.assertEqual(hardware_events[-1]["data"]["access"], "read_write")
+        self.assertEqual(hardware_events[-1]["data"]["resource_count"], 1)
         self.assertEqual(skills_events[-1]["data"]["task_id"], task_id)
         self.assertEqual(skills_events[-1]["data"]["skill_count"], 2)
 

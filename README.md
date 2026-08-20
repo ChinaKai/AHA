@@ -105,20 +105,69 @@ Linux 后台运行可使用 [`scripts/install_user_service.sh`](scripts/install_
 
 ## Windows 安装与启动
 
-以下命令在 PowerShell 中运行。先安装 Python（已安装 3.10+ 可跳过）：
-
-```powershell
-winget install --id Python.Python.3.12 -e
-# 安装完成后重新打开 PowerShell
-```
-
-下载官方安装脚本。脚本会创建独立 Python 环境、安装 onebin，并立即以无控制台窗口的方式启动 AHA 托盘：
+以下命令在 PowerShell 中运行。下载官方安装脚本后直接执行即可；默认 `Full`
+模式会自动创建独立 Python 环境、校验并安装 onebin、补齐 Git、串口和飞书 Python
+模块，并在本机没有 Codex/Claude 时安装 Codex CLI 及其 Node.js 运行时。体积较大的
+Playwright/Chromium 默认不下载。第三方 CLI
+登录和凭据配置始终由用户自行完成，安装器不会代为登录：
 
 ```powershell
 $Installer = Join-Path $env:TEMP "install_aha.ps1"
 Invoke-WebRequest "https://github.com/ChinaKai/AHA/releases/latest/download/install_windows.ps1" -OutFile $Installer
 powershell.exe -ExecutionPolicy Bypass -File $Installer
 ```
+
+安装模式：
+
+| 模式 | 行为 |
+| --- | --- |
+| `Full`（默认） | 自动安装 Python、Git、pyserial、飞书 SDK，并确保至少一个 Agent CLI；Codex 缺失时补 Node.js，不默认下载 Chromium |
+| `Minimal` | 只创建运行环境并安装 AHA onebin，保持原有轻量安装行为 |
+| `Offline` | 禁止联网，只从本地离线目录读取 onebin、wheel、浏览器和可选 Python 安装器 |
+
+常用示例：
+
+```powershell
+# 轻量安装
+& $Installer -Mode Minimal
+
+# Full 模式改装 Claude，或同时安装两个 Agent CLI
+& $Installer -Mode Full -AgentBackend Claude
+& $Installer -Mode Full -AgentBackend Both
+
+# 需要共享浏览器时显式安装 Playwright/Chromium
+& $Installer -Mode Full -WithBrowser
+
+# 只安装指定模块；可选值为 Browser、Hardware、Feishu
+& $Installer -Mode Minimal -Modules Browser,Hardware
+
+# 幂等修复；重新校验 onebin，并补齐缺失依赖
+& $Installer -Mode Full -Repair
+```
+
+安装结果写入 `%LOCALAPPDATA%\AHA\install-report.json`，包含核心版本、SHA-256、
+Python 路径、各模块状态和需要用户执行的登录/配置步骤。默认采用尽力安装：核心安装
+成功后，单个可选模块失败会在报告中标出；传入 `-StrictModules` 可让任意请求模块失败时
+返回错误。共享浏览器通过 `-WithBrowser` 或 `-Modules Browser` 按需安装，首次安装通常
+会下载数百 MB Chromium 资源；`-SkipBrowserDownload` 可只安装 Playwright Python 模块。
+
+离线目录结构如下；`SHA256SUMS` 中的 `aha` 校验值会在替换安装文件前验证：
+
+```text
+D:\AHA-offline\
+  aha
+  SHA256SUMS
+  python-installer.exe      # 仅目标机没有 Python 时需要
+  wheels\                  # playwright / pyserial / lark-channel-sdk 及其依赖 wheel
+  ms-playwright\           # 仅 -WithBrowser / -Modules Browser 时需要
+```
+
+```powershell
+& $Installer -Mode Offline -OfflineDir D:\AHA-offline -AgentBackend None
+```
+
+离线模式不会下载安装 Agent CLI；目标机应预装 Codex/Claude，或显式使用
+`-AgentBackend None` 跳过 Agent CLI 检查。无论哪种模式，安装器都不会写入模型凭据。
 
 托盘使用 AHA Logo。双击图标可打开 AHA；右键菜单可打开面板、重启服务，并通过“无需解锁开机启动”直接创建或删除 `AtStartup` 计划任务，也可在“设置…”中修改 `AHA_HOME`、Bind 地址、Port 和 Web Token。首次勾选时会依次显示 UAC 管理员授权和当前 Windows 账户凭据窗口；成功后 AHA Web 在下次开机时无需登录或解锁即可启动，HKCU Run 仍负责登录后显示托盘。保存设置后 Web 服务会自动重启；未启用计划任务时，选择“退出 AHA”会结束完整 Web 进程树并释放监听端口。也可在安装时直接启用：
 
@@ -146,21 +195,16 @@ powershell.exe -ExecutionPolicy Bypass -File $Installer -Uninstall
 
 未启用 `-EnableStartup` 时仍保持原有托盘/快捷方式使用方式。托盘模式下，Web 请求触发的 Git、后端探测和其他辅助进程会以无控制台窗口方式运行。
 
-Codex 和 Claude 至少安装一个：
+Full 模式会检测现有 Codex/Claude；若两者都不存在，`-AgentBackend Auto` 默认安装
+Codex。安装完成后只需手动运行对应命令完成登录：
 
 ```powershell
-# Codex：安装 Node.js 后重新打开 PowerShell
-winget install --id OpenJS.NodeJS.LTS -e
-npm install --global @openai/codex
 codex
-
-# Claude Code
-winget install --id Anthropic.ClaudeCode -e
 claude
 ```
 
-Claude Code 在 Windows 可直接使用 PowerShell；如需 Bash，可额外执行
-`winget install --id Git.Git -e`。
+Claude Code 在 Windows 可直接使用 PowerShell；Full 模式同时安装 Git，可供 Knowledge
+同步和 Bash 工作流使用。
 
 Agent 需要启动跨对话回合存活的预览服务、watcher 或 tunnel 时，应使用 AHA Web 托管进程，而不是 Codex/Claude 工具自身的后台任务：
 
@@ -172,7 +216,7 @@ aha managed-process stop preview
 
 在 AHA backend session 内，run/task/agent 范围由环境变量自动继承。托管进程随模型回合保持运行，但所属任务进入终态或 AHA Web 服务重启/退出时会受控停止。
 
-可选能力：
+高级用户仍可直接在 AHA venv 中维护模块；通常无需手动执行：
 
 ```powershell
 $AhaPython = "$env:USERPROFILE\.venvs\aha\Scripts\python.exe"

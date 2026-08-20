@@ -408,6 +408,18 @@ export path, board mount path, module-loading requirements, and cleanup workflow
 belong in an enabled board skill. Reset, entering U-Boot, relay control,
 flashing, and env inspection likewise remain skill/tool workflows.
 
+`hardware_debug.resources` adds named skill-owned hardware endpoints without
+turning them into Web Terminal transports. The initial resource type is
+`serial_relay`, with `id`, `label`, `device`, `baudrate`, and optional `channel`.
+The primary `serial` device remains the board console; relay devices are not
+opened during normal terminal startup. An enabled relay skill sends its
+protocol bytes through `aha hardware-send <run> <task> --resource <id> --data '<bytes>'`,
+which lets a WSL backend route the request to the Windows-owned serial
+bridge. `hardware-attach` and `hardware-stop` accept the same `--resource` for
+bounded response inspection and explicit release. The bridge lifecycle still
+tracks active task references, while relay protocol, timing, safety checks, and
+power-cycle policy remain the skill's responsibility.
+
 Legacy `enabled`/`devices`/`channels` payloads remain accepted as compatibility
 input. UART becomes `serial`; Telnet becomes `network`; an old NFS server is
 used only as a migration fallback for the board IP. Newly saved task state uses

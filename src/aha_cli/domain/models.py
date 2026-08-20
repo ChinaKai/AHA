@@ -346,8 +346,9 @@ TASK_COLLABORATION_DEFAULTS = {
 DEFAULT_TASK_SANDBOX = "danger-full-access"
 DEFAULT_TASK_SUPERVISION_MAX_ROUNDS = 99
 DEFAULT_TASK_CONTEXT_THRESHOLD_PERCENT = 75
-TASK_HARDWARE_DEBUG_MODES = ("off", "serial", "network", "both")
+TASK_HARDWARE_DEBUG_MODES = ("off", "serial", "network", "both", "tools")
 TASK_HARDWARE_DEBUG_ACCESS_MODES = ("read_only", "read_write")
+TASK_HARDWARE_RESOURCE_TYPES = ("serial_relay",)
 # Compatibility-only input vocabulary. New task state uses mode/serial/network/credentials.
 TASK_HARDWARE_DEBUG_CHANNEL_TYPES = ("uart", "nfs", "telnet")
 TASK_HARDWARE_DEBUG_PERMISSION_KEYS = ("read", "write")
@@ -815,6 +816,7 @@ def default_task_hardware_debug() -> dict:
         "permissions": {
             "access": "read_only",
         },
+        "resources": [],
     }
 
 
@@ -926,6 +928,50 @@ def normalize_task_hardware_debug_credentials(value: object) -> dict:
     }
 
 
+def normalize_task_hardware_resource(value: object, *, index: int = 0) -> dict | None:
+    raw = value if isinstance(value, dict) else {}
+    resource_type = str(raw.get("type") or raw.get("kind") or "").strip().lower().replace("-", "_")
+    if resource_type in {"relay", "serial_tool", "relay_serial"}:
+        resource_type = "serial_relay"
+    if resource_type not in TASK_HARDWARE_RESOURCE_TYPES:
+        return None
+    raw_id = unicodedata.normalize("NFKC", str(raw.get("id") or raw.get("name") or "")).strip().lower()
+    resource_id = "".join(character if character.isalnum() or character in {"-", "_"} else "-" for character in raw_id)
+    resource_id = "-".join(part for part in resource_id.split("-") if part)[:64] or f"relay-{index + 1}"
+    baudrate_raw = raw.get("baudrate", raw.get("baud"))
+    try:
+        baudrate = int(baudrate_raw) if baudrate_raw not in (None, "") else 9600
+    except (TypeError, ValueError):
+        baudrate = 9600
+    return {
+        "id": resource_id,
+        "type": resource_type,
+        "label": str(raw.get("label") or raw.get("title") or resource_id).strip()[:120],
+        "device": str(raw.get("device") or raw.get("port") or raw.get("path") or "").strip(),
+        "baudrate": max(1, baudrate),
+        "channel": str(raw.get("channel") or "").strip()[:64],
+    }
+
+
+def normalize_task_hardware_resources(value: object) -> list[dict]:
+    raw_resources = value if isinstance(value, list) else ([value] if isinstance(value, dict) else [])
+    resources: list[dict] = []
+    seen_ids: set[str] = set()
+    for index, item in enumerate(raw_resources[:16]):
+        resource = normalize_task_hardware_resource(item, index=index)
+        if resource is None:
+            continue
+        resource_id = resource["id"]
+        if resource_id in seen_ids:
+            suffix = 2
+            while f"{resource_id}-{suffix}" in seen_ids:
+                suffix += 1
+            resource["id"] = f"{resource_id}-{suffix}"[:64]
+        seen_ids.add(resource["id"])
+        resources.append(resource)
+    return resources
+
+
 def normalize_task_hardware_debug_nfs_settings(value: object) -> dict:
     raw = value if isinstance(value, dict) else {}
     return {
@@ -977,7 +1023,7 @@ def normalize_task_hardware_debug(value: object | None = None) -> dict:
     # Canonical v2 state: connection facts only. Terminal protocol details and tools
     # (Telnet port, NFS exports, board-specific workflows) live in runtime/skills.
     legacy_shape = any(key in raw for key in ("enabled", "hardware_debug_enabled", "devices", "channels"))
-    canonical_shape = any(key in raw for key in ("mode", "serial", "network", "credentials")) or (
+    canonical_shape = any(key in raw for key in ("mode", "serial", "network", "credentials", "resources")) or (
         "permissions" in raw and not legacy_shape
     )
     if canonical_shape:
@@ -989,6 +1035,7 @@ def normalize_task_hardware_debug(value: object | None = None) -> dict:
         hardware_debug["serial"] = normalize_task_hardware_debug_serial(raw.get("serial"))
         hardware_debug["network"] = normalize_task_hardware_debug_network(raw.get("network"))
         hardware_debug["credentials"] = normalize_task_hardware_debug_credentials(raw.get("credentials"))
+        hardware_debug["resources"] = normalize_task_hardware_resources(raw.get("resources"))
         compatibility_default = "read_write" if mode != "off" and "permissions" not in raw else "read_only"
         hardware_debug["permissions"] = normalize_task_hardware_debug_access(
             raw.get("permissions"),
@@ -1063,6 +1110,7 @@ def normalize_task_hardware_debug(value: object | None = None) -> dict:
         "network": network,
         "credentials": credentials,
         "permissions": {"access": access},
+        "resources": [],
     }
 
 
