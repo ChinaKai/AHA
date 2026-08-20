@@ -22,6 +22,7 @@ from aha_cli.services.feishu_group_handoffs import active_group_handoffs_for_dig
 from aha_cli.services.feishu_group_sources import feishu_group_source_index_context
 from aha_cli.services.hardware_debug import hardware_debug_context_for_prompt
 from aha_cli.services.browser_control import browser_control_context_for_prompt
+from aha_cli.services.onebin import AHA_WSL_AHA_BIN_ENV
 from aha_cli.services.task_skills import task_skills_context_for_prompt
 from aha_cli.services.prompt_templates import render_prompt_template
 from aha_cli.services.service_runtime import service_runtime_prompt_payload
@@ -72,6 +73,7 @@ PROMPT_CONVERSATION_MESSAGE_CHAR_LIMIT = 700
 PROMPT_CONVERSATION_MIN_MESSAGE_CHAR_LIMIT = 240
 PROMPT_RECENT_CONVERSATION_CHAR_BUDGET = 1800
 CLAUDE_PUBLIC_UPDATE_CONTEXT_KEY = "claude_public_updates"
+CROSS_PLATFORM_RUNTIME_CONTEXT_KEY = "cross_platform_runtime"
 MANAGED_PROCESS_CONTEXT_KEY = "managed_processes"
 COMMIT_POLICY_INTENT_TERMS = (
     "commit",
@@ -684,6 +686,22 @@ def _managed_process_context() -> str:
     return render_prompt_template("backend_managed_processes.md").rstrip()
 
 
+def _cross_platform_runtime_context() -> str:
+    backend = str(os.environ.get("AHA_BACKEND") or "").strip().lower()
+    distro = str(os.environ.get("AHA_WSL_DISTRO") or "").strip()
+    aha_bin = str(os.environ.get(AHA_WSL_AHA_BIN_ENV) or "").strip()
+    if backend not in {"codex", "claude"} or not distro or not aha_bin:
+        return ""
+    aha_home = str(os.environ.get("AHA_WSL_AHA_HOME") or os.environ.get("AHA_HOME") or "").strip()
+    return render_prompt_template(
+        "backend_cross_platform_runtime.md",
+        backend=backend,
+        distro=distro,
+        aha_home=aha_home or "-",
+        aha_bin=aha_bin,
+    ).rstrip()
+
+
 def _prompt_context_fingerprints(
     root: Path,
     run_id: str,
@@ -708,6 +726,9 @@ def _prompt_context_fingerprints(
     }
     if include_managed_process:
         fingerprints[MANAGED_PROCESS_CONTEXT_KEY] = _context_fingerprint(_managed_process_context())
+    cross_platform_runtime = _cross_platform_runtime_context()
+    if cross_platform_runtime:
+        fingerprints[CROSS_PLATFORM_RUNTIME_CONTEXT_KEY] = _context_fingerprint(cross_platform_runtime)
     if include_attachment_output:
         fingerprints["attachment_output_guidance"] = _context_fingerprint(_attachment_output_guidance_for_prompt(root, run_id))
     claude_public_updates = _claude_public_update_context(backend)
@@ -745,6 +766,12 @@ def _sticky_context_delta_for_prompt(
         and delivered.get(MANAGED_PROCESS_CONTEXT_KEY) != current_fingerprints.get(MANAGED_PROCESS_CONTEXT_KEY)
     ):
         sections.append(managed_process_context)
+    cross_platform_runtime = _cross_platform_runtime_context()
+    if (
+        current_fingerprints.get(CROSS_PLATFORM_RUNTIME_CONTEXT_KEY)
+        and delivered.get(CROSS_PLATFORM_RUNTIME_CONTEXT_KEY) != current_fingerprints.get(CROSS_PLATFORM_RUNTIME_CONTEXT_KEY)
+    ):
+        sections.append(cross_platform_runtime)
     hardware_context = hardware_debug_context_for_prompt(task).rstrip()
     if current_fingerprints.get("hardware_debug") and delivered.get("hardware_debug") != current_fingerprints.get("hardware_debug"):
         sections.append(hardware_context)
@@ -1359,6 +1386,11 @@ def chat_prompt(
                 and delivered_fingerprints.get(MANAGED_PROCESS_CONTEXT_KEY)
                 != context_fingerprint_updates.get(MANAGED_PROCESS_CONTEXT_KEY)
             )
+            cross_platform_runtime_pending = bool(
+                context_fingerprint_updates.get(CROSS_PLATFORM_RUNTIME_CONTEXT_KEY)
+                and delivered_fingerprints.get(CROSS_PLATFORM_RUNTIME_CONTEXT_KEY)
+                != context_fingerprint_updates.get(CROSS_PLATFORM_RUNTIME_CONTEXT_KEY)
+            )
             if (
                 sticky_delta
                 and item.get("plain_sticky")
@@ -1368,6 +1400,7 @@ def chat_prompt(
                 and not components["request_policy"]
                 and not claude_public_update_pending
                 and not managed_process_pending
+                and not cross_platform_runtime_pending
             ):
                 prompt = str(item.get("message") or "")
                 _fill_prompt_metrics(
@@ -1567,6 +1600,10 @@ def chat_prompt(
                 managed_process_context = _managed_process_context()
                 task_context = f"{task_context.rstrip()}\n\n{managed_process_context}\n"
                 components["managed_process_context"] = managed_process_context
+                cross_platform_runtime_context = _cross_platform_runtime_context()
+                if cross_platform_runtime_context:
+                    task_context = f"{task_context.rstrip()}\n\n{cross_platform_runtime_context}\n"
+                    components["cross_platform_runtime_context"] = cross_platform_runtime_context
             if context_pack and not sticky_delta and not is_result_request:
                 task_context = f"{task_context.rstrip()}\n\n{context_pack}\n"
             if not sticky_delta and is_task_supervision_host_agent(detail["task"], target):

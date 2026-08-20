@@ -2265,6 +2265,56 @@ class ChatPromptTests(unittest.TestCase):
         self.assertEqual(metrics["components"]["coordination_policy"]["chars"], 0)
         self.assertEqual(metrics["components"]["commit_policy"]["chars"], 0)
 
+    def test_full_prompt_includes_cross_platform_runtime_context_only_for_windows_wsl_backend(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Cross-platform runtime prompt", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                item = {
+                    "sender": "browser",
+                    "message": "inspect runtime",
+                    "task_id": "task-001",
+                    "role": "main",
+                }
+                with mock.patch.dict(
+                    os.environ,
+                    {
+                        "AHA_BACKEND": "",
+                        "AHA_WSL_DISTRO": "",
+                        "AHA_WSL_AHA_HOME": "",
+                        "AHA_WSL_AHA_BIN": "",
+                    },
+                    clear=False,
+                ):
+                    native_prompt, native_metrics = chat_prompt_with_metrics(root, run_id, "main", item, "")
+                with mock.patch.dict(
+                    os.environ,
+                    {
+                        "AHA_BACKEND": "codex",
+                        "AHA_WSL_DISTRO": "Ubuntu-24.04",
+                        "AHA_WSL_AHA_HOME": "/mnt/c/Users/tester/.aha",
+                        "AHA_WSL_AHA_BIN": "/mnt/c/Users/tester/AppData/Local/AHA/aha",
+                    },
+                    clear=False,
+                ):
+                    cross_prompt, cross_metrics = chat_prompt_with_metrics(root, run_id, "main", item, "")
+
+        self.assertEqual(native_metrics["prompt_mode"], "full")
+        self.assertNotIn("AHA cross-platform runtime context:", native_prompt)
+        self.assertNotIn("cross_platform_runtime", native_metrics["context_fingerprint_updates"])
+        self.assertEqual(cross_metrics["prompt_mode"], "full")
+        self.assertIn("AHA cross-platform runtime context:", cross_prompt)
+        self.assertIn("Windows-installed onebin", cross_prompt)
+        self.assertIn("Ubuntu-24.04", cross_prompt)
+        self.assertIn("/mnt/c/Users/tester/.aha", cross_prompt)
+        self.assertIn("/mnt/c/Users/tester/AppData/Local/AHA/aha", cross_prompt)
+        self.assertIn("aha-local-upgrade", cross_prompt)
+        self.assertIn("cross_platform_runtime_context", cross_metrics["components"])
+        self.assertTrue(cross_metrics["context_fingerprint_updates"]["cross_platform_runtime"])
+
     def test_full_prompt_includes_input_image_guidance_for_image_fields(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -2488,6 +2538,105 @@ class ChatPromptTests(unittest.TestCase):
         self.assertTrue(metrics["context_fingerprint_updates"]["attachment_output_guidance"])
         self.assertEqual(next_prompt, "next")
         self.assertEqual(set(next_metrics["components"]), {"user_message"})
+
+    def test_sticky_delta_injects_cross_platform_runtime_context_once(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Sticky cross-platform runtime", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                session_file = run_dir(root, run_id) / "tasks" / "task-001" / "sessions" / "main.json"
+                session = read_json(session_file)
+                session["backend_session_id"] = "backend-session-1"
+                session["delivered_context_fingerprints"] = {}
+                session_file.write_text(json.dumps(session), encoding="utf-8")
+                runtime_env = {
+                    "AHA_BACKEND": "codex",
+                    "AHA_WSL_DISTRO": "Ubuntu-24.04",
+                    "AHA_WSL_AHA_HOME": "/mnt/c/Users/tester/.aha",
+                    "AHA_WSL_AHA_BIN": "/mnt/c/Users/tester/AppData/Local/AHA/aha",
+                }
+                with mock.patch.dict(os.environ, runtime_env, clear=False):
+                    item = append_message(
+                        root,
+                        run_id,
+                        "main",
+                        "continue",
+                        sender="browser",
+                        task_id="task-001",
+                        role="main",
+                    )
+                    prompt, metrics = chat_prompt_with_metrics(root, run_id, "main", item, "")
+                    session["delivered_context_fingerprints"] = metrics["context_fingerprint_updates"]
+                    session_file.write_text(json.dumps(session), encoding="utf-8")
+                    next_item = append_message(
+                        root,
+                        run_id,
+                        "main",
+                        "next",
+                        sender="browser",
+                        task_id="task-001",
+                        role="main",
+                    )
+                    next_prompt, next_metrics = chat_prompt_with_metrics(root, run_id, "main", next_item, "")
+
+        self.assertEqual(metrics["prompt_mode"], "sticky_delta")
+        self.assertIn("AHA runtime context update", prompt)
+        self.assertIn("AHA cross-platform runtime context:", prompt)
+        self.assertTrue(metrics["context_fingerprint_updates"]["cross_platform_runtime"])
+        self.assertEqual(next_prompt, "next")
+        self.assertEqual(set(next_metrics["components"]), {"user_message"})
+
+    def test_cross_platform_runtime_context_returns_after_compaction_forces_full_prompt(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Cross-platform compact recovery", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                session_file = run_dir(root, run_id) / "tasks" / "task-001" / "sessions" / "main.json"
+                session = read_json(session_file)
+                session["backend_session_id"] = "backend-session-1"
+                session_file.write_text(json.dumps(session), encoding="utf-8")
+                runtime_env = {
+                    "AHA_BACKEND": "codex",
+                    "AHA_WSL_DISTRO": "Ubuntu-24.04",
+                    "AHA_WSL_AHA_HOME": "/mnt/c/Users/tester/.aha",
+                    "AHA_WSL_AHA_BIN": "/mnt/c/Users/tester/AppData/Local/AHA/aha",
+                }
+                with mock.patch.dict(os.environ, runtime_env, clear=False):
+                    first_item = append_message(
+                        root,
+                        run_id,
+                        "main",
+                        "first",
+                        sender="browser",
+                        task_id="task-001",
+                        role="main",
+                    )
+                    first_prompt, first_metrics = chat_prompt_with_metrics(root, run_id, "main", first_item, "")
+                    session["delivered_context_fingerprints"] = first_metrics["context_fingerprint_updates"]
+                    session[FORCE_FULL_PROMPT_NEXT_TURN_KEY] = {"reason": "backend_auto_context_compact"}
+                    session_file.write_text(json.dumps(session), encoding="utf-8")
+                    compact_item = append_message(
+                        root,
+                        run_id,
+                        "main",
+                        "after compact",
+                        sender="browser",
+                        task_id="task-001",
+                        role="main",
+                    )
+                    compact_prompt, compact_metrics = chat_prompt_with_metrics(root, run_id, "main", compact_item, "")
+
+        self.assertEqual(first_metrics["prompt_mode"], "sticky_delta")
+        self.assertIn("AHA cross-platform runtime context:", first_prompt)
+        self.assertEqual(compact_metrics["prompt_mode"], "full")
+        self.assertIn("AHA cross-platform runtime context:", compact_prompt)
+        self.assertIn("cross_platform_runtime_context", compact_metrics["components"])
 
     def test_sticky_delta_injects_knowledge_delta_once_when_knowledge_is_enabled(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
