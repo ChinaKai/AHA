@@ -408,6 +408,92 @@ class WebTaskApiTests(unittest.TestCase):
         self.assertEqual(skills_events[-1]["data"]["task_id"], task_id)
         self.assertEqual(skills_events[-1]["data"]["skill_count"], 2)
 
+    def test_api_hardware_groups_manage_ids_and_allow_both_without_ip(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Managed hardware groups", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                response = asyncio.run(
+                    fetch_ui_response(
+                        root,
+                        run_id,
+                        "/api/tasks",
+                        method="POST",
+                        payload={
+                            "title": "Board task",
+                            "dispatch": False,
+                            "hardware_debug": {
+                                "groups": [
+                                    {
+                                        "description": "Main console",
+                                        "mode": "both",
+                                        "serial": {"device": "COM6", "baudrate": 115200},
+                                        "network": {"device_ip": ""},
+                                        "credentials": {"username": "root", "password": "secret"},
+                                        "permissions": {"access": "read_write"},
+                                    }
+                                ]
+                            },
+                        },
+                    )
+                )
+                body = json_response_body(response)
+                task_id = body["task"]["id"]
+                generated_id = body["task"]["hardware_debug"]["groups"][0]["id"]
+                update_response = asyncio.run(
+                    fetch_ui_response(
+                        root,
+                        run_id,
+                        f"/api/task/{task_id}/hardware-debug",
+                        method="POST",
+                        payload={
+                            "groups": [
+                                {
+                                    "description": "Main console updated",
+                                    "mode": "both",
+                                    "serial": {"device": "COM6", "baudrate": 115200},
+                                    "network": {"device_ip": ""},
+                                    "credentials": {"username": "root", "password": ""},
+                                    "permissions": {"access": "read_write"},
+                                }
+                            ]
+                        },
+                    )
+                )
+                update_body = json_response_body(update_response)
+                stored_group = task_snapshot(root, run_id, task_id)["task"]["hardware_debug"]["groups"][0]
+                invalid_response = asyncio.run(
+                    fetch_ui_response(
+                        root,
+                        run_id,
+                        f"/api/task/{task_id}/hardware-debug",
+                        method="POST",
+                        payload={
+                            "groups": [
+                                {
+                                    "description": "Network only",
+                                    "mode": "network",
+                                    "network": {"device_ip": ""},
+                                }
+                            ]
+                        },
+                    )
+                )
+
+        self.assertTrue(body["ok"])
+        self.assertTrue(generated_id)
+        self.assertEqual(body["task"]["hardware_debug"]["mode"], "both")
+        self.assertEqual(body["task"]["hardware_debug"]["network"]["device_ip"], "")
+        self.assertTrue(update_body["ok"])
+        self.assertEqual(update_body["task"]["hardware_debug"]["groups"][0]["id"], generated_id)
+        self.assertEqual(stored_group["id"], generated_id)
+        self.assertEqual(stored_group["credentials"]["password"], "secret")
+        self.assertTrue(invalid_response.startswith(b"HTTP/1.1 400 Bad Request"))
+        self.assertIn("network.device_ip is required", json_response_body(invalid_response)["error"])
+
     def test_api_task_create_and_update_accepts_browser_control_config(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

@@ -1121,19 +1121,30 @@ def update_task_hardware_debug_config(
         hardware_debug = normalize_task_hardware_debug(task.get("hardware_debug"))
         canonical_permissions_only = permissions is not UNSET and channels is UNSET and devices is UNSET
         if groups is not UNSET:
-            existing_groups = {
-                str(item.get("id") or ""): item
+            existing_group_list = [
+                item
                 for item in hardware_debug.get("groups") or []
                 if isinstance(item, dict)
+            ]
+            existing_groups = {
+                str(item.get("id") or ""): item
+                for item in existing_group_list
             }
             next_groups = list(groups) if isinstance(groups, list) else groups
             if isinstance(next_groups, list):
-                for item in next_groups:
+                for index, item in enumerate(next_groups):
                     if not isinstance(item, dict):
                         continue
                     group_id = str(item.get("id") or "")
+                    existing_group = existing_groups.get(group_id) if group_id else None
+                    if not group_id and index < len(existing_group_list):
+                        existing_group = existing_group_list[index]
+                    if not group_id and existing_group is not None:
+                        group_id = str(existing_group.get("id") or "")
+                        if group_id:
+                            item["id"] = group_id
                     next_credentials = dict(item.get("credentials") or {})
-                    existing_password = str(existing_groups.get(group_id, {}).get("credentials", {}).get("password") or "")
+                    existing_password = str((existing_group or {}).get("credentials", {}).get("password") or "")
                     clear_password = bool(next_credentials.pop("clear_password", False))
                     if clear_password:
                         next_credentials["password"] = ""

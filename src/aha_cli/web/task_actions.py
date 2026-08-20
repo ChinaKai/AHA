@@ -151,11 +151,10 @@ def parse_task_hardware_debug_fields(payload: dict) -> dict[str, object]:
             if not isinstance(group, dict):
                 raise ValueError(f"groups[{index}] must be an object")
             group_id = str(group.get("id") or "").strip().lower()
-            if not group_id:
-                raise ValueError(f"groups[{index}].id is required")
-            if group_id in seen_ids:
+            if group_id and group_id in seen_ids:
                 raise ValueError(f"groups[{index}].id must be unique")
-            seen_ids.add(group_id)
+            if group_id:
+                seen_ids.add(group_id)
             mode = str(group.get("mode") or "off").strip().lower()
             if mode not in TASK_HARDWARE_GROUP_MODES:
                 raise ValueError(f"groups[{index}].mode must be one of: {', '.join(TASK_HARDWARE_GROUP_MODES)}")
@@ -164,7 +163,7 @@ def parse_task_hardware_debug_fields(payload: dict) -> dict[str, object]:
                     raise ValueError(f"groups[{index}].{key} must be an object")
             if mode in {"serial", "both"} and not str((group.get("serial") or {}).get("device") or "").strip():
                 raise ValueError(f"groups[{index}].serial.device is required")
-            if mode in {"network", "both"} and not str((group.get("network") or {}).get("device_ip") or "").strip():
+            if mode == "network" and not str((group.get("network") or {}).get("device_ip") or "").strip():
                 raise ValueError(f"groups[{index}].network.device_ip is required")
         update["groups"] = groups
         return update
@@ -207,7 +206,7 @@ def parse_task_hardware_debug_fields(payload: dict) -> dict[str, object]:
         serial = update.get("serial") or {}
         if not str(serial.get("device") or serial.get("port") or "").strip():
             raise ValueError("serial.device is required for serial hardware debug")
-    if mode in {"network", "both"}:
+    if mode == "network":
         network = update.get("network") or {}
         if not str(network.get("device_ip") or network.get("host") or "").strip():
             raise ValueError("network.device_ip is required for network hardware debug")

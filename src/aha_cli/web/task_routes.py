@@ -1029,7 +1029,9 @@ def handle_task_action_route(root: Path, run_id: str, path: str, body: bytes) ->
         else:
             return route_result({"error": f"unknown task action: {action}"}, "400 Bad Request")
         return route_result({"ok": True, "task": task})
-    except (KeyError, SystemExit, ValueError) as exc:
+    except ValueError as exc:
+        return route_result({"error": str(exc)}, "400 Bad Request")
+    except (KeyError, SystemExit) as exc:
         return route_result({"error": str(exc)}, "404 Not Found")
 
 

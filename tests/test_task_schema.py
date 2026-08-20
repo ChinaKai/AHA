@@ -212,6 +212,22 @@ class TaskSchemaTests(unittest.TestCase):
         )
         self.assertEqual(explicit_read_only["permissions"], {"access": "read_only"})
 
+        managed_group = normalize_task_hardware_debug(
+            {
+                "groups": [
+                    {
+                        "description": "Main console",
+                        "mode": "both",
+                        "serial": {"device": "COM6", "baudrate": 115200},
+                        "network": {"device_ip": ""},
+                    }
+                ]
+            }
+        )
+        self.assertEqual(managed_group["groups"][0]["id"], "hardware-1")
+        self.assertEqual(managed_group["groups"][0]["mode"], "both")
+        self.assertEqual(managed_group["groups"][0]["network"]["device_ip"], "")
+
     def test_old_plan_compatibility_fills_task_metadata_and_status_projection(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

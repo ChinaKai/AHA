@@ -74,6 +74,7 @@
 
     function renderHardwareBridgeToolbarHtml(state = {}) {
       if (!state.endpoint && !state.device) return "";
+      const t = window.AHAI18n?.t || ((_, fallback) => fallback);
       const bridge = state.bridge || {};
       const paused = Boolean(bridge.paused);
       const alive = Boolean(bridge.alive);
@@ -102,9 +103,11 @@
         : bridge.error ? String(bridge.error) : "";
       const transports = Array.isArray(state.transports) ? state.transports : [];
       const groups = Array.isArray(state.groups) ? state.groups : [];
+      const groupLabel = (group, index) => String(group?.description || "").trim()
+        || t("task.hardware_group_label", "Hardware {count}").replace("{count}", String(index + 1));
       const hardwarePicker = groups.length > 1
-        ? `<span class="hardware-transport-picker">${groups.map(group => `<button type="button" class="hardware-transport-btn ${String(group?.id || "") === String(state.hardware || "") ? "active" : ""}" data-hardware-group-select="${escapeHtml(String(group?.id || ""))}" title="${escapeHtml(String(group?.description || ""))}">${escapeHtml(String(group?.id || "hardware"))}</button>`).join("")}</span>`
-        : `<span class="hardware-transport-label" title="${escapeHtml(String(groups[0]?.description || ""))}">${escapeHtml(String(state.hardware || groups[0]?.id || "hardware"))}</span>`;
+        ? `<span class="hardware-transport-picker">${groups.map((group, index) => `<button type="button" class="hardware-transport-btn ${String(group?.id || "") === String(state.hardware || "") ? "active" : ""}" data-hardware-group-select="${escapeHtml(String(group?.id || ""))}">${escapeHtml(groupLabel(group, index))}</button>`).join("")}</span>`
+        : `<span class="hardware-transport-label">${escapeHtml(groupLabel(groups[0], 0))}</span>`;
       const transportPicker = transports.length > 1
         ? `<span class="hardware-transport-picker">${transports.map(item => (
             `<button type="button" class="hardware-transport-btn ${item === state.transport ? "active" : ""}" data-hardware-transport="${escapeHtml(item)}">${escapeHtml(item === "serial" ? "Serial" : "Network")}</button>`

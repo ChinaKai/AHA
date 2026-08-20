@@ -283,8 +283,8 @@ executables. Skill instructions resolve those tools relative to their selected
 Tasks may also carry optional board-side automation context under
 `hardware_debug`. The setting is disabled by default for archive and old-plan
 compatibility. New tasks store up to 16 named entries in
-`hardware_debug.groups`. Every hardware group has the same shape: a stable `id`,
-a user-written `description`, `mode=off|serial|network|both`, Serial and Network
+`hardware_debug.groups`. Every hardware group has the same shape: an AHA-managed
+stable `id`, a user-written `description`, `mode=off|serial|network|both`, Serial and Network
 connection fields, optional login credentials, and its own access level. The
 description tells the agent what the hardware is used for; it does not authorize
 the agent to invent device protocols or unsafe operations. New groups default to
@@ -359,6 +359,12 @@ and Network. Multiple groups are selected with `--hardware <id>` in CLI commands
 or from the Hardware Terminal group selector; omitting the ID selects the first
 group for compatibility. Future network transports can be added without changing
 the group's board IP.
+
+The Web form does not expose group IDs as user-managed fields. Existing IDs are
+preserved internally across edits, and missing IDs from API clients are generated
+or matched by group position. In `both` mode, `network.device_ip` may be empty so
+the agent can attach over Serial and discover the board address; `network` mode
+still requires a configured IP.
 
 Serial and Telnet Network tasks with `read_write` access can also transfer a file
 through the board shell without a preinstalled `rz`, `scp`, `tftp`, Python, or

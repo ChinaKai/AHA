@@ -3500,17 +3500,22 @@ body.auth-required .login-view:not(.hidden) {
   min-width: 0;
 }
 .hardware-group-card {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: minmax(0, 1fr);
   align-items: start;
 }
 .hardware-group-card > .hardware-resource-heading,
-.hardware-group-card > .field-label:has(textarea),
+.hardware-group-card > .field-row,
+.hardware-group-card > .field-label,
 .hardware-group-card > [data-hardware-group-serial] {
   grid-column: 1 / -1;
 }
 .hardware-group-card textarea {
-  min-height: 72px;
+  min-height: 48px;
   resize: vertical;
+}
+.hardware-group-primary-row,
+.hardware-group-credentials-row {
+  align-items: end;
 }
 .hardware-serial-picker-row {
   display: grid;

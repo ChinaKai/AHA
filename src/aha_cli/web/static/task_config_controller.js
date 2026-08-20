@@ -432,7 +432,7 @@
         const password = String(row.querySelector('[data-hardware-group-field="credentials.password"]')?.value || "");
         if (password) credentials.password = password;
         return {
-          id: value("id") || `hardware-${index + 1}`,
+          id: value("id"),
           description: value("description"),
           mode: value("mode") || "off",
           serial: { device: value("serial.device"), baudrate: Number(value("serial.baudrate") || "115200") || 115200 },
@@ -448,20 +448,23 @@
       const mode = String(group.mode || "off");
       const access = String(group.permissions?.access || "read_only");
       const passwordPlaceholder = group.credentials?.password_configured ? t("task.hardware_password_configured", "Configured — leave blank to keep") : "";
+      const groupLabel = t("task.hardware_group_label", "Hardware {count}").replace("{count}", String(index + 1));
       const serialPicker = serialPortPicker.markup?.({
         value: group.serial?.device || "",
         label: t("task.hardware_serial_device", "Serial device")
       }) || input("serial.device", t("task.hardware_serial_device", "Serial device"), group.serial?.device || "", 'placeholder="COM3"');
       return `
         <div class="hardware-resource-card hardware-group-card" data-hardware-group>
-          <div class="hardware-resource-heading"><strong>${escapeHtml(group.id || `hardware-${index + 1}`)}</strong><button type="button" class="hardware-resource-remove" data-hardware-group-remove>${escapeHtml(t("task.hardware_group_remove", "Remove"))}</button></div>
-          ${input("id", t("task.hardware_group_id", "Hardware ID"), group.id || `hardware-${index + 1}`, 'placeholder="console"')}
-          <label class="field-label"><span>${escapeHtml(t("task.hardware_group_description", "Hardware description"))}</span><textarea data-hardware-group-field="description" rows="3" placeholder="${escapeHtml(t("task.hardware_group_description_placeholder", "Tell the agent what this hardware is used for"))}">${escapeHtml(group.description || "")}</textarea></label>
-          <label class="field-label"><span>${escapeHtml(t("task.hardware_mode", "Connection mode"))}</span><select data-hardware-group-field="mode"><option value="off" ${mode === "off" ? "selected" : ""}>${escapeHtml(t("task.hardware_mode_off", "Off"))}</option><option value="serial" ${mode === "serial" ? "selected" : ""}>${escapeHtml(t("task.hardware_mode_serial", "Serial"))}</option><option value="network" ${mode === "network" ? "selected" : ""}>${escapeHtml(t("task.hardware_mode_network", "Network"))}</option><option value="both" ${mode === "both" ? "selected" : ""}>${escapeHtml(t("task.hardware_mode_both", "Serial + Network"))}</option></select></label>
+          <div class="hardware-resource-heading"><strong>${escapeHtml(groupLabel)}</strong><button type="button" class="hardware-resource-remove" data-hardware-group-remove>${escapeHtml(t("task.hardware_group_remove", "Remove"))}</button></div>
+          <input type="hidden" data-hardware-group-field="id" value="${escapeHtml(group.id || "")}">
+          <label class="field-label"><span>${escapeHtml(t("task.hardware_group_description", "Hardware description"))}</span><textarea data-hardware-group-field="description" rows="2" placeholder="${escapeHtml(t("task.hardware_group_description_placeholder", "Tell the agent what this hardware is used for"))}">${escapeHtml(group.description || "")}</textarea></label>
+          <div class="field-row hardware-group-primary-row">
+            <label class="field-label"><span>${escapeHtml(t("task.hardware_mode", "Connection mode"))}</span><select data-hardware-group-field="mode"><option value="off" ${mode === "off" ? "selected" : ""}>${escapeHtml(t("task.hardware_mode_off", "Off"))}</option><option value="serial" ${mode === "serial" ? "selected" : ""}>${escapeHtml(t("task.hardware_mode_serial", "Serial"))}</option><option value="network" ${mode === "network" ? "selected" : ""}>${escapeHtml(t("task.hardware_mode_network", "Network"))}</option><option value="both" ${mode === "both" ? "selected" : ""}>${escapeHtml(t("task.hardware_mode_both", "Serial + Network"))}</option></select></label>
+            <label class="field-label"><span>${escapeHtml(t("task.hardware_access", "Hardware access"))}</span><select data-hardware-group-field="permissions.access"><option value="read_only" ${access === "read_only" ? "selected" : ""}>${escapeHtml(t("task.hardware_access_read_only", "Read only"))}</option><option value="read_write" ${access === "read_write" ? "selected" : ""}>${escapeHtml(t("task.hardware_access_read_write", "Read and write"))}</option></select></label>
+          </div>
           <div class="field-row" data-hardware-group-serial>${serialPicker}${input("serial.baudrate", t("task.hardware_baudrate", "Baudrate"), group.serial?.baudrate || 115200, 'type="number" min="1"')}</div>
-          <label class="field-label" data-hardware-group-network><span>${escapeHtml(t("task.hardware_device_ip", "Device IP"))}</span><input data-hardware-group-field="network.device_ip" value="${escapeHtml(group.network?.device_ip || "")}" placeholder="192.168.1.20"></label>
-          <div class="field-row">${input("credentials.username", t("task.hardware_login_username", "Login username"), group.credentials?.username || "", 'autocomplete="off"')}${input("credentials.password", t("task.hardware_login_password", "Login password"), "", `type="password" autocomplete="new-password" placeholder="${escapeHtml(passwordPlaceholder)}"`)}</div>
-          <label class="field-label"><span>${escapeHtml(t("task.hardware_access", "Hardware access"))}</span><select data-hardware-group-field="permissions.access"><option value="read_only" ${access === "read_only" ? "selected" : ""}>${escapeHtml(t("task.hardware_access_read_only", "Read only"))}</option><option value="read_write" ${access === "read_write" ? "selected" : ""}>${escapeHtml(t("task.hardware_access_read_write", "Read and write"))}</option></select></label>
+          <label class="field-label" data-hardware-group-network><span>${escapeHtml(t("task.hardware_device_ip", "Device IP"))}</span><input data-hardware-group-field="network.device_ip" value="${escapeHtml(group.network?.device_ip || "")}" placeholder="192.168.1.20"><span class="field-help" data-hardware-group-network-discovery>${escapeHtml(t("task.hardware_device_ip_optional", "Optional with Serial + Network; the agent can discover it through serial."))}</span></label>
+          <div class="field-row hardware-group-credentials-row">${input("credentials.username", t("task.hardware_login_username", "Login username"), group.credentials?.username || "", 'autocomplete="off"')}${input("credentials.password", t("task.hardware_login_password", "Login password"), "", `type="password" autocomplete="new-password" placeholder="${escapeHtml(passwordPlaceholder)}"`)}</div>
         </div>`;
     }
 
@@ -477,6 +480,7 @@
       const network = mode === "network" || mode === "both";
       row.querySelectorAll("[data-hardware-group-serial]").forEach(item => { item.hidden = !serial; });
       row.querySelectorAll("[data-hardware-group-network]").forEach(item => { item.hidden = !network; });
+      row.querySelectorAll("[data-hardware-group-network-discovery]").forEach(item => { item.hidden = mode !== "both"; });
       row.querySelectorAll('[data-hardware-group-field^="serial."]').forEach(input => { input.disabled = disabled || !serial; });
       row.querySelectorAll('[data-hardware-group-field^="network."]').forEach(input => { input.disabled = disabled || !network; });
       row.querySelectorAll("input, select, textarea, button").forEach(input => { if (!input.matches('[data-hardware-group-field^="serial."], [data-hardware-group-field^="network."]')) input.disabled = disabled; });
@@ -897,7 +901,7 @@
         const target = event.target instanceof Element ? event.target : null;
         if (target?.closest("[data-hardware-group-add]")) {
           const groups = readHardwareGroups();
-          groups.push({ id: `hardware-${groups.length + 1}`, description: "", mode: "serial", serial: { device: "", baudrate: 115200 }, network: { device_ip: "" }, credentials: { username: "" }, permissions: { access: "read_only" } });
+          groups.push({ id: "", description: "", mode: "serial", serial: { device: "", baudrate: 115200 }, network: { device_ip: "" }, credentials: { username: "" }, permissions: { access: "read_only" } });
           renderHardwareGroups(groups);
           syncTaskHardwareDebugFields();
           markTaskHardwareEditing();
