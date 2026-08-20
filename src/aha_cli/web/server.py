@@ -219,8 +219,16 @@ async def handle_ui_client(
             )
         else:
             response = handle_run_workspace_route(root, run_id, method, path, query, headers, body)
-            if response is None:
-                response = knowledge_route_response(root, method, path, query, body, headers)
+            if response is None and path.startswith("/api/kb/"):
+                response = await asyncio.to_thread(
+                    knowledge_route_response,
+                    root,
+                    method,
+                    path,
+                    query,
+                    body,
+                    headers,
+                )
             if response is None:
                 response = game_route_response(root, run_id, method, path)
             if response is None:

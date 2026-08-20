@@ -1,0 +1,3 @@
+# Keep repository text stable when the same working tree is accessed by
+# Windows Git and Linux/WSL Git with different core.autocrlf settings.
+* text=auto eol=lf

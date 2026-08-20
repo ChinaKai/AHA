@@ -246,6 +246,17 @@
     .kb-local-change-diff { margin: 0; max-height: 360px; overflow: auto; padding: 12px; border: 0; border-radius: 0; background: var(--color-code-bg, #111827); color: var(--color-code-text, #e5e7eb); font-size: 11px; line-height: 1.5; white-space: pre; tab-size: 2; }
     .kb-sync-status-action { display: inline; min-height: 0; padding: 0; border: 0; background: transparent; color: var(--color-primary-strong); font: inherit; text-decoration: underline; text-underline-offset: 2px; cursor: pointer; }
     .kb-sync-status-action:hover { color: var(--color-primary); }
+    .kb-field-heading { display: flex; align-items: center; gap: 6px; margin-top: 10px; }
+    .kb-field-heading .kb-field { margin: 0 0 4px; }
+    .kb-help-button {
+      width: 20px; height: 20px; min-height: 20px; padding: 0; margin-bottom: 4px;
+      border-radius: 999px; font-size: 12px; font-weight: 700; line-height: 18px;
+    }
+    .kb-sync-mode-help { width: min(560px, 92vw); max-height: min(86vh, 720px); overflow: auto; }
+    .kb-sync-mode-help-list { display: grid; gap: 10px; margin: 0; }
+    .kb-sync-mode-help-item { padding: 10px 12px; border: 1px solid var(--color-border-subtle); border-radius: var(--radius-md); background: var(--color-surface-muted); }
+    .kb-sync-mode-help-item dt { color: var(--color-text-strong); font-weight: 700; }
+    .kb-sync-mode-help-item dd { margin: 4px 0 0; color: var(--color-text-subtle); font-size: 12px; line-height: 1.55; }
     .kb-capture-create-fields { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 10px; }
     .kb-capture-create-fields label { display: grid; gap: 5px; min-width: 0; color: var(--color-text-subtle); font-size: 12px; }
     .kb-capture-create-fields input, .kb-capture-create-fields select { width: 100%; }
@@ -758,7 +769,6 @@
       </div>
       <div id="graph-file-tree" class="kb-graph-file-tree"></div>
       <div class="kb-sidebar-footer">
-        <span id="kb-summary" class="status idle" data-i18n="knowledge.loading">Loading...</span>
         <span class="kb-muted" id="kb-sync-status" data-i18n="knowledge.sync_status_checking">Checking sync status...</span>
         <button class="button-ghost" id="kb-resolve" type="button" hidden data-i18n="knowledge.sync_resolve">Resolve conflicts</button>
       </div>
@@ -888,13 +898,26 @@
               <label class="kb-field" for="s-path" data-i18n="knowledge.storage_path">Storage path (blank = default ~/.aha/knowledge)</label>
               <input type="text" id="s-path" />
               <label class="kb-field" for="s-gate" data-i18n="knowledge.curation_gate">Curation gate</label>
-              <select id="s-gate"><option value="manual">manual</option><option value="auto">auto</option><option value="off">off</option></select>
+              <select id="s-gate">
+                <option value="auto" data-i18n="knowledge.curation_auto">Automatic approval</option>
+                <option value="manual" data-i18n="knowledge.curation_manual">Manual review</option>
+                <option value="off" data-i18n="knowledge.curation_off">Disabled</option>
+              </select>
               <label class="kb-field" for="s-project-nav-enabled" data-i18n="knowledge.project_nav" hidden>Project navigation</label>
               <select id="s-project-nav-enabled" hidden><option value="on">on</option><option value="off">off</option></select>
             </div>
             <div>
               <label class="kb-field" for="s-git-enabled" data-i18n="knowledge.enable_git">Enable git sync</label>
               <select id="s-git-enabled"><option value="on">on</option><option value="off">off</option></select>
+              <div class="kb-field-heading">
+                <label class="kb-field" for="s-sync-mode" data-i18n="knowledge.sync_mode">Sync mode</label>
+                <button class="button-ghost kb-help-button" id="s-sync-mode-help" type="button" aria-label="Explain sync modes" title="Explain sync modes" aria-haspopup="dialog" aria-controls="sync-mode-help-modal" aria-expanded="false" data-i18n-aria-label="knowledge.sync_mode_help_open" data-i18n-title="knowledge.sync_mode_help_open">?</button>
+              </div>
+              <select id="s-sync-mode">
+                <option value="auto" data-i18n="knowledge.sync_mode_auto">Automatic sync</option>
+                <option value="manual" data-i18n="knowledge.sync_mode_manual">Manual sync only</option>
+                <option value="off" data-i18n="knowledge.sync_mode_off">Sync disabled</option>
+              </select>
               <label class="kb-field" for="s-git-proxy-enabled" data-i18n="knowledge.git_proxy">Use shared proxy for Git sync</label>
               <select id="s-git-proxy-enabled"><option value="on">on</option><option value="off">off</option></select>
               <label class="kb-field" for="s-remote" data-i18n="knowledge.git_remote">Git remote</label>
@@ -977,6 +1000,30 @@
       <div id="kb-local-changes-list" class="kb-local-changes-list" aria-live="polite"></div>
       <div class="kb-card-actions">
         <button class="button-ghost" type="button" id="kb-local-changes-close" data-i18n="common.close">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="sync-mode-help-modal" class="kb-modal" hidden>
+    <div class="kb-modal-card kb-sync-mode-help" role="dialog" aria-modal="true" aria-labelledby="sync-mode-help-title" aria-describedby="sync-mode-help-intro">
+      <h3 id="sync-mode-help-title" data-i18n="knowledge.sync_mode_help_title">Sync mode guide</h3>
+      <div id="sync-mode-help-intro" class="kb-muted" data-i18n="knowledge.sync_mode_help_intro">This setting only controls Git remote synchronization. It does not disable the knowledge base or change the curation gate.</div>
+      <dl class="kb-sync-mode-help-list">
+        <div class="kb-sync-mode-help-item">
+          <dt data-i18n="knowledge.sync_mode_auto">Automatic sync</dt>
+          <dd data-i18n="knowledge.sync_mode_auto_help">AHA periodically commits local Knowledge changes, pulls remote updates, and pushes local commits. You can still use Sync now.</dd>
+        </div>
+        <div class="kb-sync-mode-help-item">
+          <dt data-i18n="knowledge.sync_mode_manual">Manual sync only</dt>
+          <dd data-i18n="knowledge.sync_mode_manual_help">AHA does not run scheduled Git sync. Remote synchronization happens only when you click Sync now.</dd>
+        </div>
+        <div class="kb-sync-mode-help-item">
+          <dt data-i18n="knowledge.sync_mode_off">Sync disabled</dt>
+          <dd data-i18n="knowledge.sync_mode_off_help">Scheduled and manual Git sync are both disabled. Knowledge remains available locally when the knowledge base itself is enabled.</dd>
+        </div>
+      </dl>
+      <div class="kb-card-actions">
+        <button class="button-ghost" type="button" id="sync-mode-help-close" data-i18n="common.close">Close</button>
       </div>
     </div>
   </div>
@@ -1753,7 +1800,7 @@
     function graphFileTreeEntry(node) {
       return {
         id: node.id,
-        slug: node.id,
+        slug: node.slug || "",
         title: node.title || node.id,
         scope: node.scope,
         type: node.kind,
@@ -2524,16 +2571,8 @@
     async function loadStatus() {
       try {
         const s = await api("/api/kb/status");
-        $("#kb-summary").textContent = formatText("knowledge.status_summary", {
-          entries: s.total_entries,
-          pending: s.pending,
-          stale: s.stale,
-          gate: s.curation_gate,
-          git: s.git.is_repo ? t("knowledge.git_repo", "repo") : t("knowledge.git_off", "off"),
-        }, `Entries ${s.total_entries} · Pending ${s.pending} · Stale ${s.stale} · gate ${s.curation_gate} · git ${s.git.is_repo ? "repo" : "off"}`);
-        $("#kb-summary").className = "status " + (s.enabled ? "completed" : "idle");
         $("#pending-badge").textContent = s.pending ? String(s.pending) : "";
-      } catch (e) { $("#kb-summary").textContent = formatText("knowledge.load_failed_with_error", { error: e.message }, "Load failed: " + e.message); }
+      } catch (e) { $("#pending-badge").textContent = ""; }
     }
 
     function syncProjectNavCustomWorkspace() {
@@ -5171,6 +5210,9 @@
     }
 
     function syncStatusParts(status) {
+      if (status.sync_mode === "off") {
+        return [{ text: t("knowledge.sync_status_disabled", "Sync disabled") }];
+      }
       if (!status?.git_available) return [{ text: t("knowledge.sync_status_git_unavailable", "git unavailable") }];
       if (!status?.is_repo) return [{ text: t("knowledge.sync_status_not_initialized", "Not initialized") }];
       if (!status?.remote) return [{ text: t("knowledge.sync_status_no_remote", "No remote") }];
@@ -5309,9 +5351,12 @@
       return ["#kb-sync", "#settings-sync"].map((selector) => $(selector)).filter(Boolean);
     }
 
+    let currentSyncMode = "auto";
+    let currentCurationGate = "manual";
+
     function setSyncButtons(disabled, text) {
       for (const button of syncButtons()) {
-        button.disabled = disabled;
+        button.disabled = disabled || currentSyncMode === "off";
         button.textContent = text;
       }
     }
@@ -5334,16 +5379,40 @@
       return maintenance.summary || maintenance.error || maintenance.status;
     }
 
-    async function loadSyncStatus() {
-      if (!syncStatusElements().length) return;
+    let syncStatusPromise = null;
+    let syncStatusRefreshScheduled = false;
+
+    function loadSyncStatus() {
+      if (!syncStatusElements().length) return Promise.resolve();
+      if (syncStatusPromise) return syncStatusPromise;
       setSyncStatusText(t("knowledge.sync_status_checking", "Checking sync status..."));
-      try {
-        const status = await api("/api/kb/sync-status");
-        renderSyncStatus(status);
-        const hasConflict = Boolean(status?.unmerged?.length || status?.state === "conflict");
-        setResolveButtons(hasConflict, false);
-      } catch (e) {
-        setSyncStatusText(formatText("knowledge.sync_status_failed", { error: e.message }, "Sync status failed: " + e.message));
+      syncStatusPromise = api("/api/kb/sync-status?remote=1")
+        .then((status) => {
+          currentSyncMode = status.sync_mode || "auto";
+          renderSyncStatus(status);
+          const hasConflict = Boolean(status?.unmerged?.length || status?.state === "conflict");
+          setResolveButtons(hasConflict, false);
+        })
+        .catch((error) => {
+          setSyncStatusText(formatText("knowledge.sync_status_failed", { error: error.message }, "Sync status failed: " + error.message));
+        })
+        .finally(() => {
+          syncStatusPromise = null;
+        });
+      return syncStatusPromise;
+    }
+
+    function scheduleSyncStatusRefresh() {
+      if (syncStatusRefreshScheduled || syncStatusPromise) return;
+      syncStatusRefreshScheduled = true;
+      const refresh = () => {
+        syncStatusRefreshScheduled = false;
+        void loadSyncStatus();
+      };
+      if (typeof window.requestIdleCallback === "function") {
+        window.requestIdleCallback(refresh, { timeout: 1500 });
+      } else {
+        window.setTimeout(refresh, 0);
       }
     }
 
@@ -5397,6 +5466,16 @@
       setSyncButtons(true, t("knowledge.syncing", "Syncing..."));
       try {
         const result = await api("/api/kb/sync", { method: "POST", body: JSON.stringify({ pull: true, push: true }) });
+        if (!result.ok && result.agent_dispatched) {
+          const task = result.management_task || {};
+          toast(formatText(
+            "knowledge.sync_agent_dispatched",
+            { task: task.task_id || "-" },
+            "Sync failed; KB Agent task created: " + (task.task_id || "-"),
+          ));
+          await loadSyncStatus();
+          return;
+        }
         if (!result.ok) throw new Error(syncFailureMessage(result.sync));
         toast(t("knowledge.sync_complete", "Sync complete"));
         await loadStatus();
@@ -5412,9 +5491,12 @@
       const s = await api("/api/kb/config");
       $("#s-enabled").value = boolMode(s.enabled);
       $("#s-path").value = s.path || "";
-      $("#s-gate").value = s.curation.gate || "manual";
+      currentCurationGate = s.curation.gate || "manual";
+      $("#s-gate").value = currentCurationGate === "agent-auto" ? "auto" : currentCurationGate;
       $("#s-project-nav-enabled").value = boolMode(s.project_nav?.enabled !== false);
       $("#s-git-enabled").value = boolMode(s.git.enabled);
+      $("#s-sync-mode").value = s.sync?.mode || "auto";
+      currentSyncMode = s.sync?.mode || "auto";
       $("#s-git-proxy-enabled").value = boolMode(s.git.proxy_enabled);
       $("#s-remote").value = s.git.remote || "";
       $("#s-branch").value = s.git.branch || "main";
@@ -5426,16 +5508,18 @@
       const payload = {
         enabled: modeBool("#s-enabled"),
         path: $("#s-path").value.trim() || null,
-        curation: { gate: $("#s-gate").value },
+        curation: {
+          gate: $("#s-gate").value === "auto" && currentCurationGate === "agent-auto"
+            ? "agent-auto"
+            : $("#s-gate").value,
+        },
         project_nav: { enabled: modeBool("#s-project-nav-enabled") },
+        sync: { mode: $("#s-sync-mode").value },
         git: {
           enabled: modeBool("#s-git-enabled"),
           proxy_enabled: modeBool("#s-git-proxy-enabled"),
           remote: $("#s-remote").value.trim() || null,
           branch: $("#s-branch").value.trim() || "main",
-          auto_pull: false,
-          auto_commit: false,
-          auto_push: false,
         },
       };
       try { await api("/api/kb/config", { method: "PATCH", body: JSON.stringify(payload) }); toast(t("knowledge.saved", "Saved")); await loadStatus(); await loadSyncStatus(); }
@@ -5507,9 +5591,27 @@
       const modal = $(selector);
       return Boolean(modal && !modal.hidden);
     }
+    function openSyncModeHelp() {
+      const modal = $("#sync-mode-help-modal");
+      const trigger = $("#s-sync-mode-help");
+      modal.hidden = false;
+      trigger.setAttribute("aria-expanded", "true");
+      window.setTimeout(() => $("#sync-mode-help-close")?.focus(), 0);
+    }
+    function closeSyncModeHelp() {
+      const modal = $("#sync-mode-help-modal");
+      const trigger = $("#s-sync-mode-help");
+      modal.hidden = true;
+      trigger.setAttribute("aria-expanded", "false");
+      trigger.focus();
+    }
     function closeTopKnowledgeModal() {
       if (!$("#graph-controls-panel")?.hidden) {
         setGraphControlsOpen(false);
+        return true;
+      }
+      if (knowledgeModalOpen("#sync-mode-help-modal")) {
+        closeSyncModeHelp();
         return true;
       }
       if (knowledgeModalOpen("#project-relations-modal")) {
@@ -5571,6 +5673,11 @@
     $("#kb-local-changes-modal").addEventListener("click", event => {
       if (event.target.id === "kb-local-changes-modal") closeLocalChangesModal();
     });
+    $("#s-sync-mode-help").addEventListener("click", openSyncModeHelp);
+    $("#sync-mode-help-close").addEventListener("click", closeSyncModeHelp);
+    $("#sync-mode-help-modal").addEventListener("click", event => {
+      if (event.target.id === "sync-mode-help-modal") closeSyncModeHelp();
+    });
     $("#kb-sidebar-toggle").addEventListener("click", () => setSidebarCollapsed(!sidebarIsCollapsed()));
     bindSidebarResize();
     bindResponsiveGraphLayout();
@@ -5623,18 +5730,19 @@
     });
     syncChromeText();
     loadStatus();
-    loadSyncStatus();
     loadProjectNavWorkspaces().finally(() => {
+      let initialViewPromise;
       if (pageEntryId) {
         void loadSidebarFileData().catch(() => {});
-        void showTab("entries").then(() => openEntryReference(encodeURIComponent(pageEntryId)));
+        initialViewPromise = showTab("entries").then(() => openEntryReference(encodeURIComponent(pageEntryId)));
       } else if (pageNoteId) {
         void loadSidebarFileData().catch(() => {});
-        void window.openCaptureNote(encodeURIComponent(pageNoteId));
+        initialViewPromise = window.openCaptureNote(encodeURIComponent(pageNoteId));
       } else {
         if (state.activeTab !== "graph") void loadSidebarFileData().catch(() => {});
-        showTab(state.activeTab);
+        initialViewPromise = showTab(state.activeTab);
       }
+      void Promise.resolve(initialViewPromise).then(scheduleSyncStatusRefresh, scheduleSyncStatusRefresh);
     });
   </script>
 </body>

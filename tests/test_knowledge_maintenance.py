@@ -243,6 +243,21 @@ def test_maintenance_job_noop_when_clean(tmp_path: Path):
     assert "No conflicts" in record["summary"]
 
 
+def test_maintenance_job_reports_failed_when_conflict_resolution_push_fails(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    root, cfg, repo, local_entry = _diverged_repo(tmp_path)
+    kg.sync(root, cfg, message="manual sync")
+    monkeypatch.setattr(km, "push", lambda *_args, **_kwargs: {"ok": False, "pushed": False, "error": "network down"})
+
+    record = km.run_kb_maintenance_job(root, cfg, agent=_stub_agent(None))
+
+    assert record["status"] == "failed"
+    assert record["pushed"] is False
+    assert record["summary"] == "冲突已解决，但推送到远端失败。"
+    assert "network down" in record["error"]
+    assert kg.rebase_in_progress(repo) is False
+    assert kg.unmerged_paths(repo) == []
+
+
 def test_parse_resolution_plan_extracts_json_from_prose(tmp_path: Path):
     reply = "Here is my plan:\n```json\n[{\"path\": \"a.md\", \"action\": \"local\"}]\n```\nDone."
     assert km.parse_resolution_plan(reply) == [{"path": "a.md", "action": "local"}]
@@ -277,6 +292,41 @@ def test_scheduled_sync_no_remote_is_noop(tmp_path: Path):
     ksl._run_scheduled_sync(root)
     state = km.read_sync_state(root)
     assert state["loop"]["last_sync_ok"] is True
+
+
+@pytest.mark.parametrize("mode", ["manual", "off"])
+def test_scheduled_sync_skips_non_auto_modes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mode: str):
+    root = tmp_path / ".aha"
+    cfg = _config()
+    cfg["knowledge"]["sync"]["mode"] = mode
+    write_json(config_path(root), cfg)
+    calls: list[bool] = []
+    monkeypatch.setattr(ksl, "knowledge_sync", lambda *_args, **_kwargs: calls.append(True))
+
+    ksl._run_scheduled_sync(root)
+
+    assert calls == []
+
+
+def test_scheduled_auto_sync_always_pushes_and_dispatches_external_failures(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    root = tmp_path / ".aha"
+    cfg = _config("git@example.com:kb.git", auto_push=False)
+    write_json(config_path(root), cfg)
+    calls: list[dict] = []
+    dispatched: list[dict] = []
+
+    def fake_sync(_root, _cfg, **kwargs):
+        calls.append(kwargs)
+        return {"ok": False, "steps": {"push": {"ok": False, "error": "network timed out"}}}
+
+    monkeypatch.setattr(ksl, "knowledge_sync", fake_sync)
+    monkeypatch.setattr(ksl, "dispatch_maintenance_job", lambda _root, _cfg, **kwargs: dispatched.append(kwargs))
+    ksl._run_scheduled_sync(root)
+
+    assert calls[0]["do_pull"] is True
+    assert calls[0]["do_push"] is True
+    assert dispatched[0]["source"] == "scheduled"
+    assert dispatched[0]["sync_result"]["ok"] is False
 
 
 def test_scheduled_sync_conflict_dispatches_maintenance(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):

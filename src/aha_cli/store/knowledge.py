@@ -42,6 +42,7 @@ KNOWLEDGE_SCHEMA_VERSION = 1
 KNOWLEDGE_INDEX_FILE = "aha-knowledge.json"
 KNOWLEDGE_README_FILE = "README.md"
 KNOWLEDGE_GITIGNORE_FILE = ".gitignore"
+KNOWLEDGE_GITATTRIBUTES_FILE = ".gitattributes"
 GENERAL_DIR = "general"
 PERSONAL_DIR = "personal"
 PROJECTS_DIR = "projects"
@@ -96,6 +97,8 @@ def entry_kinds_for_scope(scope: str) -> tuple[str, ...]:
 
 
 _FRONTMATTER_FENCE = "---"
+_GITATTRIBUTES_HEADER = "# AHA managed cross-platform text normalization"
+_GITATTRIBUTES_RULE = "* text=auto eol=lf"
 
 
 # --------------------------------------------------------------------------- #
@@ -235,6 +238,21 @@ def init_knowledge_base(root: Path, config: dict | None = None) -> dict:
     if not readme.exists():
         readme.write_text(_render_readme(), encoding="utf-8")
 
+    gitattributes = kb_root / KNOWLEDGE_GITATTRIBUTES_FILE
+    current_attributes = gitattributes.read_text(encoding="utf-8").splitlines() if gitattributes.exists() else []
+    managed_lines = {_GITATTRIBUTES_HEADER, _GITATTRIBUTES_RULE}
+    preserved_attributes = [line for line in current_attributes if line.strip() not in managed_lines]
+    while preserved_attributes and not preserved_attributes[-1].strip():
+        preserved_attributes.pop()
+    desired_attributes = list(preserved_attributes)
+    if desired_attributes:
+        desired_attributes.append("")
+    desired_attributes.extend((_GITATTRIBUTES_HEADER, _GITATTRIBUTES_RULE))
+    attributes_content = "\n".join(desired_attributes) + "\n"
+    attributes_updated = not gitattributes.exists() or gitattributes.read_bytes() != attributes_content.encode("utf-8")
+    if attributes_updated:
+        gitattributes.write_bytes(attributes_content.encode("utf-8"))
+
     # Unreviewed candidates, distill logs, and navigation drafts are
     # review/runtime state. Raw capture notes/assets are user material and stay
     # syncable, so only the generated distill logs are ignored.
@@ -272,6 +290,7 @@ def init_knowledge_base(root: Path, config: dict | None = None) -> dict:
         "path": str(kb_root),
         "created": created,
         "schema_version": index.get("schema_version", KNOWLEDGE_SCHEMA_VERSION),
+        "gitattributes_updated": attributes_updated,
     }
 
 

@@ -21,6 +21,8 @@ SERVICE_ASSISTANT_TASK_KIND = "service_assistant"
 SERVICE_ASSISTANT_PURPOSE = "service_assistant"
 FEISHU_GROUP_TASK_KIND = "feishu_group_digital_human"
 FEISHU_GROUP_PURPOSE = "feishu_group"
+KNOWLEDGE_TASK_KIND = "knowledge_operation"
+KNOWLEDGE_RUN_PURPOSE = "knowledge_management"
 
 
 def is_system_managed(value: object) -> bool:
@@ -58,6 +60,23 @@ def is_feishu_group_task(value: object) -> bool:
         isinstance(value, dict)
         and value.get("system_managed")
         and str(value.get("kind") or "") == FEISHU_GROUP_TASK_KIND
+    )
+
+
+def is_knowledge_run(value: object) -> bool:
+    return bool(
+        isinstance(value, dict)
+        and value.get("system_managed")
+        and str(value.get("kind") or "") == SYSTEM_RUN_KIND
+        and str(value.get("system_purpose") or "") == KNOWLEDGE_RUN_PURPOSE
+    )
+
+
+def is_knowledge_task(value: object) -> bool:
+    return bool(
+        isinstance(value, dict)
+        and value.get("system_managed")
+        and str(value.get("kind") or "") == KNOWLEDGE_TASK_KIND
     )
 
 

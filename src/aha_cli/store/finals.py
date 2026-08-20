@@ -93,7 +93,7 @@ def write_task_result(
         append_event_func(root, run_id, "knowledge_task_final_sidecar_invalid", {"task_id": task_id, "error": sidecar_error})
     if policy == "finalize" and render_overview_func:
         render_overview_func(root, run_id, task_id, policy=policy)
-    if policy == "finalize" and distill_meta is not None:
+    if policy == "finalize" and distill_meta is not None and not bool((final_context or {}).get("skip_knowledge_distill")):
         _distill_knowledge_safe(root, run_id, task_id, body, final_context, distill_meta, sidecar_candidates, append_event_func)
     return path
 

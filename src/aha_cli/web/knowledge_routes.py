@@ -48,6 +48,7 @@ from aha_cli.store.knowledge import (
     iter_all_entry_summary_records,
     iter_all_entry_summaries,
     knowledge_status,
+    knowledge_config,
     knowledge_root,
     list_pending,
     remove_pending,
@@ -98,29 +99,74 @@ def _default_dispatch_distill_job(
     proxy_enabled=None,
     mode=None,
     reasoning_effort=None,
-) -> None:
-    """Run a capture distill as a background daemon thread (non-blocking).
-
-    Seam: tests replace ``dispatch_distill_job`` to run synchronously with a
-    stub agent. The note's ``status`` (distilling/distilled/error) is the
-    pollable job record, so no separate job store is needed.
-    """
+) -> dict:
     import threading
 
-    from aha_cli.services.knowledge_capture_distill import run_distill_job
+    from aha_cli.services.knowledge_capture_distill import default_capture_agent, run_distill_job
+    from aha_cli.services.knowledge_tasks import (
+        create_knowledge_task,
+        finish_knowledge_task,
+        knowledge_task_progress_callback,
+        public_knowledge_task,
+        start_knowledge_task,
+    )
+
+    note = capture.read_note(root, cfg, note_id) or {}
+    note_title = str(note.get("title") or note_id).strip() or note_id
+    task_context = create_knowledge_task(
+        root,
+        cfg,
+        operation="capture_distill",
+        title=f"Capture 整理 · {note_title[:60]}",
+        description=f"整理 Capture 笔记 `{note_title}`，生成可审核的 Knowledge 候选。",
+        backend=backend,
+        model=model,
+        reasoning_effort=reasoning_effort,
+        proxy_enabled=proxy_enabled,
+        metadata={"note_id": note_id, "distill_mode": mode or "organize"},
+    )
+    task_context["operation"] = "capture_distill"
+
+    def _agent(context: dict) -> str:
+        visible_context = dict(context)
+        visible_context["progress_callback"] = knowledge_task_progress_callback(
+            root,
+            task_context,
+            context.get("progress_callback"),
+        )
+        return default_capture_agent(visible_context)
+
+    def _run() -> None:
+        try:
+            start_knowledge_task(root, task_context, "KB Agent 正在整理 Capture 内容。")
+            result = run_distill_job(
+                root,
+                cfg,
+                note_id,
+                backend=backend,
+                model=model,
+                proxy_enabled=proxy_enabled,
+                mode=mode or "organize",
+                reasoning_effort=reasoning_effort,
+                agent=_agent,
+            )
+            if result.get("ok"):
+                summary = f"Capture 整理完成，生成 {result.get('candidates', 0)} 条待审核候选。"
+            else:
+                summary = f"Capture 整理失败：{result.get('error') or 'unknown error'}"
+            finish_knowledge_task(root, task_context, summary, ok=bool(result.get("ok")))
+        except Exception as exc:  # noqa: BLE001 - background jobs must always settle their visible task
+            try:
+                capture.update_note(root, cfg, note_id, status="failed", last_error=str(exc))
+            except Exception:  # noqa: BLE001
+                pass
+            finish_knowledge_task(root, task_context, f"Capture 整理任务异常：{exc}", ok=False)
 
     threading.Thread(
-        target=run_distill_job,
-        args=(root, cfg, note_id),
-        kwargs={
-            "backend": backend,
-            "model": model,
-            "proxy_enabled": proxy_enabled,
-            "mode": mode or "organize",
-            "reasoning_effort": reasoning_effort,
-        },
+        target=_run,
         daemon=True,
     ).start()
+    return {"management_task": public_knowledge_task(task_context)}
 
 
 def _nav_agent_log_event(stage: str, message: str, **extra) -> dict:
@@ -299,15 +345,72 @@ def run_project_nav_draft_job(
     )
 
 
-def _default_dispatch_project_nav_job(root: Path, cfg: dict, draft_id: str, **kwargs) -> None:
+def _default_dispatch_project_nav_job(root: Path, cfg: dict, draft_id: str, **kwargs) -> dict:
     import threading
 
+    from aha_cli.services.knowledge_navigation import default_navigation_agent
+    from aha_cli.services.knowledge_tasks import (
+        create_knowledge_task,
+        finish_knowledge_task,
+        knowledge_task_progress_callback,
+        public_knowledge_task,
+        start_knowledge_task,
+    )
+
+    project_key_value = str(kwargs.get("project_key_value") or "").strip()
+    workspace_path = str(kwargs.get("workspace_path") or "").strip()
+    task_context = create_knowledge_task(
+        root,
+        cfg,
+        operation="project_navigation",
+        title=f"项目导航生成 · {project_key_value or Path(workspace_path).name}",
+        description=f"分析工作区 `{workspace_path}`，生成项目 `{project_key_value}` 的导航草稿。",
+        backend=kwargs.get("backend"),
+        model=kwargs.get("model"),
+        reasoning_effort=kwargs.get("reasoning_effort"),
+        proxy_enabled=kwargs.get("proxy_enabled"),
+        metadata={"draft_id": draft_id, "project_key": project_key_value, "workspace_path": workspace_path},
+    )
+    task_context["operation"] = "project_navigation"
+    base_agent = kwargs.pop("agent", None) or default_navigation_agent
+
+    def _agent(context: dict) -> str:
+        visible_context = dict(context)
+        visible_context["progress_callback"] = knowledge_task_progress_callback(
+            root,
+            task_context,
+            context.get("progress_callback"),
+        )
+        return base_agent(visible_context)
+
+    def _run() -> None:
+        try:
+            start_knowledge_task(root, task_context, "KB Agent 正在分析项目结构。")
+            result = run_project_nav_draft_job(root, cfg, draft_id, agent=_agent, **kwargs)
+            status = str(result.get("status") or "") if isinstance(result, dict) else ""
+            ok = status == "completed" or bool(isinstance(result, dict) and result.get("ok"))
+            summary = str((result or {}).get("summary") or (result or {}).get("error") or "项目导航任务结束。")
+            finish_knowledge_task(root, task_context, summary, ok=ok)
+        except Exception as exc:  # noqa: BLE001 - background jobs must always settle their visible task
+            try:
+                nav_drafts.update_draft(
+                    root,
+                    cfg,
+                    draft_id,
+                    status="failed",
+                    completed_at=utc_now(),
+                    summary="Project nav generation failed",
+                    error=str(exc),
+                )
+            except Exception:  # noqa: BLE001
+                pass
+            finish_knowledge_task(root, task_context, f"项目导航任务异常：{exc}", ok=False)
+
     threading.Thread(
-        target=run_project_nav_draft_job,
-        args=(root, cfg, draft_id),
-        kwargs=kwargs,
+        target=_run,
         daemon=True,
     ).start()
+    return {"management_task": public_knowledge_task(task_context)}
 
 
 # Module-level seam so tests can substitute synchronous execution.
@@ -774,6 +877,7 @@ def _knowledge_settings(cfg: dict) -> dict:
     git = kb.get("git", {}) if isinstance(kb.get("git"), dict) else {}
     curation = kb.get("curation", {}) if isinstance(kb.get("curation"), dict) else {}
     project_nav = kb.get("project_nav", {}) if isinstance(kb.get("project_nav"), dict) else {}
+    sync = kb.get("sync", {}) if isinstance(kb.get("sync"), dict) else {}
     return {
         "enabled": bool(kb.get("enabled")),
         "path": kb.get("path"),
@@ -791,6 +895,11 @@ def _knowledge_settings(cfg: dict) -> dict:
             "maintain_during_task": bool(project_nav.get("maintain_during_task", True)),
         },
         "curation": {"gate": curation.get("gate")},
+        "sync": {
+            "mode": str(sync.get("mode") or "auto"),
+            "interval_minutes": sync.get("interval_minutes", 60),
+            "resolve_conflicts": str(sync.get("resolve_conflicts") or "agent"),
+        },
     }
 
 
@@ -802,7 +911,8 @@ def _as_string_list(value) -> list[str]:
     return []
 
 
-_ALLOWED_GATES = {"manual", "auto", "off"}
+_ALLOWED_GATES = {"manual", "auto", "agent-auto", "off"}
+_ALLOWED_SYNC_MODES = {"auto", "manual", "off"}
 _ALLOWED_ENTRY_STATUSES = {"active", "stale", "deprecated"}
 def _optional_bool(value, field: str) -> bool | None:
     if value is None:
@@ -841,6 +951,8 @@ def _apply_settings_patch(root: Path, payload: dict) -> dict:
         kb["curation"] = {}
     if not isinstance(kb.get("project_nav"), dict):
         kb["project_nav"] = {}
+    if not isinstance(kb.get("sync"), dict):
+        kb["sync"] = {}
 
     if "enabled" in payload:
         kb["enabled"] = bool(payload["enabled"])
@@ -872,6 +984,20 @@ def _apply_settings_patch(root: Path, payload: dict) -> dict:
         if gate not in _ALLOWED_GATES:
             raise ValueError(f"curation gate must be one of {sorted(_ALLOWED_GATES)}")
         kb["curation"]["gate"] = gate
+
+    sync_patch = payload.get("sync")
+    if isinstance(sync_patch, dict):
+        if "mode" in sync_patch:
+            mode = str(sync_patch.get("mode") or "").strip().lower()
+            if mode not in _ALLOWED_SYNC_MODES:
+                raise ValueError(f"sync mode must be one of {sorted(_ALLOWED_SYNC_MODES)}")
+            kb["sync"]["mode"] = mode
+        if "interval_minutes" in sync_patch:
+            try:
+                interval = max(1, int(sync_patch.get("interval_minutes") or 60))
+            except (TypeError, ValueError) as exc:
+                raise ValueError("sync.interval_minutes must be an integer") from exc
+            kb["sync"]["interval_minutes"] = interval
 
     project_nav_patch = payload.get("project_nav")
     if isinstance(project_nav_patch, dict):
@@ -1191,6 +1317,9 @@ def knowledge_route_response(
 
         status["maintenance"] = maintenance_record(root)
         status["sync_loop"] = (read_sync_state(root).get("loop") or {})
+        kb_cfg = knowledge_config(cfg)
+        sync_cfg = kb_cfg.get("sync") if isinstance(kb_cfg.get("sync"), dict) else {}
+        status["sync_mode"] = str(sync_cfg.get("mode") or "auto")
         return _ok(method, status)
 
     if method in {"GET", "HEAD"} and path == "/api/kb/local-changes":
@@ -1729,7 +1858,7 @@ def knowledge_route_response(
                 )
             ],
         })
-        dispatch_project_nav_job(
+        dispatched = dispatch_project_nav_job(
             root,
             cfg,
             draft["id"],
@@ -1742,6 +1871,15 @@ def knowledge_route_response(
             proxy_enabled=proxy_enabled,
             agent=project_navigation_agent,
         )
+        management_task = dispatched.get("management_task") if isinstance(dispatched, dict) else None
+        if management_task:
+            draft = nav_drafts.update_draft(
+                root,
+                cfg,
+                draft["id"],
+                management_run_id=management_task.get("run_id"),
+                management_task_id=management_task.get("task_id"),
+            )
         draft.pop("_path", None)
         return json_response({
             "ok": True,
@@ -1752,6 +1890,7 @@ def knowledge_route_response(
             "project_key": project_key_value,
             "run_id": context.get("run_id"),
             "task_id": context.get("task_id"),
+            "management_task": management_task,
         }, "202 Accepted")
 
     if method == "POST" and path == "/api/kb/project-nav/draft/accept":
@@ -1991,6 +2130,10 @@ def knowledge_route_response(
 
     if method == "POST" and path == "/api/kb/sync":
         payload = parse_json_body(body) if body.strip() else {}
+        kb_cfg = knowledge_config(cfg)
+        sync_cfg = kb_cfg.get("sync") if isinstance(kb_cfg.get("sync"), dict) else {}
+        if str(sync_cfg.get("mode") or "auto") == "off":
+            return json_response({"error": "knowledge sync is disabled"}, "409 Conflict")
         message = str(payload.get("message") or f"chore(knowledge): manual web sync {utc_now()}").strip()
         try:
             pull_value = _optional_bool(payload.get("pull", True), "pull")
@@ -1999,17 +2142,22 @@ def knowledge_route_response(
             return json_response({"error": str(exc)}, "400 Bad Request")
         do_pull = True if pull_value is None else pull_value
         do_push = True if push_value is None else push_value
-        resolve_requested = bool(payload.get("resolve", False))
         result = knowledge_sync(root, cfg, message=message, do_pull=do_pull, do_push=do_push)
         maintenance = None
-        if resolve_requested and result.get("conflict"):
-            # Dispatch the KB maintenance agent to resolve the conflict. It runs
-            # in a background thread; the returned record is the running state.
-            from aha_cli.services.knowledge_maintenance import dispatch_maintenance_job, maintenance_record
+        management_task = None
+        from aha_cli.services.knowledge_maintenance import dispatch_sync_agent, maintenance_record, should_dispatch_sync_agent
 
-            dispatch_maintenance_job(root, cfg)
-            maintenance = maintenance_record(root)
-        return json_response({"ok": bool(result.get("ok")), "sync": result, "maintenance": maintenance})
+        if should_dispatch_sync_agent(result):
+            dispatched = dispatch_sync_agent(root, cfg, result, source="manual")
+            maintenance = dispatched.get("maintenance") or maintenance_record(root)
+            management_task = dispatched.get("management_task")
+        return json_response({
+            "ok": bool(result.get("ok")),
+            "sync": result,
+            "maintenance": maintenance,
+            "management_task": management_task,
+            "agent_dispatched": bool(management_task),
+        })
 
     # --- Capture inbox (raw notes) ------------------------------------------ #
     if method == "POST" and path == "/api/kb/capture/distill":
@@ -2038,7 +2186,7 @@ def knowledge_route_response(
         # Mark distilling synchronously so an immediate poll observes the job,
         # then run the slow model call off the request thread.
         capture.update_note(root, cfg, note_id, status="distilling", last_error="")
-        dispatch_distill_job(
+        dispatched = dispatch_distill_job(
             root,
             cfg,
             note_id,
@@ -2048,12 +2196,14 @@ def knowledge_route_response(
             distill_mode,
             reasoning_effort,
         )
+        management_task = dispatched.get("management_task") if isinstance(dispatched, dict) else None
         return json_response({
             "ok": True,
             "id": note_id,
             "status": "distilling",
             "distill_mode": distill_mode,
             "reasoning_effort": reasoning_effort,
+            "management_task": management_task,
         })
 
     if method in {"GET", "HEAD"} and path == "/api/kb/capture/distill-log":

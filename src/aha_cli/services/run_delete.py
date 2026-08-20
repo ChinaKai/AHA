@@ -4,7 +4,7 @@ from pathlib import Path
 import shutil
 
 from aha_cli.constants import PLAN_FILE
-from aha_cli.domain.models import is_service_assistant_run
+from aha_cli.domain.models import is_knowledge_run, is_service_assistant_run
 from aha_cli.services.run_cleanup import DEFAULT_ACTIVE_HEARTBEAT_SECONDS, run_has_active_heartbeat
 from aha_cli.store.io import read_json
 from aha_cli.store.paths import aha_home_path, run_dir
@@ -69,9 +69,9 @@ def delete_run(
             plan = read_json(plan_path)
         except (OSError, ValueError):
             plan = {}
-        if is_service_assistant_run(plan):
+        if is_service_assistant_run(plan) or is_knowledge_run(plan):
             raise RunDeleteError(
-                "Cannot delete the system-managed AHA service assistant run",
+                "Cannot delete a system-managed AHA run",
                 reason="system_managed_run",
                 status_code="409 Conflict",
             )

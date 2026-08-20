@@ -107,6 +107,26 @@ def test_ensure_repo_inits_branch_and_remote(tmp_path: Path):
     assert again["remote_state"] == "unchanged"
 
 
+def test_gitattributes_keeps_windows_and_linux_status_consistent_for_legacy_crlf(tmp_path: Path):
+    root = tmp_path / ".aha"
+    cfg = _config()
+    repo = knowledge_root(root, cfg)
+    repo.mkdir(parents=True)
+    subprocess.run(["git", "init", "-b", "main", str(repo)], check=True, capture_output=True)
+    legacy = repo / "legacy.md"
+    legacy.write_bytes(b"first\r\nsecond\r\n")
+    _git(repo, "add", "legacy.md")
+    _git(repo, "commit", "-m", "legacy crlf")
+
+    result = kg.commit_all(root, "add cross-platform attributes", cfg)
+
+    assert result["ok"] is True
+    assert (repo / ".gitattributes").read_text(encoding="utf-8").splitlines()[-1] == "* text=auto eol=lf"
+    assert _git(repo, "-c", "core.autocrlf=true", "status", "--porcelain") == ""
+    assert _git(repo, "-c", "core.autocrlf=false", "status", "--porcelain") == ""
+    assert "i/crlf" in _git(repo, "ls-files", "--eol", "legacy.md")
+
+
 def test_commit_all_commits_then_noop(tmp_path: Path):
     root = tmp_path / ".aha"
     cfg = _config()

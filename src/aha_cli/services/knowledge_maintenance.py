@@ -18,6 +18,7 @@ hostile backend reply can never corrupt the repo. State is persisted to
 
 from __future__ import annotations
 
+import inspect
 import json
 import threading
 from pathlib import Path
@@ -36,6 +37,13 @@ from aha_cli.services.knowledge_git import (
     resolve_unmerged,
     sync_status,
     unmerged_paths,
+)
+from aha_cli.services.knowledge_tasks import (
+    create_knowledge_task,
+    finish_knowledge_task,
+    knowledge_task_progress_callback,
+    public_knowledge_task,
+    start_knowledge_task,
 )
 
 # Cap each conflict side in the agent prompt so a large entry cannot blow the
@@ -211,8 +219,8 @@ def default_maintenance_agent(context: dict) -> str:
 # --------------------------------------------------------------------------- #
 # Job
 # --------------------------------------------------------------------------- #
-def _fresh_record(root: Path, config: dict | None, *, backend: str | None) -> dict:
-    return {
+def _fresh_record(root: Path, config: dict | None, *, backend: str | None, task_context: dict | None = None) -> dict:
+    record = {
         "status": "running",
         "started_at": utc_now(),
         "finished_at": None,
@@ -224,6 +232,10 @@ def _fresh_record(root: Path, config: dict | None, *, backend: str | None) -> di
         "agent_backend": backend or "claude",
         "fallback_used": False,
     }
+    management_task = public_knowledge_task(task_context)
+    if management_task:
+        record["management_task"] = management_task
+    return record
 
 
 def _finish(root: Path, record: dict) -> dict:
@@ -253,20 +265,26 @@ def run_kb_maintenance_job(
     model: str | None = None,
     agent=None,
     progress_callback=None,
+    task_context: dict | None = None,
+    do_push: bool = True,
 ) -> dict:
     """Resolve an in-progress KB sync conflict. Returns the maintenance record."""
     repo = knowledge_root(root, config)
-    record = _fresh_record(root, config, backend=backend)
+    record = _fresh_record(root, config, backend=backend, task_context=task_context)
     try:
         detail = conflict_detail(root, config)
         if not detail.get("unmerged"):
-            cont = rebase_continue(root, config)
-            if cont.get("ok"):
+            if not rebase_in_progress(repo):
                 record["status"] = "resolved"
                 record["summary"] = "No conflicts to resolve; sync is clean."
             else:
-                record["status"] = "failed"
-                record["error"] = cont.get("error") or "rebase continue failed"
+                cont = rebase_continue(root, config)
+                if cont.get("ok"):
+                    record["status"] = "resolved"
+                    record["summary"] = "No conflicts to resolve; sync is clean."
+                else:
+                    record["status"] = "failed"
+                    record["error"] = cont.get("error") or "rebase continue failed"
             return _finish(root, record)
 
         plan: list = []
@@ -327,13 +345,14 @@ def run_kb_maintenance_job(
             rebase_abort(root, config)
             return _finish(root, record)
 
-        git_cfg = knowledge_config(config).get("git")
-        auto_push = bool(git_cfg.get("auto_push")) if isinstance(git_cfg, dict) else False
-        if auto_push:
+        if do_push:
             pushed = push(root, config)
             record["pushed"] = bool(pushed.get("pushed"))
             if not pushed.get("ok"):
+                record["status"] = "failed"
+                record["summary"] = "冲突已解决，但推送到远端失败。"
                 record["error"] = (record["error"] or "") + f" push failed: {pushed.get('error')}"
+                return _finish(root, record)
         record["status"] = "resolved"
         record["summary"] = _resolution_summary(detail, record["resolutions"], fallback_used)
         return _finish(root, record)
@@ -347,6 +366,113 @@ def run_kb_maintenance_job(
         return _finish(root, record)
 
 
+def _sync_failure_errors(result: dict) -> list[str]:
+    errors: list[str] = []
+    for step in (result.get("steps") or {}).values():
+        if not isinstance(step, dict):
+            continue
+        error = str(step.get("error") or "").strip()
+        if error:
+            errors.append(error)
+    error = str(result.get("error") or "").strip()
+    if error:
+        errors.append(error)
+    return errors
+
+
+def should_dispatch_sync_agent(result: dict) -> bool:
+    return bool(isinstance(result, dict) and not result.get("ok") and (result.get("conflict") or _sync_failure_errors(result)))
+
+
+def build_sync_recovery_prompt(root: Path, config: dict | None, sync_result: dict) -> str:
+    status = sync_status(root, config, check_remote=False)
+    errors = _sync_failure_errors(sync_result)
+    return "\n".join(
+        [
+            "You are diagnosing an AHA Knowledge Git synchronization failure.",
+            "The repository must remain safe: do not recommend force-push, deleting local changes, or rewriting history.",
+            "Analyze the external/environmental cause, identify safe automatic recovery steps, and clearly state any user action required.",
+            "Reply in concise Markdown with sections: Root cause, Safe handling, User action.",
+            "",
+            f"Knowledge root: {knowledge_root(root, config)}",
+            f"Git status: {json.dumps(status, ensure_ascii=False)}",
+            f"Sync errors: {json.dumps(errors, ensure_ascii=False)}",
+            f"Sync result: {json.dumps(sync_result, ensure_ascii=False)}",
+        ]
+    )
+
+
+def run_kb_sync_recovery_job(
+    root: Path,
+    config: dict | None,
+    sync_result: dict,
+    *,
+    backend: str | None = None,
+    model: str | None = None,
+    agent=None,
+    progress_callback=None,
+    task_context: dict | None = None,
+) -> dict:
+    if sync_result.get("conflict") or unmerged_paths(knowledge_root(root, config)):
+        return run_kb_maintenance_job(
+            root,
+            config,
+            backend=backend,
+            model=model,
+            agent=agent,
+            progress_callback=progress_callback,
+            task_context=task_context,
+        )
+    record = _fresh_record(root, config, backend=backend, task_context=task_context)
+    record["conflict_files"] = []
+    try:
+        agent_fn = agent or default_maintenance_agent
+        reply = agent_fn(
+            {
+                "config": config,
+                "prompt": build_sync_recovery_prompt(root, config, sync_result),
+                "cwd": str(knowledge_root(root, config)),
+                "backend": backend,
+                "model": model,
+                "progress_callback": progress_callback,
+            }
+        )
+        from aha_cli.services.knowledge_git import sync as knowledge_sync
+
+        retry = knowledge_sync(
+            root,
+            config,
+            message=f"chore(knowledge): agent-assisted sync retry {utc_now()}",
+            do_pull=True,
+            do_push=True,
+        )
+        record["diagnosis"] = str(reply or "").strip()
+        record["retry"] = retry
+        if retry.get("ok"):
+            record["status"] = "resolved"
+            record["summary"] = "同步故障经 Agent 分析后重试成功。"
+        elif retry.get("conflict"):
+            return run_kb_maintenance_job(
+                root,
+                config,
+                backend=backend,
+                model=model,
+                agent=agent_fn,
+                progress_callback=progress_callback,
+                task_context=task_context,
+            )
+        else:
+            record["status"] = "failed"
+            record["summary"] = "Agent 已完成诊断，但同步仍需用户处理。"
+            record["error"] = "; ".join(_sync_failure_errors(retry)) or "sync retry failed"
+        return _finish(root, record)
+    except Exception as exc:  # noqa: BLE001
+        record["status"] = "failed"
+        record["error"] = f"sync recovery agent failed: {exc}"
+        record["summary"] = "同步故障处理失败。"
+        return _finish(root, record)
+
+
 # --------------------------------------------------------------------------- #
 # Dispatch seam (mirrors the distill job dispatch so tests can run synchronously)
 # --------------------------------------------------------------------------- #
@@ -356,13 +482,34 @@ def _default_dispatch_maintenance_job(
     *,
     backend=None,
     model=None,
-) -> None:
+    sync_result: dict | None = None,
+    source: str = "sync",
+) -> dict:
     """Run a KB maintenance job in a background daemon thread (non-blocking).
 
     Writes the "running" maintenance record synchronously so a concurrent sync
     (scheduled or manual) sees an in-flight job and skips, avoiding a race where
     a second ``pull`` aborts the rebase mid-resolution.
     """
+    is_conflict = bool((sync_result or {}).get("conflict") or unmerged_paths(knowledge_root(root, config)))
+    operation = "sync_conflict" if is_conflict else "sync_failure"
+    title = "知识库同步冲突处理" if is_conflict else "知识库同步故障处理"
+    description = (
+        "知识库同步发生 Git 冲突。KB Agent 将分析冲突，按用户优先原则生成方案，并由 AHA 确定性应用。"
+        if is_conflict
+        else "知识库同步因网络、认证、远端状态或本机 Git 环境失败。KB Agent 将诊断原因并执行一次安全重试。"
+    )
+    task_context = create_knowledge_task(
+        root,
+        config,
+        operation=operation,
+        title=title,
+        description=description,
+        backend=backend,
+        model=model,
+        metadata={"source": source, "sync_result": sync_result or {}},
+    )
+    task_context["operation"] = operation
     state = read_sync_state(root)
     state["maintenance"] = {
         "status": "running",
@@ -375,16 +522,44 @@ def _default_dispatch_maintenance_job(
         "pushed": False,
         "agent_backend": backend or "claude",
         "fallback_used": False,
+        "management_task": public_knowledge_task(task_context),
     }
     write_sync_state(root, state)
 
     def _run() -> None:
         try:
-            run_kb_maintenance_job(root, config, backend=backend, model=model)
-        except Exception:  # noqa: BLE001 - background job must not raise
-            pass
+            start_knowledge_task(root, task_context, "KB Agent 正在读取同步状态。")
+            progress = knowledge_task_progress_callback(root, task_context)
+            record = run_kb_sync_recovery_job(
+                root,
+                config,
+                sync_result or {"ok": False, "conflict": is_conflict},
+                backend=backend,
+                model=model,
+                progress_callback=progress,
+                task_context=task_context,
+            )
+            diagnosis = str(record.get("diagnosis") or "").strip()
+            summary = str(record.get("summary") or record.get("error") or "同步维护结束。")
+            final = f"{summary}\n\n{diagnosis}".strip()
+            finish_knowledge_task(root, task_context, final, ok=record.get("status") == "resolved")
+        except Exception as exc:  # noqa: BLE001 - background job must not raise
+            finish_knowledge_task(root, task_context, f"同步维护任务异常：{exc}", ok=False)
 
     threading.Thread(target=_run, daemon=True).start()
+    return {"maintenance": state["maintenance"], "management_task": public_knowledge_task(task_context)}
 
 
 dispatch_maintenance_job = _default_dispatch_maintenance_job
+
+
+def dispatch_sync_agent(root: Path, config: dict | None, sync_result: dict, *, source: str) -> dict:
+    """Dispatch through the public seam while preserving older two-argument test/plugin hooks."""
+    parameters = inspect.signature(dispatch_maintenance_job).parameters.values()
+    supports_kwargs = any(parameter.kind == inspect.Parameter.VAR_KEYWORD for parameter in parameters)
+    names = {parameter.name for parameter in parameters}
+    if supports_kwargs or {"sync_result", "source"}.issubset(names):
+        result = dispatch_maintenance_job(root, config, sync_result=sync_result, source=source)
+    else:
+        result = dispatch_maintenance_job(root, config)
+    return result if isinstance(result, dict) else {}

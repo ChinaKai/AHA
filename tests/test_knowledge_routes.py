@@ -1719,12 +1719,14 @@ def test_config_get_and_patch(tmp_path: Path):
     # auto_push is enabled by default now; proxy stays off by default.
     assert cfg["git"]["auto_push"] is True
     assert cfg["git"]["proxy_enabled"] is False
+    assert cfg["sync"]["mode"] == "auto"
 
     resp = knowledge_route_response(
         home, "PATCH", "/api/kb/config", {},
         json.dumps({
             "git": {"enabled": True, "proxy_enabled": True, "remote": "git@h:u/r.git", "auto_push": True},
             "project_nav": {"enabled": False},
+            "sync": {"mode": "manual", "interval_minutes": 15},
             "curation": {"gate": "auto"},
         }).encode(), {},
     )
@@ -1735,12 +1737,53 @@ def test_config_get_and_patch(tmp_path: Path):
     assert out["knowledge"]["git"]["proxy_enabled"] is True
     assert out["knowledge"]["project_nav"]["enabled"] is False
     assert out["knowledge"]["curation"]["gate"] == "auto"
+    assert out["knowledge"]["sync"]["mode"] == "manual"
+    assert out["knowledge"]["sync"]["interval_minutes"] == 15
     # Persisted to disk and other defaults preserved (branch).
     saved = read_json(config_path(home))["knowledge"]
     assert saved["git"]["remote"] == "git@h:u/r.git"
     assert saved["git"]["proxy_enabled"] is True
     assert saved["project_nav"]["enabled"] is False
     assert load_config(home)["knowledge"]["git"]["branch"] == "main"
+
+
+def test_sync_mode_off_is_distinct_from_manual(tmp_path: Path):
+    home = _setup(tmp_path)
+    response = json_response_body(_patch(home, "/api/kb/config", {"sync": {"mode": "off"}}))
+    assert response["knowledge"]["sync"]["mode"] == "off"
+
+    disabled = _post(home, "/api/kb/sync", {})
+    assert b"409 Conflict" in disabled.split(b"\r\n", 1)[0]
+    assert b"knowledge sync is disabled" in disabled
+
+    response = json_response_body(_patch(home, "/api/kb/config", {"sync": {"mode": "manual"}}))
+    assert response["knowledge"]["sync"]["mode"] == "manual"
+
+
+def test_sync_failure_dispatches_visible_kb_management_task(tmp_path: Path, monkeypatch):
+    home = _setup(tmp_path)
+    import aha_cli.services.knowledge_maintenance as km
+    import aha_cli.web.knowledge_routes as kr
+
+    monkeypatch.setattr(
+        kr,
+        "knowledge_sync",
+        lambda *args, **kwargs: {"ok": False, "steps": {"push": {"ok": False, "error": "authentication failed"}}},
+    )
+    monkeypatch.setattr(
+        km,
+        "dispatch_maintenance_job",
+        lambda *args, **kwargs: {
+            "maintenance": {"status": "running"},
+            "management_task": {"run_id": "kb-run", "task_id": "task-001", "title": "知识库同步故障处理"},
+        },
+    )
+
+    out = json_response_body(_post(home, "/api/kb/sync", {}))
+    assert out["ok"] is False
+    assert out["agent_dispatched"] is True
+    assert out["management_task"]["run_id"] == "kb-run"
+    assert out["maintenance"]["status"] == "running"
 
 
 def test_sync_endpoint_runs_manual_git_sync(tmp_path: Path, monkeypatch):
@@ -1856,6 +1899,14 @@ def test_config_patch_rejects_bad_gate(tmp_path: Path):
     assert b"400" in resp.split(b"\r\n", 1)[0]
 
 
+def test_config_patch_preserves_legacy_agent_auto_gate(tmp_path: Path):
+    home = _setup(tmp_path)
+    out = json_response_body(_patch(home, "/api/kb/config", {"curation": {"gate": "agent-auto"}}))
+
+    assert out["knowledge"]["curation"]["gate"] == "agent-auto"
+    assert load_config(home)["knowledge"]["curation"]["gate"] == "agent-auto"
+
+
 def test_config_patch_tolerates_non_dict_git_curation(tmp_path: Path):
     # Hand-written config where git/curation are not dicts must not 500.
     home = tmp_path / ".aha"
@@ -1884,6 +1935,14 @@ def test_server_serves_kb_status(tmp_path: Path):
     resp = asyncio.run(fetch_ui_response(home, "", "/api/kb/status"))
     assert resp.startswith(b"HTTP/1.1 200 OK")
     assert json_response_body(resp)["initialized"] is True
+
+
+def test_ui_server_runs_knowledge_routes_off_event_loop():
+    root = Path(__file__).resolve().parents[1]
+    source = (root / "src" / "aha_cli" / "web" / "server.py").read_text(encoding="utf-8")
+
+    assert 'path.startswith("/api/kb/")' in source
+    assert "await asyncio.to_thread(\n                    knowledge_route_response," in source
 
 
 def test_server_serves_knowledge_console_html(tmp_path: Path):

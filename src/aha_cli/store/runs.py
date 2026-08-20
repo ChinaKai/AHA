@@ -356,6 +356,8 @@ def run_summary_from_plan(root: Path, plan: dict, config: dict | None = None) ->
         "archived": lifecycle["archived"],
         "archived_at": lifecycle["archived_at"],
         "selected_task_id": str(ui.get("selected_task_id") or ""),
+        "system_managed": bool(plan.get("system_managed")),
+        "system_purpose": str(plan.get("system_purpose") or ""),
         "proxy": backend_proxy_config(cfg, cfg.get("backend"), plan),
         "path": str(plan_path(root, plan["id"])),
     }

@@ -18,6 +18,7 @@ default 60) while the UI server is alive. Behavior:
 from __future__ import annotations
 
 import asyncio
+import inspect
 import os
 import time
 from pathlib import Path
@@ -28,6 +29,7 @@ from aha_cli.services.knowledge_maintenance import (
     dispatch_maintenance_job,
     maintenance_record,
     read_sync_state,
+    should_dispatch_sync_agent,
     write_sync_state,
 )
 from aha_cli.store.config import load_config
@@ -100,10 +102,22 @@ def _run_scheduled_sync(root: Path) -> None:
         return  # another sync (manual or scheduled) is in flight
     try:
         cfg = load_config(root)
-        result = knowledge_sync(root, cfg, message=f"chore(knowledge): scheduled sync {utc_now()}")
+        result = knowledge_sync(
+            root,
+            cfg,
+            message=f"chore(knowledge): scheduled sync {utc_now()}",
+            do_pull=True,
+            do_push=True,
+        )
         _record_loop_state(root, result, interval_minutes=float(sync_cfg.get("interval_minutes", 60)))
-        if result.get("conflict") and str(sync_cfg.get("resolve_conflicts", "manual")) == "agent":
-            dispatch_maintenance_job(root, cfg)
+        if should_dispatch_sync_agent(result):
+            parameters = inspect.signature(dispatch_maintenance_job).parameters.values()
+            supports_kwargs = any(parameter.kind == inspect.Parameter.VAR_KEYWORD for parameter in parameters)
+            names = {parameter.name for parameter in parameters}
+            if supports_kwargs or {"sync_result", "source"}.issubset(names):
+                dispatch_maintenance_job(root, cfg, sync_result=result, source="scheduled")
+            else:
+                dispatch_maintenance_job(root, cfg)
     finally:
         _release_sync_lock(root)
 

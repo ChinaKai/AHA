@@ -394,6 +394,7 @@ def test_init_is_idempotent_and_builds_layout(tmp_path: Path):
     assert (kb_root / "projects").is_dir()
     assert (kb_root / "aha-knowledge.json").is_file()
     assert (kb_root / "README.md").is_file()
+    assert (kb_root / ".gitattributes").read_text(encoding="utf-8").splitlines()[-1] == "* text=auto eol=lf"
     gitignore = (kb_root / ".gitignore").read_text(encoding="utf-8").splitlines()
     assert ".pending/" in gitignore
     assert "capture/distill/" in gitignore
@@ -407,6 +408,24 @@ def test_init_is_idempotent_and_builds_layout(tmp_path: Path):
     assert second["created"] is False
     # Idempotent: index untouched on re-init.
     assert json.loads((kb_root / "aha-knowledge.json").read_text()) == index_before
+
+
+def test_init_preserves_custom_gitattributes_and_keeps_aha_rule_last(tmp_path: Path):
+    root = tmp_path / ".aha"
+    cfg = load_config(root)
+    kb_root = knowledge_root(root, cfg)
+    kb_root.mkdir(parents=True)
+    attributes = kb_root / ".gitattributes"
+    attributes.write_text("*.cmd text eol=crlf\n* -text\n", encoding="utf-8")
+
+    first = init_knowledge_base(root, cfg)
+    second = init_knowledge_base(root, cfg)
+
+    lines = attributes.read_text(encoding="utf-8").splitlines()
+    assert lines[:2] == ["*.cmd text eol=crlf", "* -text"]
+    assert lines[-2:] == ["# AHA managed cross-platform text normalization", "* text=auto eol=lf"]
+    assert first["gitattributes_updated"] is True
+    assert second["gitattributes_updated"] is False
 
 
 def test_init_updates_existing_knowledge_gitignore(tmp_path: Path):
