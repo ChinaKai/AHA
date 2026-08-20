@@ -208,6 +208,74 @@ def _backend_reasoning_effort_options(backend: str) -> list[dict]:
     return [dict(DEFAULT_REASONING_EFFORT_OPTION)]
 
 
+def _env_group_model_id(backend: str, group: dict) -> str:
+    if backend == "codex":
+        return str(group.get("OPENAI_MODEL") or group.get("ANTHROPIC_MODEL") or group.get("model") or "").strip()
+    if backend == "claude":
+        return str(group.get("ANTHROPIC_MODEL") or group.get("model") or "").strip()
+    return ""
+
+
+def _model_capability_match_values(backend: str, model: str) -> list[str]:
+    values: list[str] = []
+    for candidate in _candidate_model_values(backend, model):
+        for value in (candidate, candidate.rsplit("/", 1)[-1], re.sub(r"\[[^\]]+\]$", "", candidate).strip()):
+            if value and value not in values:
+                values.append(value)
+    return values
+
+
+def _matching_model_capabilities(backend: str, model: str, options: list[dict]) -> dict | None:
+    for candidate in _model_capability_match_values(backend, model):
+        candidate_key = _model_alias_key(candidate)
+        for option in options:
+            name = str(option.get("name") or "").strip()
+            label = str(option.get("label") or "").strip()
+            if not name:
+                continue
+            if candidate == name or candidate_key in {_model_alias_key(name), _model_alias_key(label)}:
+                return option
+    return None
+
+
+def _backend_env_model_options(backend: str, config: dict | None, catalog_options: list[dict]) -> list[dict]:
+    section = (config or {}).get(backend) if isinstance(config, dict) else {}
+    groups = section.get("env") if isinstance(section, dict) else []
+    if isinstance(groups, dict):
+        groups = [groups]
+    if not isinstance(groups, list):
+        return []
+    fallback_efforts = _backend_reasoning_effort_options(backend)
+    options: list[dict] = []
+    seen: set[str] = set()
+    for index, group in enumerate(groups):
+        if not isinstance(group, dict):
+            continue
+        name = str(group.get("name") or f"env-{index + 1}").strip()
+        if not name:
+            continue
+        selector = f"env:{name}"
+        if selector in seen:
+            continue
+        seen.add(selector)
+        model = _env_group_model_id(backend, group)
+        matched = _matching_model_capabilities(backend, model, catalog_options) if model else None
+        reasoning_efforts = matched.get("reasoning_efforts") if isinstance(matched, dict) else None
+        option = {
+            "name": selector,
+            "label": f"{model or 'not configured'} ({name})",
+            "source": "env",
+            "resolved_model": model,
+            "reasoning_effort_source": "model_catalog" if reasoning_efforts else "backend_fallback",
+            "reasoning_efforts": _copy_model_options(reasoning_efforts or fallback_efforts),
+        }
+        default_reasoning = str((matched or {}).get("default_reasoning_effort") or "").strip()
+        if default_reasoning:
+            option["default_reasoning_effort"] = default_reasoning
+        options.append(option)
+    return options
+
+
 def reasoning_effort_options(backend: str = "codex") -> list[dict]:
     return _backend_reasoning_effort_options(backend)
 
@@ -306,16 +374,19 @@ def agent_backend_names() -> list[str]:
 
 
 def agent_backends(config: dict | None = None) -> list[dict]:
-    return [
-        {
-            "name": name,
-            "models": _backend_model_options(name, config),
-            "reasoning_efforts": _backend_reasoning_effort_options(name),
-            "commands": BACKENDS[name].get("commands", []),
-            "native_commands": BACKENDS[name].get("native_commands", []),
-        }
-        for name in agent_backend_names()
-    ]
+    result: list[dict] = []
+    for name in agent_backend_names():
+        catalog_models = _backend_model_options(name, config)
+        result.append(
+            {
+                "name": name,
+                "models": [*catalog_models, *_backend_env_model_options(name, config, catalog_models)],
+                "reasoning_efforts": _backend_reasoning_effort_options(name),
+                "commands": BACKENDS[name].get("commands", []),
+                "native_commands": BACKENDS[name].get("native_commands", []),
+            }
+        )
+    return result
 
 
 def agent_commands(backend: str = "codex") -> list[dict]:

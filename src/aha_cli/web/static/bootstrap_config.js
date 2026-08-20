@@ -628,6 +628,18 @@
     }));
   }
 
+  function mergeBootstrapModelOptions(...groups) {
+    const merged = new Map();
+    for (const group of groups) {
+      for (const option of Array.isArray(group) ? group : []) {
+        const name = configString(option?.name);
+        if (!name) continue;
+        merged.set(name, merged.has(name) ? { ...merged.get(name), ...option } : option);
+      }
+    }
+    return [...merged.values()];
+  }
+
   function bootstrapFormModelOptions(form, backend, context = {}) {
     const formGroups = bootstrapConfigEnvGroups(form, backend, context);
     const envGroups = formGroups.length ? formGroups : bootstrapEnvGroups(context.config?.[backend]?.env, backend);
@@ -642,7 +654,7 @@
       })
       .filter(option => option.name);
     return filterBootstrapModelOptions(
-      [...officialOptions(backend, context), ...envOptions],
+      mergeBootstrapModelOptions(officialOptions(backend, context), envOptions),
       bootstrapModelFilterValue(form, backend),
       bootstrapConfigText(form, `${backend}.model`)
     );

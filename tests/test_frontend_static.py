@@ -539,7 +539,7 @@ for (const [input, output] of expected) {
         root = static_root()
         html = (root / "index.html").read_text(encoding="utf-8")
 
-        self.assertIn('<script src="/static/runtime_config.js?v=reasoning-effort-v1"></script>', html)
+        self.assertIn('<script src="/static/runtime_config.js?v=env-effort-v1"></script>', html)
         self.assertIn('<script src="/static/agent_config_controller.js?v=reasoning-effort-v1"></script>', html)
 
     def test_reasoning_effort_dom_ref_is_wired_into_controller_factory(self) -> None:
@@ -558,7 +558,7 @@ for (const [input, output] of expected) {
         self.assertLess(html.index('id="task-model"'), html.index('id="task-reasoning-effort"'))
         self.assertLess(html.index('id="task-reasoning-effort"'), html.index('id="task-proxy-enabled"'))
 
-    def test_runtime_selectors_prefer_first_model_and_xhigh_effort(self) -> None:
+    def test_runtime_selectors_prefer_model_default_reasoning_effort(self) -> None:
         root = static_root()
         runtime = (root / "runtime_config.js").read_text(encoding="utf-8")
         knowledge = (root / "knowledge.html").read_text(encoding="utf-8")
@@ -566,17 +566,19 @@ for (const [input, output] of expected) {
 
         self.assertIn('const preferredReasoningEffort = "xhigh";', runtime)
         self.assertIn("function selectableModelOptionsForBackend", runtime)
+        self.assertIn("function mergeModelOptions", runtime)
         self.assertIn("const named = options.filter(model => configString(model.name));", runtime)
         self.assertIn("return firstModelForBackend(backend) || configured", runtime)
-        self.assertIn("values.includes(preferred) ? preferred : configured", runtime)
+        self.assertIn("configString(model?.default_reasoning_effort)", runtime)
 
         self.assertIn("function captureSelectableModelOptions", knowledge)
+        self.assertIn("function mergeCaptureModelOptions", knowledge)
         self.assertIn("function capturePreferredReasoningEffort", knowledge)
-        self.assertIn('configString(option.name) === "xhigh"', knowledge)
+        self.assertIn("configString(model?.default_reasoning_effort)", knowledge)
         self.assertIn("captureFirstModel(backendName) || configString(cfg.model)", knowledge)
-        self.assertIn("values.includes(preferred) ? preferred : configured", knowledge)
 
         self.assertIn("function selectableBootstrapModelOptions", bootstrap)
+        self.assertIn("function mergeBootstrapModelOptions", bootstrap)
         self.assertIn("const named = models.filter(model => configString(model?.name));", bootstrap)
         self.assertIn("const codexModel = selectedBackendModel", bootstrap)
         self.assertIn("const claudeModel = selectedBackendModel", bootstrap)
@@ -623,12 +625,78 @@ if (claudeOpts.length !== 1 || !claudeOpts[0].name.startsWith("env:")) process.e
         )
         self.assertEqual(result.returncode, 0, result.stderr)
 
+    def test_runtime_env_model_uses_catalog_reasoning_capabilities(self) -> None:
+        node = shutil.which("node")
+        if not node:
+            self.skipTest("node is not available")
+        script = static_root().joinpath("runtime_config.js").read_text(encoding="utf-8")
+        assertion = r'''
+const fs = require("fs");
+const vm = require("vm");
+const context = { window: {} };
+vm.createContext(context);
+vm.runInContext(fs.readFileSync(0, "utf8"), context);
+const factory = context.window.AHARuntimeConfig;
+const deps = {
+  configString: (v, f = "") => String(v || f || "").trim(),
+  escapeHtml: v => String(v ?? ""),
+  claudeEnvModelPrefix: "env:",
+  bootstrapConfigData: () => ({
+    codex: { model_source: "env", env: [{ name: "gw", OPENAI_MODEL: "codex-gpt-new" }] }
+  }),
+  bootstrapEnvGroups: value => Array.isArray(value) ? value : [],
+  bootstrapEnvGroupName: (group, index) => group.name || "env-" + (index + 1)
+};
+const ctrl = factory.createRuntimeOptionsController({}, deps);
+ctrl.applyBackendData([{
+  name: "codex",
+  models: [
+    { name: "gpt-new", label: "GPT New" },
+    {
+      name: "env:gw",
+      label: "codex-gpt-new (gw)",
+      source: "env",
+      reasoning_effort_source: "model_catalog",
+      default_reasoning_effort: "max",
+      reasoning_efforts: [
+        { name: "", label: "default" },
+        { name: "low", label: "low" },
+        { name: "max", label: "max" },
+        { name: "ultra", label: "ultra" }
+      ]
+    }
+  ],
+  reasoning_efforts: [
+    { name: "", label: "default" },
+    { name: "low", label: "low" },
+    { name: "xhigh", label: "xhigh" }
+  ]
+}]);
+const models = ctrl.codexModelOptions();
+if (models.length !== 1 || models[0].name !== "env:gw") process.exit(1);
+if (models[0].reasoning_effort_source !== "model_catalog") process.exit(1);
+const html = ctrl.reasoningEffortSelectOptions("codex", "env:gw", "");
+if (!html.includes('value="max" selected')) process.exit(1);
+if (!html.includes('value="ultra"')) process.exit(1);
+if (html.includes('value="xhigh"')) process.exit(1);
+'''
+        result = subprocess.run(
+            [node, "-e", assertion],
+            input=script,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_knowledge_capture_models_honor_model_source(self) -> None:
         root = static_root()
         knowledge = (root / "knowledge.html").read_text(encoding="utf-8")
         self.assertIn('state.captureConfig?.[backendName]?.model_source', knowledge)
         self.assertIn('if (source === "official") return official;', knowledge)
         self.assertIn('if (source === "env") return env;', knowledge)
+        self.assertIn("const catalogEnv = catalog.filter", knowledge)
+        self.assertIn("default_reasoning_effort: configString(m.default_reasoning_effort)", knowledge)
 
     def test_waiting_for_subagents_does_not_block_main_input(self) -> None:
         script = (static_root() / "backend_status.js").read_text(encoding="utf-8")
@@ -1410,7 +1478,8 @@ if (payload.claude.proxy.enabled !== false || Object.keys(payload.claude.proxy).
         self.assertIn('aria-controls="feishu-console-popover"', html)
         self.assertNotIn('id="feishu-console" class="button-ghost" href=', html)
         self.assertIn('id="feishu-console-popover" class="feishu-console-popover" hidden', html)
-        self.assertIn('/static/feishu_console.js?v=feishu-groups-v2', html)
+        self.assertIn('/static/feishu_console.js?v=env-effort-v1', html)
+        self.assertIn("const catalogEnvModels = models.filter", console)
         self.assertIn('id="weixin-console"', html)
         self.assertIn('data-i18n="run.tools_weixin" hidden', html)
         self.assertIn('feishuConsoleEl: "feishu-console"', registry)
@@ -6274,7 +6343,7 @@ if (resetCount !== 1 || emptyWorkspaceCount !== 1) {
         self.assertIn('<script src="/static/i18n.js?v=hardware-groups-v2"></script>', html)
         self.assertIn('<script src="/static/app_helpers.js"></script>', html)
         self.assertIn('<script src="/static/task_metadata.js?v=hardware-groups-v1"></script>', html)
-        self.assertIn('<script src="/static/bootstrap_config.js?v=provider-models-v11"></script>', html)
+        self.assertIn('<script src="/static/bootstrap_config.js?v=env-effort-v1"></script>', html)
         self.assertIn('<script src="/static/bootstrap_controller.js?v=provider-models-v11"></script>', html)
         self.assertIn('<script src="/static/task_form.js?v=hardware-terminal-v1"></script>', html)
         self.assertIn('<script src="/static/hardware_serial_picker.js?v=hardware-groups-v2"></script>', html)
@@ -6305,7 +6374,7 @@ if (resetCount !== 1 || emptyWorkspaceCount !== 1) {
         self.assertIn('<script src="/static/play_console.js"></script>', html)
         self.assertIn('<script src="/static/weixin_console.js"></script>', html)
         self.assertIn('<script src="/static/observe_proxy_panel.js?v=observe-proxy-v1"></script>', html)
-        self.assertIn('<script src="/static/runtime_config.js?v=reasoning-effort-v1"></script>', html)
+        self.assertIn('<script src="/static/runtime_config.js?v=env-effort-v1"></script>', html)
         self.assertIn('<script src="/static/event_cursor_store.js"></script>', html)
         self.assertIn('<script src="/static/realtime_state.js"></script>', html)
         self.assertIn('<script src="/static/realtime_client.js"></script>', html)

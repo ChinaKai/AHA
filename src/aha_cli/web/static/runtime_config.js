@@ -127,8 +127,21 @@
       const groups = deps.bootstrapEnvGroups?.(cfg?.[backend]?.env, backend) || [];
       return groups.map((group, index) => ({
         name: envModelValue(deps.bootstrapEnvGroupName?.(group, index)),
-        label: envModelLabel(backend, group, index)
+        label: envModelLabel(backend, group, index),
+        source: "env"
       })).filter(option => option.name);
+    }
+
+    function mergeModelOptions(...groups) {
+      const merged = new Map();
+      for (const group of groups) {
+        for (const option of Array.isArray(group) ? group : []) {
+          const name = configString(option?.name);
+          if (!name || merged.has(name)) continue;
+          merged.set(name, option);
+        }
+      }
+      return [...merged.values()];
     }
 
     function modelSourceFilterForBackend(backend, options) {
@@ -144,9 +157,12 @@
       const officialOptions = official.map(model => ({
         name: configString(model.name),
         label: configString(model.label, model.name || "default"),
-        reasoning_efforts: Array.isArray(model.reasoning_efforts) ? model.reasoning_efforts : null
+        reasoning_efforts: Array.isArray(model.reasoning_efforts) ? model.reasoning_efforts : null,
+        default_reasoning_effort: configString(model.default_reasoning_effort),
+        reasoning_effort_source: configString(model.reasoning_effort_source),
+        source: configString(model.source, configString(model.name).startsWith(envModelPrefix) ? "env" : "official")
       }));
-      return modelSourceFilterForBackend("codex", [...officialOptions, ...envModelOptionsForBackend("codex")]);
+      return modelSourceFilterForBackend("codex", mergeModelOptions(officialOptions, envModelOptionsForBackend("codex")));
     }
 
     function claudeModelOptions() {
@@ -154,9 +170,12 @@
       const officialOptions = official.map(model => ({
         name: configString(model.name),
         label: configString(model.label, model.name || "default"),
-        reasoning_efforts: Array.isArray(model.reasoning_efforts) ? model.reasoning_efforts : null
+        reasoning_efforts: Array.isArray(model.reasoning_efforts) ? model.reasoning_efforts : null,
+        default_reasoning_effort: configString(model.default_reasoning_effort),
+        reasoning_effort_source: configString(model.reasoning_effort_source),
+        source: configString(model.source, configString(model.name).startsWith(envModelPrefix) ? "env" : "official")
       }));
-      return modelSourceFilterForBackend("claude", [...officialOptions, ...envModelOptionsForBackend("claude")]);
+      return modelSourceFilterForBackend("claude", mergeModelOptions(officialOptions, envModelOptionsForBackend("claude")));
     }
 
     function modelOptionsForBackend(backend) {
@@ -201,8 +220,16 @@
 
     function preferredReasoningEffortForBackend(backend, modelValue = "") {
       const options = selectableReasoningOptionsForBackend(backend, modelValue);
-      const preferred = options.find(option => configString(option.name) === preferredReasoningEffort);
-      return configString(preferred?.name || options[0]?.name);
+      const available = new Set(options.map(option => configString(option.name)).filter(Boolean));
+      const selectedModel = configString(modelValue);
+      const model = modelOptionsForBackend(backend).find(item => configString(item.name) === selectedModel);
+      const candidates = [
+        defaultReasoningEffortForBackend(backend),
+        configString(model?.default_reasoning_effort),
+        preferredReasoningEffort,
+        configString(options[0]?.name)
+      ];
+      return candidates.find(value => value && available.has(value)) || "";
     }
 
     function reasoningEffortSelectOptions(backend, modelValue = "", current = "") {
@@ -240,9 +267,8 @@
       }
       const values = [...select.options].map(item => item.value);
       const requested = configString(selected);
-      const configured = defaultReasoningEffortForBackend(backend);
       const preferred = preferredReasoningEffortForBackend(backend, modelValue);
-      const fallback = values.includes(requested) ? requested : values.includes(preferred) ? preferred : configured;
+      const fallback = values.includes(requested) ? requested : preferred;
       select.value = values.includes(fallback) ? fallback : "";
     }
 

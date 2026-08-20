@@ -145,9 +145,10 @@
       const catalog = backendOptions().find(item => item.name === effectiveBackend);
       const modelSource = modelSourceForBackend(effectiveBackend);
       const models = Array.isArray(catalog?.models) ? catalog.models : [];
-      // Honor model_source: official mode hides env groups (backend already
-      // filters them), env mode hides the official catalog.
-      const officialModels = modelSource === "env" ? [] : models;
+      const officialModels = modelSource === "env"
+        ? []
+        : models.filter(item => !String(item?.name || "").startsWith("env:"));
+      const catalogEnvModels = models.filter(item => String(item?.name || "").startsWith("env:"));
       const envGroups = Array.isArray(status.env_groups?.[effectiveBackend])
         ? status.env_groups[effectiveBackend]
         : [];
@@ -161,7 +162,8 @@
             : `${name} (${t("feishu.env_group", "env group")})`
         };
       });
-      const allModels = [...officialModels, ...envModels].filter((item, index, items) => {
+      const visibleEnvModels = modelSource === "official" ? [] : [...catalogEnvModels, ...envModels];
+      const allModels = [...officialModels, ...visibleEnvModels].filter((item, index, items) => {
         const name = String(item?.name || "");
         return name && items.findIndex(candidate => String(candidate?.name || "") === name) === index;
       });

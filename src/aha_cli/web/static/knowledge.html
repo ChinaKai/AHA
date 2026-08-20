@@ -4516,17 +4516,34 @@
       );
       return `${model} (${name})`;
     }
+    function mergeCaptureModelOptions(...groups) {
+      const merged = new Map();
+      for (const group of groups) {
+        for (const option of Array.isArray(group) ? group : []) {
+          const name = configString(option?.name);
+          if (!name || merged.has(name)) continue;
+          merged.set(name, option);
+        }
+      }
+      return [...merged.values()];
+    }
     function captureModelOptions(backendName) {
       const backend = (state.captureBackends || []).find((b) => b.name === backendName);
-      const official = ((backend && backend.models) || []).map((m) => ({
+      const catalog = ((backend && backend.models) || []).map((m) => ({
         name: configString(m.name),
         label: configString(m.label, m.name || "default"),
         reasoning_efforts: Array.isArray(m.reasoning_efforts) ? m.reasoning_efforts : null,
+        default_reasoning_effort: configString(m.default_reasoning_effort),
+        reasoning_effort_source: configString(m.reasoning_effort_source),
+        source: configString(m.source, configString(m.name).startsWith("env:") ? "env" : "official"),
       }));
-      const env = ["codex", "claude"].includes(backendName) ? captureEnvGroups(backendName).map((group, index) => {
+      const official = catalog.filter((m) => !configString(m.name).startsWith("env:"));
+      const catalogEnv = catalog.filter((m) => configString(m.name).startsWith("env:"));
+      const configuredEnv = ["codex", "claude"].includes(backendName) ? captureEnvGroups(backendName).map((group, index) => {
         const name = captureEnvGroupName(group, index);
-        return { name: captureEnvModelValue(name), label: captureEnvModelLabel(backendName, group, index) };
+        return { name: captureEnvModelValue(name), label: captureEnvModelLabel(backendName, group, index), source: "env" };
       }).filter((m) => m.name) : [];
+      const env = mergeCaptureModelOptions(catalogEnv, configuredEnv);
       const source = configString(state.captureConfig?.[backendName]?.model_source, "both");
       if (source === "official") return official;
       if (source === "env") return env;
@@ -4554,8 +4571,16 @@
     }
     function capturePreferredReasoningEffort(backendName, modelValue = "") {
       const options = captureSelectableReasoningEffortOptions(backendName, modelValue);
-      const preferred = options.find((option) => configString(option.name) === "xhigh");
-      return configString(preferred?.name || options[0]?.name);
+      const available = new Set(options.map((option) => configString(option.name)).filter(Boolean));
+      const selectedModel = configString(modelValue);
+      const model = captureModelOptions(backendName).find((item) => configString(item.name) === selectedModel);
+      const candidates = [
+        captureDefaultReasoningEffort(backendName),
+        configString(model?.default_reasoning_effort),
+        "xhigh",
+        configString(options[0]?.name),
+      ];
+      return candidates.find((value) => value && available.has(value)) || "";
     }
     function captureDefaultModel(backendName) {
       const cfg = state.captureConfig?.[backendName] || {};
@@ -4598,8 +4623,8 @@
       select.innerHTML = options.map((opt) => `<option value="${esc(configString(opt.name))}">${esc(configString(opt.label, opt.name || "default"))}</option>`).join("");
       const values = [...select.options].map((opt) => opt.value);
       const requested = configString(selectedValue);
-      const configured = configString(configuredDefault);
       const preferred = capturePreferredReasoningEffort(backendName, modelValue);
+      const configured = configString(configuredDefault);
       const fallback = values.includes(requested) ? requested : values.includes(preferred) ? preferred : configured;
       select.value = values.includes(fallback) ? fallback : "";
     }

@@ -91,6 +91,57 @@ class BackendRegistryTests(unittest.TestCase):
         self.assertEqual(run.call_args.kwargs["encoding"], "utf-8")
         self.assertEqual(run.call_args.kwargs["errors"], "replace")
 
+    def test_agent_backends_enrich_codex_env_model_reasoning_from_catalog(self) -> None:
+        registry._CODEX_MODEL_OPTIONS_CACHE.clear()
+        catalog = {
+            "models": [
+                {
+                    "slug": "gpt-new",
+                    "display_name": "GPT New",
+                    "visibility": "list",
+                    "default_reasoning_level": "max",
+                    "supported_reasoning_levels": [
+                        {"effort": "low"},
+                        {"effort": "max"},
+                        {"effort": "ultra"},
+                    ],
+                }
+            ]
+        }
+        completed = subprocess.CompletedProcess(
+            ["test-codex", "debug", "models"],
+            0,
+            stdout=json.dumps(catalog),
+            stderr="",
+        )
+        config = {
+            "codex": {
+                "bin": "test-codex",
+                "env": [
+                    {"name": "gateway", "OPENAI_MODEL": "codex-gpt-new"},
+                    {"name": "custom", "OPENAI_MODEL": "provider/custom-model"},
+                ],
+            }
+        }
+
+        with mock.patch("aha_cli.backends.registry.subprocess.run", return_value=completed):
+            codex = next(item for item in agent_backends(config) if item["name"] == "codex")
+
+        gateway = next(item for item in codex["models"] if item["name"] == "env:gateway")
+        custom = next(item for item in codex["models"] if item["name"] == "env:custom")
+        self.assertEqual(gateway["resolved_model"], "codex-gpt-new")
+        self.assertEqual(gateway["reasoning_effort_source"], "model_catalog")
+        self.assertEqual(gateway["default_reasoning_effort"], "max")
+        self.assertEqual(
+            [item["name"] for item in gateway["reasoning_efforts"]],
+            ["", "low", "max", "ultra"],
+        )
+        self.assertEqual(custom["reasoning_effort_source"], "backend_fallback")
+        self.assertEqual(
+            [item["name"] for item in custom["reasoning_efforts"]],
+            ["", "low", "medium", "high", "xhigh"],
+        )
+
     def test_codex_model_catalog_wraps_windows_npm_command_shim(self) -> None:
         registry._CODEX_MODEL_OPTIONS_CACHE.clear()
         catalog = {
