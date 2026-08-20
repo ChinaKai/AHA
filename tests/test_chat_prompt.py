@@ -2245,6 +2245,10 @@ class ChatPromptTests(unittest.TestCase):
 
         self.assertEqual(metrics["prompt_mode"], "full")
         self.assertIn("Repository guard:", prompt)
+        self.assertIn("Repository coding principles:", prompt)
+        self.assertIn("Match the repository's existing code style", prompt)
+        self.assertIn("Make the smallest sufficient change", prompt)
+        self.assertIn("Respect the current architecture and public contracts", prompt)
         self.assertIn("AHA conversation image output:", prompt)
         self.assertIn("task_memo_assets/example.png", prompt)
         self.assertIn("Do not use local absolute paths", prompt)
@@ -2264,6 +2268,7 @@ class ChatPromptTests(unittest.TestCase):
         self.assertEqual(metrics["components"]["action_contract"]["chars"], 0)
         self.assertEqual(metrics["components"]["coordination_policy"]["chars"], 0)
         self.assertEqual(metrics["components"]["commit_policy"]["chars"], 0)
+        self.assertGreater(metrics["components"]["repository_coding_principles_context"]["chars"], 0)
 
     def test_full_prompt_includes_cross_platform_runtime_context_only_for_windows_wsl_backend(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -2431,9 +2436,22 @@ class ChatPromptTests(unittest.TestCase):
                 cfg = read_json(config_path(aha_root))
                 cfg["knowledge"]["enabled"] = False
                 write_json(config_path(aha_root), cfg)
+                _, full_metrics = chat_prompt_with_metrics(
+                    aha_root,
+                    run_id,
+                    "main",
+                    {
+                        "sender": "browser",
+                        "message": "initial request",
+                        "task_id": "task-001",
+                        "role": "main",
+                    },
+                    "",
+                )
                 session_file = run_dir(aha_root, run_id) / "tasks" / "task-001" / "sessions" / "main.json"
                 session = read_json(session_file)
                 session["backend_session_id"] = "backend-session-1"
+                session["delivered_context_fingerprints"] = full_metrics["context_fingerprint_updates"]
                 session_file.write_text(json.dumps(session), encoding="utf-8")
                 append_event(
                     aha_root,
@@ -2486,14 +2504,31 @@ class ChatPromptTests(unittest.TestCase):
                 code, plan_output = self.run_cli("plan", "Sticky task capability delta", "--agents", "1")
                 self.assertEqual(code, 0)
                 run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                _, full_metrics = chat_prompt_with_metrics(
+                    root,
+                    run_id,
+                    "main",
+                    {
+                        "sender": "browser",
+                        "message": "initial request",
+                        "task_id": "task-001",
+                        "role": "main",
+                    },
+                    "",
+                )
                 session_file = run_dir(root, run_id) / "tasks" / "task-001" / "sessions" / "main.json"
                 session = read_json(session_file)
                 session["backend_session_id"] = "backend-session-1"
-                session["delivered_context_fingerprints"] = {
-                    "hardware_debug": "",
-                    "task_skills": "",
-                    "knowledge_enabled": "disabled",
-                }
+                delivered_fingerprints = dict(full_metrics["context_fingerprint_updates"])
+                delivered_fingerprints.pop("attachment_output_guidance", None)
+                delivered_fingerprints.update(
+                    {
+                        "hardware_debug": "",
+                        "task_skills": "",
+                        "knowledge_enabled": "disabled",
+                    }
+                )
+                session["delivered_context_fingerprints"] = delivered_fingerprints
                 session_file.write_text(json.dumps(session), encoding="utf-8")
                 update_task_hardware_debug_config(
                     root,
@@ -2589,6 +2624,65 @@ class ChatPromptTests(unittest.TestCase):
         self.assertEqual(next_prompt, "next")
         self.assertEqual(set(next_metrics["components"]), {"user_message"})
 
+    def test_sticky_delta_injects_repository_coding_principles_once_and_full_restores_them(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli("init", "--portable", "--backend", "codex")
+                code, plan_output = self.run_cli("plan", "Repository coding principles", "--agents", "1")
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                session_file = run_dir(root, run_id) / "tasks" / "task-001" / "sessions" / "main.json"
+                session = read_json(session_file)
+                session["backend_session_id"] = "backend-session-1"
+                session["delivered_context_fingerprints"] = {}
+                session_file.write_text(json.dumps(session), encoding="utf-8")
+
+                item = append_message(
+                    root,
+                    run_id,
+                    "main",
+                    "continue",
+                    sender="browser",
+                    task_id="task-001",
+                    role="main",
+                )
+                prompt, metrics = chat_prompt_with_metrics(root, run_id, "main", item, "")
+                session["delivered_context_fingerprints"] = metrics["context_fingerprint_updates"]
+                session_file.write_text(json.dumps(session), encoding="utf-8")
+                next_item = append_message(
+                    root,
+                    run_id,
+                    "main",
+                    "next",
+                    sender="browser",
+                    task_id="task-001",
+                    role="main",
+                )
+                next_prompt, next_metrics = chat_prompt_with_metrics(root, run_id, "main", next_item, "")
+                session[FORCE_FULL_PROMPT_NEXT_TURN_KEY] = {"reason": "backend_auto_context_compact"}
+                session_file.write_text(json.dumps(session), encoding="utf-8")
+                compact_item = append_message(
+                    root,
+                    run_id,
+                    "main",
+                    "after compact",
+                    sender="browser",
+                    task_id="task-001",
+                    role="main",
+                )
+                compact_prompt, compact_metrics = chat_prompt_with_metrics(root, run_id, "main", compact_item, "")
+
+        self.assertEqual(metrics["prompt_mode"], "sticky_delta")
+        self.assertIn("AHA runtime context update", prompt)
+        self.assertIn("Repository coding principles:", prompt)
+        self.assertTrue(metrics["context_fingerprint_updates"]["repository_coding_principles"])
+        self.assertEqual(next_prompt, "next")
+        self.assertEqual(set(next_metrics["components"]), {"user_message"})
+        self.assertEqual(compact_metrics["prompt_mode"], "full")
+        self.assertIn("Repository coding principles:", compact_prompt)
+        self.assertIn("repository_coding_principles_context", compact_metrics["components"])
+
     def test_cross_platform_runtime_context_returns_after_compaction_forces_full_prompt(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -2682,14 +2776,30 @@ class ChatPromptTests(unittest.TestCase):
                 code, plan_output = self.run_cli("plan", "Plain sticky queued", "--agents", "1")
                 self.assertEqual(code, 0)
                 run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+                _, full_metrics = chat_prompt_with_metrics(
+                    root,
+                    run_id,
+                    "main",
+                    {
+                        "sender": "browser",
+                        "message": "initial request",
+                        "task_id": "task-001",
+                        "role": "main",
+                    },
+                    "",
+                )
                 session_file = run_dir(root, run_id) / "tasks" / "task-001" / "sessions" / "main.json"
                 session = read_json(session_file)
                 session["backend_session_id"] = "backend-session-1"
-                session["delivered_context_fingerprints"] = {
-                    "hardware_debug": "",
-                    "task_skills": "",
-                    "knowledge_enabled": "disabled",
-                }
+                delivered_fingerprints = dict(full_metrics["context_fingerprint_updates"])
+                delivered_fingerprints.update(
+                    {
+                        "hardware_debug": "",
+                        "task_skills": "",
+                        "knowledge_enabled": "disabled",
+                    }
+                )
+                session["delivered_context_fingerprints"] = delivered_fingerprints
                 session_file.write_text(json.dumps(session), encoding="utf-8")
                 cfg_path = config_path(root)
                 cfg = read_json(cfg_path)

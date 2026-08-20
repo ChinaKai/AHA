@@ -75,6 +75,7 @@ PROMPT_RECENT_CONVERSATION_CHAR_BUDGET = 1800
 CLAUDE_PUBLIC_UPDATE_CONTEXT_KEY = "claude_public_updates"
 CROSS_PLATFORM_RUNTIME_CONTEXT_KEY = "cross_platform_runtime"
 MANAGED_PROCESS_CONTEXT_KEY = "managed_processes"
+REPOSITORY_CODING_PRINCIPLES_CONTEXT_KEY = "repository_coding_principles"
 COMMIT_POLICY_INTENT_TERMS = (
     "commit",
     "git commit",
@@ -686,6 +687,10 @@ def _managed_process_context() -> str:
     return render_prompt_template("backend_managed_processes.md").rstrip()
 
 
+def _repository_coding_principles_context() -> str:
+    return render_prompt_template("backend_repository_coding_principles.md").rstrip()
+
+
 def _cross_platform_runtime_context() -> str:
     backend = str(os.environ.get("AHA_BACKEND") or "").strip().lower()
     distro = str(os.environ.get("AHA_WSL_DISTRO") or "").strip()
@@ -726,6 +731,9 @@ def _prompt_context_fingerprints(
     }
     if include_managed_process:
         fingerprints[MANAGED_PROCESS_CONTEXT_KEY] = _context_fingerprint(_managed_process_context())
+    fingerprints[REPOSITORY_CODING_PRINCIPLES_CONTEXT_KEY] = _context_fingerprint(
+        _repository_coding_principles_context()
+    )
     cross_platform_runtime = _cross_platform_runtime_context()
     if cross_platform_runtime:
         fingerprints[CROSS_PLATFORM_RUNTIME_CONTEXT_KEY] = _context_fingerprint(cross_platform_runtime)
@@ -766,6 +774,13 @@ def _sticky_context_delta_for_prompt(
         and delivered.get(MANAGED_PROCESS_CONTEXT_KEY) != current_fingerprints.get(MANAGED_PROCESS_CONTEXT_KEY)
     ):
         sections.append(managed_process_context)
+    repository_coding_principles = _repository_coding_principles_context()
+    if (
+        current_fingerprints.get(REPOSITORY_CODING_PRINCIPLES_CONTEXT_KEY)
+        and delivered.get(REPOSITORY_CODING_PRINCIPLES_CONTEXT_KEY)
+        != current_fingerprints.get(REPOSITORY_CODING_PRINCIPLES_CONTEXT_KEY)
+    ):
+        sections.append(repository_coding_principles)
     cross_platform_runtime = _cross_platform_runtime_context()
     if (
         current_fingerprints.get(CROSS_PLATFORM_RUNTIME_CONTEXT_KEY)
@@ -1386,6 +1401,11 @@ def chat_prompt(
                 and delivered_fingerprints.get(MANAGED_PROCESS_CONTEXT_KEY)
                 != context_fingerprint_updates.get(MANAGED_PROCESS_CONTEXT_KEY)
             )
+            repository_coding_principles_pending = bool(
+                context_fingerprint_updates.get(REPOSITORY_CODING_PRINCIPLES_CONTEXT_KEY)
+                and delivered_fingerprints.get(REPOSITORY_CODING_PRINCIPLES_CONTEXT_KEY)
+                != context_fingerprint_updates.get(REPOSITORY_CODING_PRINCIPLES_CONTEXT_KEY)
+            )
             cross_platform_runtime_pending = bool(
                 context_fingerprint_updates.get(CROSS_PLATFORM_RUNTIME_CONTEXT_KEY)
                 and delivered_fingerprints.get(CROSS_PLATFORM_RUNTIME_CONTEXT_KEY)
@@ -1400,6 +1420,7 @@ def chat_prompt(
                 and not components["request_policy"]
                 and not claude_public_update_pending
                 and not managed_process_pending
+                and not repository_coding_principles_pending
                 and not cross_platform_runtime_pending
             ):
                 prompt = str(item.get("message") or "")
@@ -1600,6 +1621,9 @@ def chat_prompt(
                 managed_process_context = _managed_process_context()
                 task_context = f"{task_context.rstrip()}\n\n{managed_process_context}\n"
                 components["managed_process_context"] = managed_process_context
+                repository_coding_principles_context = _repository_coding_principles_context()
+                task_context = f"{task_context.rstrip()}\n\n{repository_coding_principles_context}\n"
+                components["repository_coding_principles_context"] = repository_coding_principles_context
                 cross_platform_runtime_context = _cross_platform_runtime_context()
                 if cross_platform_runtime_context:
                     task_context = f"{task_context.rstrip()}\n\n{cross_platform_runtime_context}\n"
