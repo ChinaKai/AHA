@@ -307,9 +307,6 @@
       min-height: 0; overflow: auto; border: 0; border-radius: 0;
       background: var(--color-surface); padding: 18px 22px 56px;
     }
-    .kb-workspace-detail-card #cap-view-log.kb-detail-scroll-body {
-      max-height: none; margin: 0; border: 0; border-radius: 0;
-    }
     .search-deep-link-hit {
       padding: 0 2px; border-radius: 3px; background: var(--color-warning-border); color: var(--color-warning-text);
       box-shadow: 0 0 0 3px rgba(245, 158, 11, .22);
@@ -318,10 +315,6 @@
     .kb-log-label { margin: 4px 0 0; font-size: 12px; color: var(--color-text-subtle); }
     .kb-log-body { max-height: min(360px, 35vh); overflow: auto; }
     .kb-agent-thread { display: grid; gap: 8px; min-width: 0; max-width: 100%; max-height: min(420px, 42vh); overflow: auto; }
-    .kb-cap-log-panel { display: grid; gap: 8px; min-width: 0; max-width: 100%; margin: 8px 0; padding: 10px; max-height: min(640px, 68vh); overflow-x: hidden; overflow-y: auto; box-sizing: border-box; border: 1px solid var(--color-border, #d7dce3); border-radius: 8px; background: var(--color-surface-muted, #f7f9fb); }
-    .kb-cap-log-panel[hidden] { display: none; }
-    .kb-cap-log-head { justify-content: space-between; align-items: center; margin: 0; }
-    .kb-cap-log-panel .kb-agent-thread { max-height: none; overflow: visible; }
     .kb-agent-message {
       display: grid; gap: 4px; min-width: 0; max-width: 100%; padding: 9px 10px; box-sizing: border-box;
       border: 1px solid var(--color-border-subtle); border-radius: var(--radius-sm);
@@ -348,14 +341,10 @@
     .kb-cap-thumb button { position: absolute; top: -6px; right: -6px; width: 18px; height: 18px; line-height: 16px; padding: 0; border-radius: 50%; font-size: 12px; }
     .kb-cap-upload { font-size: 12px; cursor: pointer; padding: 4px 8px; border: 1px dashed var(--color-border, #ccc); border-radius: 6px; }
     .kb-cap-distill-panel { margin: 8px 0; padding: 10px; border: 1px solid var(--color-border, #d7dce3); border-radius: 8px; background: var(--color-surface-muted, #f7f9fb); }
-    .kb-cap-distill-controls { align-items: center; gap: 8px; margin: 0; flex-wrap: nowrap; min-width: 0; }
-    .kb-cap-distill-controls span, .kb-cap-distill-controls button { flex: 0 0 auto; }
+    .kb-cap-distill-controls { align-items: center; gap: 8px; margin: 0; flex-wrap: wrap; min-width: 0; }
+    .kb-cap-distill-controls button { flex: 0 0 auto; }
     .kb-cap-distill-controls select { min-width: 0; max-width: 140px; }
     .kb-cap-distill-controls #cap-distill-mode { width: 88px; }
-    .kb-cap-distill-controls #cap-backend { width: 92px; }
-    .kb-cap-distill-controls #cap-model { flex: 1 1 150px; max-width: 220px; }
-    .kb-cap-distill-controls #cap-effort { width: 96px; }
-    .kb-cap-distill-controls #cap-proxy-mode { width: 100px; }
     .kb-field { display: block; margin: 10px 0 4px; font-size: 12px; color: var(--color-text-muted); }
     .kb-form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0 24px; align-items: start; }
     .kb-form-grid > div { min-width: 0; display: flex; flex-direction: column; }
@@ -363,6 +352,23 @@
     .kb-form-grid label.kb-field { display: flex; align-items: center; gap: 6px; }
     .kb-form-grid label.kb-field input[type=checkbox] { flex: none; margin: 0; }
     .kb-settings-card { padding: 14px; }
+    .kb-agent-settings {
+      min-width: 0; margin: 14px 0 0; padding: 12px;
+      border: 1px solid var(--color-border-subtle); border-radius: var(--radius-md);
+    }
+    .kb-agent-settings legend { padding: 0 6px; color: var(--color-text-strong); font-size: 14px; font-weight: 700; }
+    .kb-agent-settings > .kb-muted { margin-bottom: 4px; }
+    .kb-agent-settings-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 0 12px; }
+    .kb-agent-settings-grid > div { min-width: 0; }
+    .kb-agent-settings-grid select { width: 100%; box-sizing: border-box; }
+    .kb-agent-readonly {
+      flex: 1 1 280px; min-width: 0; display: flex; align-items: center; gap: 6px 10px; flex-wrap: wrap;
+      padding: 6px 8px; border: 1px solid var(--color-border-subtle); border-radius: var(--radius-sm);
+      background: var(--color-surface); color: var(--color-text-subtle); font-size: 12px;
+    }
+    .kb-agent-readonly strong { color: var(--color-text-strong); }
+    .kb-agent-readonly-summary { min-width: 0; flex: 1 1 220px; overflow-wrap: anywhere; }
+    .kb-agent-readonly button { min-height: 28px; margin-left: auto; white-space: nowrap; }
     .kb-skills-toolbar { justify-content: space-between; margin: 0 0 10px; }
     .kb-skills-toolbar-actions { display: flex; gap: 8px; flex-wrap: wrap; }
     .kb-skills-layout {
@@ -418,12 +424,7 @@
     .kb-project-nav-panel .kb-row { margin-bottom: 0; }
     .kb-project-nav-panel select { min-width: min(360px, 100%); }
     .kb-project-nav-panel input[type=text] { min-width: min(420px, 100%); }
-    .kb-project-nav-controls { flex-wrap: nowrap; align-items: center; overflow-x: auto; }
-    .kb-project-nav-controls .kb-muted { flex: 0 0 auto; white-space: nowrap; }
-    .kb-project-nav-controls select { min-width: 150px; }
-    .kb-project-nav-controls #nav-workspace-select { min-width: 240px; }
-    .kb-project-nav-controls #nav-model { min-width: 180px; }
-    .kb-project-nav-controls #nav-effort { min-width: 120px; }
+    .kb-project-nav-controls { flex-wrap: wrap; align-items: center; }
     .kb-project-nav-controls button { flex: 0 0 auto; }
     .kb-project-identity-toolbar {
       display: flex; gap: 8px 12px; align-items: center; flex-wrap: wrap;
@@ -504,6 +505,9 @@
       .kb-pending-body { max-height: 38vh; }
       .kb-form-grid { grid-template-columns: 1fr; gap: 0; }
       .kb-settings-card { padding: 12px; }
+      .kb-agent-settings-grid { grid-template-columns: 1fr; }
+      .kb-agent-readonly { flex-basis: 100%; align-items: flex-start; }
+      .kb-agent-readonly button { width: 100%; margin-left: 0; }
       .kb-skills-layout { grid-template-columns: 1fr; }
       .kb-skills-list { max-height: none; overflow: visible; }
       .kb-skills-detail { padding: 10px; }
@@ -511,7 +515,8 @@
       .kb-skills-toolbar button { width: 100%; }
       .kb-skill-tool { grid-template-columns: 1fr; }
       .kb-skill-tool-meta { white-space: normal; }
-      .kb-project-nav-controls { overflow-x: visible; }
+      .kb-project-nav-controls { align-items: stretch; }
+      .kb-project-nav-controls > button { width: 100%; }
       .kb-entry-edit-toolbar { display: grid; grid-template-columns: 1fr; }
       .kb-entry-edit-modes, .kb-entry-image-upload { width: 100%; }
       .kb-entry-edit-modes button { flex: 1 1 0; }
@@ -761,6 +766,7 @@
         <div class="kb-sidebar-actions">
           <button class="button-ghost" id="kb-sync" type="button" data-i18n="knowledge.sync_now">Sync</button>
           <button class="button-ghost" id="kb-capture-new" type="button" data-i18n="knowledge.capture_new_file">New</button>
+          <button class="button-ghost kb-navigation-action" type="button" data-kb-view="navigation" data-i18n="knowledge.tab_navigation">Nav</button>
           <button class="button-ghost" type="button" data-kb-view="graph" data-i18n="knowledge.tab_graph">Graph</button>
           <button class="button-ghost" type="button" data-kb-view="pending"><span data-i18n="knowledge.tab_pending">Pending</span><span id="pending-badge" class="kb-sidebar-count"></span></button>
           <button class="button-ghost" id="kb-settings-open" type="button" data-i18n="common.settings">Settings</button>
@@ -791,14 +797,11 @@
           <h3 data-i18n="knowledge.project_nav_actions">Project navigation</h3>
           <div class="kb-muted" data-i18n="knowledge.project_nav_actions_hint">Project navigation is maintained by agents during token-saving tasks.</div>
           <div class="kb-row kb-project-nav-controls">
-            <span class="kb-muted" data-i18n="knowledge.capture_agent_label">Distill agent:</span>
-            <select id="nav-backend" aria-label="Project navigation backend"></select>
-            <select id="nav-model" aria-label="Project navigation model"></select>
-            <select id="nav-effort" aria-label="Project navigation reasoning effort"></select>
-            <select id="nav-proxy-mode" aria-label="Proxy mode" data-i18n-aria-label="knowledge.proxy_mode">
-              <option value="on" data-i18n="knowledge.proxy_on">Proxy on</option>
-              <option value="off" data-i18n="knowledge.proxy_off">Proxy off</option>
-            </select>
+            <div class="kb-agent-readonly" role="note" aria-label="KB Agent configuration" data-i18n-aria-label="knowledge.kb_agent_summary_aria">
+              <strong data-i18n="knowledge.kb_agent_summary_label">KB Agent:</strong>
+              <span id="project-nav-agent-summary" class="kb-agent-readonly-summary"></span>
+              <button class="button-ghost" type="button" onclick="openKbAgentSettings()" data-i18n="knowledge.kb_agent_open_settings">Open Settings</button>
+            </div>
             <button class="button-ghost" id="nav-generate" type="button" data-i18n="knowledge.generate_project_nav" hidden>Generate project nav</button>
           </div>
           <div id="nav-result" class="kb-muted"></div>
@@ -926,6 +929,37 @@
               <input type="text" id="s-branch" />
             </div>
           </div>
+          <fieldset class="kb-agent-settings">
+            <legend data-i18n="knowledge.kb_agent">KB Agent</legend>
+            <div class="kb-muted" data-i18n="knowledge.kb_agent_hint">Used by Capture distillation, Project Navigation, sync conflict resolution, and sync failure recovery. Leave a field inherited to follow the selected backend or global runtime defaults.</div>
+            <div class="kb-agent-settings-grid">
+              <div>
+                <label class="kb-field" for="s-agent-backend" data-i18n="knowledge.kb_agent_backend">Backend</label>
+                <select id="s-agent-backend">
+                  <option value="" data-i18n="knowledge.kb_agent_follow_global">Follow global</option>
+                  <option value="codex">codex</option>
+                  <option value="claude">claude</option>
+                </select>
+              </div>
+              <div>
+                <label class="kb-field" for="s-agent-model" data-i18n="knowledge.kb_agent_model">Model</label>
+                <select id="s-agent-model"></select>
+              </div>
+              <div>
+                <label class="kb-field" for="s-agent-effort" data-i18n="knowledge.kb_agent_reasoning_effort">Reasoning effort</label>
+                <select id="s-agent-effort"></select>
+              </div>
+              <div>
+                <label class="kb-field" for="s-agent-proxy" data-i18n="knowledge.kb_agent_proxy">Proxy</label>
+                <select id="s-agent-proxy">
+                  <option value="inherit" data-i18n="knowledge.kb_agent_follow_backend">Follow backend</option>
+                  <option value="on" data-i18n="knowledge.proxy_on">Proxy on</option>
+                  <option value="off" data-i18n="knowledge.proxy_off">Proxy off</option>
+                </select>
+              </div>
+            </div>
+            <div id="s-agent-options-status" class="kb-muted" role="status" aria-live="polite"></div>
+          </fieldset>
           <div class="kb-row">
             <button class="primary" type="submit" data-i18n="knowledge.save_settings">Save settings</button>
             <button class="button-ghost" id="settings-sync" type="button" data-i18n="knowledge.sync_now">Sync now</button>
@@ -946,14 +980,6 @@
           <div id="cap-view-refs"></div>
           <div id="cap-view-distill"></div>
           <div id="cap-view-body" class="kb-body kb-cap-md kb-detail-scroll-body"></div>
-          <div id="cap-view-log" class="kb-cap-log-panel kb-detail-scroll-body" hidden>
-            <div class="kb-row kb-cap-log-head">
-              <strong data-i18n="knowledge.capture_agent_log">Agent log</strong>
-              <button class="button-ghost" type="button" id="cap-log-close" data-i18n="common.close">Close</button>
-            </div>
-            <div id="cap-log-meta" class="kb-muted"></div>
-            <div id="cap-agent-log" class="kb-agent-thread"></div>
-          </div>
         </div>
       </section>
 
@@ -1154,17 +1180,35 @@
         && parts.every((part) => /^[A-Za-z0-9._-]+$/.test(part));
       return nested || clean === "index" ? clean : "";
     }
-    function knowledgeLinkHref(path) {
+    function navigationEntryPath(projectKey, slug) {
+      const key = String(projectKey || "").trim();
+      const ref = navRefSlug(slug);
+      return key && ref ? `path:projects/${key}/navigation/${ref}.md` : "";
+    }
+    function entryAccessId(entry) {
+      const meta = entry?.meta || entry || {};
+      const projectKey = String(meta.project_key || entry?.project_key || "").trim();
+      const slug = String(meta.slug || entry?.slug || "").trim();
+      if ((meta.type || entry?.type) === "navigation") {
+        const pathId = navigationEntryPath(projectKey, slug);
+        if (pathId) return pathId;
+      }
+      return String(meta.id || meta.slug || entry?.id || entry?.slug || "");
+    }
+    function knowledgeLinkHref(path, entry) {
       const raw = String(path || "").trim();
       const ref = navRefSlug(raw);
-      if (ref) return "#kb-entry:" + encodeURIComponent(ref);
+      if (ref) {
+        const projectKey = String(entry?.meta?.project_key || entry?.project_key || "").trim();
+        const entryId = navigationEntryPath(projectKey, ref) || ref;
+        return "#kb-entry:" + encodeURIComponent(entryId);
+      }
       if (/^www\./i.test(raw)) return `https://${raw}`;
       if (/^[a-z0-9.-]+\.[a-z]{2,}(?:[/:?#]|$)/i.test(raw)) return `https://${raw}`;
       return /^(https?:|mailto:|\/|#|\.)/i.test(raw) ? raw : "";
     }
     function entryRenderId(entry) {
-      const meta = entry?.meta || entry || {};
-      return String(meta.id || meta.slug || entry?.id || entry?.slug || "");
+      return entryAccessId(entry);
     }
     function entryImageSrc(path, entry) {
       const raw = String(path || "").trim();
@@ -1402,7 +1446,7 @@
       resizer.addEventListener("pointercancel", end);
     }
 
-    const state = { entries: [], entriesTotal: 0, entriesOffset: 0, entriesLimit: ENTRIES_PAGE_LIMIT, entriesHasMore: false, entryCapture: [], navigation: [], navDrafts: [], activeNavDraft: null, activeNavAgentDraft: null, navDraftPoll: null, navDraftDetailPoll: null, navAgentPoll: null, pending: [], pendingExpanded: new Set(), capture: [], captureConfig: {}, editingNote: null, expandedNote: null, activeCaptureNote: null, distillTarget: null, activeDistillLogNote: null, captureViewMode: "view", captureEditMode: "edit", distillLogPoll: null, lastBackend: "", lastModel: "", lastReasoningEffort: "", lastProxyEnabled: null, lastDistillMode: "organize", navLastBackend: "", navLastModel: "", navLastReasoningEffort: "", navLastProxyEnabled: null, newNoteImages: [], activeEntry: null, referenceEntry: null, referenceEntryStack: [], editingEntry: null, editingReference: false, collapsedEntryGroups: new Set(), expandedEntryGroups: new Set(), workspaces: [], defaultWorkspacePath: "", projectIdentity: null, projectIdentityProjects: [], projectIdentityError: "", projectIdentityRequestSeq: 0, projectRelationTypes: ["upstream", "sdk", "fork", "reference", "other"], projectRelationProjectKey: "", projectRelations: [], skills: [], skillDetail: null, skillSelectedId: "", skillDraftNew: false, skillsRoot: "", skillsLoaded: false, skillsLoading: false, activeTab: readStoredActiveTab() };
+    const state = { entries: [], entriesTotal: 0, entriesOffset: 0, entriesLimit: ENTRIES_PAGE_LIMIT, entriesHasMore: false, entryCapture: [], navigation: [], navDrafts: [], activeNavDraft: null, activeNavAgentDraft: null, navDraftPoll: null, navDraftDetailPoll: null, navAgentPoll: null, pending: [], pendingExpanded: new Set(), capture: [], captureBackends: null, captureConfig: {}, kbAgent: { backend: null, model: null, reasoning_effort: null, proxy_enabled: null }, kbAgentLoaded: false, editingNote: null, expandedNote: null, activeCaptureNote: null, distillTarget: null, captureEditMode: "edit", lastDistillMode: "organize", newNoteImages: [], activeEntry: null, referenceEntry: null, referenceEntryStack: [], editingEntry: null, editingReference: false, collapsedEntryGroups: new Set(), expandedEntryGroups: new Set(), workspaces: [], defaultWorkspacePath: "", projectIdentity: null, projectIdentityProjects: [], projectIdentityError: "", projectIdentityRequestSeq: 0, projectRelationTypes: ["upstream", "sdk", "fork", "reference", "other"], projectRelationProjectKey: "", projectRelations: [], skills: [], skillDetail: null, skillSelectedId: "", skillDraftNew: false, skillsRoot: "", skillsLoaded: false, skillsLoading: false, activeTab: readStoredActiveTab() };
 
     function syncChromeText() {
       document.title = t("knowledge.title", "AHA Knowledge Base");
@@ -1417,18 +1461,12 @@
     }
 
     function clearWorkspaceDetails() {
-      if (state.distillLogPoll) {
-        clearTimeout(state.distillLogPoll);
-        state.distillLogPoll = null;
-      }
       state.referenceEntry = null;
       state.referenceEntryStack = [];
       state.editingReference = false;
       state.activeCaptureNote = null;
       state.editingNote = null;
       state.distillTarget = null;
-      state.activeDistillLogNote = null;
-      state.captureViewMode = "view";
       $("#entry-ref-modal").hidden = true;
       $("#cap-view-modal").hidden = true;
     }
@@ -2873,14 +2911,6 @@
       const workspacePath = selectedProjectNavWorkspacePath();
       const payload = { workspace_path: workspacePath || null };
       if (pageRunId) payload.run_id = pageRunId;
-      const backend = $("#nav-backend")?.value || "";
-      const model = $("#nav-model")?.value || "";
-      if (backend) payload.backend = backend;
-      if (model) payload.model = model;
-      const reasoningEffort = $("#nav-effort")?.value || "";
-      if (reasoningEffort) payload.reasoning_effort = reasoningEffort;
-      const proxyMode = $("#nav-proxy-mode")?.value || "off";
-      payload.proxy_enabled = proxyMode === "on";
       return payload;
     }
 
@@ -2911,7 +2941,7 @@
       const canBind = Boolean(state.projectIdentity) && !activeBoundProject && state.projectIdentity?.source !== "ambiguous";
       $("#navigation-list").innerHTML = state.navigation.length
         ? state.navigation.map((e) => {
-            const entryId = e.id || e.slug;
+            const entryId = entryAccessId(e);
             const encodedId = encodeURIComponent(entryId);
             const projectKey = String(e.project_key || "");
             const encodedProjectKey = encodeURIComponent(projectKey);
@@ -3021,26 +3051,6 @@
       const items = Array.isArray(agentLog) ? agentLog : [];
       const rows = items.length ? items : (fallback ? [{ stage: "agent-update", message: fallback }] : []);
       return rows.map((item) => renderAgentConversationItem(item)).join("");
-    }
-
-    function renderCaptureDistillConversation(log, fallbackMessage = "") {
-      const rows = [renderAgentConversationLog(log.agent_log, fallbackMessage)];
-      if (log.prompt) {
-        rows.push(renderAgentConversationItem(
-          { stage: "prompt", message: log.prompt },
-          "browser-main",
-          t("knowledge.capture_log_prompt", "Prompt")
-        ));
-      }
-      const reply = log.reply || (log.error ? "ERROR:\n" + log.error : "");
-      if (reply) {
-        rows.push(renderAgentConversationItem(
-          { stage: log.error ? "error" : "reply", message: reply },
-          log.error ? "error" : "main-browser",
-          log.error ? t("knowledge.error", "Error") : t("knowledge.capture_log_reply", "Reply")
-        ));
-      }
-      return rows.filter(Boolean).join("");
     }
 
     function renderProjectNavDrafts() {
@@ -3339,7 +3349,7 @@
         window.AHATaskMemoMarkdown.renderMarkdownPreview(body, ref.body || "", {
           documentRef: document,
           t,
-          linkHref: knowledgeLinkHref,
+          linkHref: (path) => knowledgeLinkHref(path, ref),
           imageSrc: (path) => entryImageSrc(path, ref),
         });
       } else {
@@ -3410,7 +3420,7 @@
 
     function renderEntryModalActions(entry) {
       const meta = entry?.meta || {};
-      const id = meta.id || meta.slug || "";
+      const id = entryAccessId(entry);
       if (!id) return "";
       const encodedId = encodeURIComponent(id);
       const status = meta.status || entry.status || "active";
@@ -3431,7 +3441,7 @@
 
     function entryMatchesId(entry, id) {
       const meta = entry?.meta || {};
-      return Boolean(id && (id === meta.id || id === meta.slug || id === entry?.id || id === entry?.slug));
+      return Boolean(id && (id === entryAccessId(entry) || id === meta.id || id === meta.slug || id === entry?.id || id === entry?.slug));
     }
 
     function clearEntryReferenceStack() {
@@ -3715,8 +3725,7 @@
     };
 
     function renderEntryBodyEditor(entry) {
-      const meta = entry?.meta || {};
-      const id = meta.id || meta.slug || "";
+      const id = entryAccessId(entry);
       return `<div class="kb-entry-markdown-editor" data-mode="edit">
         <div class="kb-entry-edit-toolbar">
           <div class="kb-entry-edit-modes" role="group" aria-label="${esc(t("memo.markdown_mode", "Markdown mode"))}">
@@ -3764,7 +3773,8 @@
 
     function renderEditForm(entry) {
       const meta = entry?.meta || {};
-      return `<form class="kb-edit-form kb-entry-edit-form" data-entry-edit-form data-entry-id="${esc(meta.id || meta.slug || "")}" onsubmit="saveEntry(event, '${encodeURIComponent(meta.id || meta.slug || "")}')">
+      const id = entryAccessId(entry);
+      return `<form class="kb-edit-form kb-entry-edit-form" data-entry-edit-form data-entry-id="${esc(id)}" onsubmit="saveEntry(event, '${encodeURIComponent(id)}')">
         ${renderEntryEditMetadata(meta)}
         <div class="kb-edit-body-pane">
           <label class="kb-field">${esc(t("knowledge.edit_body", "Body"))}</label>
@@ -3779,7 +3789,8 @@
 
     function renderReferenceEditForm(entry) {
       const meta = entry?.meta || {};
-      return `<form class="kb-edit-form kb-entry-edit-form" data-entry-edit-form data-entry-id="${esc(meta.id || meta.slug || "")}" onsubmit="saveEntryReference(event)">
+      const id = entryAccessId(entry);
+      return `<form class="kb-edit-form kb-entry-edit-form" data-entry-edit-form data-entry-id="${esc(id)}" onsubmit="saveEntryReference(event)">
         ${renderEntryEditMetadata(meta)}
         <div class="kb-edit-body-pane">
           <label class="kb-field">${esc(t("knowledge.edit_body", "Body"))}</label>
@@ -3825,7 +3836,7 @@
           window.AHATaskMemoMarkdown.renderMarkdownPreview(preview, textarea.value || "", {
             documentRef: document,
             t,
-            linkHref: knowledgeLinkHref,
+            linkHref: (path) => knowledgeLinkHref(path, entry),
             imageSrc: (path) => entryImageSrc(path, entry),
           });
         } else {
@@ -4066,8 +4077,8 @@
 
     window.deleteEntry = async (encodedId, resetProjectNav = false) => {
       const id = decodeURIComponent(encodedId);
-      const entry = state.entries.find((item) => (item.id || item.slug) === id)
-        || state.navigation.find((item) => (item.id || item.slug) === id);
+      const entry = state.entries.find((item) => entryAccessId(item) === id)
+        || state.navigation.find((item) => entryAccessId(item) === id);
       const confirmMessage = resetProjectNav
         ? formatText(
             "knowledge.reset_project_nav_confirm",
@@ -4093,8 +4104,7 @@
     window.saveEntryReference = async (event) => {
       event.preventDefault();
       const ref = state.referenceEntry;
-      const meta = ref?.meta || {};
-      const id = meta.id || meta.slug || "";
+      const id = entryAccessId(ref);
       if (!id) return;
       const form = event.currentTarget;
       const payload = {
@@ -4323,23 +4333,11 @@
       if (editor.dataset.mode === "edit") form.querySelector(".kb-cap-edit")?.focus();
     };
 
-    function applyCaptureViewMode() {
-      const agentView = state.captureViewMode === "agent"
-        && state.activeDistillLogNote
-        && state.activeCaptureNote?.id === state.activeDistillLogNote;
-      $("#cap-view-refs").hidden = Boolean(agentView);
-      $("#cap-view-distill").hidden = Boolean(agentView);
-      $("#cap-view-body").hidden = Boolean(agentView);
-      $("#cap-view-log").hidden = !agentView;
-    }
-
     function renderCaptureNoteModal() {
       const modal = $("#cap-view-modal");
       const note = state.activeCaptureNote;
       if (!note) {
         state.distillTarget = null;
-        state.activeDistillLogNote = null;
-        state.captureViewMode = "view";
         state.captureEditMode = "edit";
         modal.hidden = true;
         $("#cap-view-body").classList.remove("kb-detail-editing");
@@ -4347,13 +4345,11 @@
         $("#cap-view-refs").innerHTML = "";
         $("#cap-view-actions").innerHTML = "";
         $("#cap-view-distill").innerHTML = "";
-        applyCaptureViewMode();
         return;
       }
       const title = note.title || String(note.text || "").split("\n")[0] || note.id;
       const statusLabel = t("knowledge.capture_status_" + note.status, note.status);
       const assocText = captureAssociationSummary(note);
-      if (state.activeDistillLogNote && state.activeDistillLogNote !== note.id) closeDistillLogModal();
       $("#cap-view-title").textContent = title.slice(0, 120);
       $("#cap-view-meta").textContent = [
         note.path || "",
@@ -4376,7 +4372,6 @@
         body.textContent = note.text || "";
       }
       syncCaptureDistillPanelControls();
-      applyCaptureViewMode();
       modal.hidden = false;
       setTimeout(() => focusPageSearchMatch($("#cap-view-title"), body), 0);
     }
@@ -4386,7 +4381,6 @@
       state.editingNote = null;
       state.distillTarget = null;
       state.captureEditMode = "edit";
-      closeDistillLogModal();
       renderCaptureNoteModal();
       renderGraphFileTree();
     }
@@ -4416,9 +4410,12 @@
         ? t("knowledge.capture_distilling", "Distilling…")
         : distillOpen ? t("knowledge.capture_distill_close", "Close distill")
         : hasProducedKnowledge ? t("knowledge.capture_redistill", "Redistill") : t("knowledge.capture_distill", "Distill");
+      const managementTaskHref = note.management_run_id && note.management_task_id
+        ? `/?run_id=${encodeURIComponent(note.management_run_id)}&selected_task_id=${encodeURIComponent(note.management_task_id)}`
+        : "";
       return `
         <button class="kb-approve" type="button" aria-expanded="${distillOpen ? "true" : "false"}" ${note.status === "distilling" ? "disabled" : ""} onclick="toggleDistillPanel('${esc(note.id)}')">${esc(distillLabel)}</button>
-        <button class="button-ghost" type="button" onclick="showDistillLog('${esc(note.id)}')">${esc(t("knowledge.capture_agent_log_short", "Agent"))}</button>
+        ${managementTaskHref ? `<a class="button-ghost" href="${esc(managementTaskHref)}">${esc(t("knowledge.open_task", "Open task"))}</a>` : ""}
         <button class="button-ghost" type="button" onclick="editNote('${esc(note.id)}')">${esc(t("knowledge.edit", "Edit"))}</button>
         <button class="kb-reject" type="button" onclick="deleteNote('${esc(note.id)}')">${esc(t("knowledge.delete", "Delete"))}</button>`;
     }
@@ -4435,15 +4432,13 @@
       if (!note || state.distillTarget !== note.id) return "";
       return `<div class="kb-cap-distill-panel" id="cap-distill-panel">
         <div class="kb-row kb-cap-distill-controls">
-          <span class="kb-muted">${esc(t("knowledge.capture_agent_label", "Distill agent:"))}</span>
+          <span class="kb-muted">${esc(t("knowledge.capture_distill_mode", "Distill mode"))}</span>
           <select id="cap-distill-mode" aria-label="${esc(t("knowledge.capture_distill_mode", "Distill mode"))}">${renderCaptureDistillModeOptions(state.lastDistillMode)}</select>
-          <select id="cap-backend" aria-label="Distill backend"></select>
-          <select id="cap-model" aria-label="Distill model"></select>
-          <select id="cap-effort" aria-label="Distill reasoning effort"></select>
-          <select id="cap-proxy-mode" aria-label="${esc(t("knowledge.proxy_mode", "Proxy mode"))}">
-            <option value="on">${esc(t("knowledge.proxy_on", "Proxy on"))}</option>
-            <option value="off">${esc(t("knowledge.proxy_off", "Proxy off"))}</option>
-          </select>
+          <div class="kb-agent-readonly" role="note" aria-label="${esc(t("knowledge.kb_agent_summary_aria", "KB Agent configuration"))}">
+            <strong>${esc(t("knowledge.kb_agent_summary_label", "KB Agent:"))}</strong>
+            <span id="cap-agent-summary" class="kb-agent-readonly-summary">${esc(kbAgentSummaryText())}</span>
+            <button class="button-ghost" type="button" onclick="openKbAgentSettings()">${esc(t("knowledge.kb_agent_open_settings", "Open Settings"))}</button>
+          </div>
           <button class="kb-approve" type="button" onclick="startDistillFromPanel()">${esc(t("knowledge.capture_distill", "Distill"))}</button>
           <button class="button-ghost" type="button" onclick="toggleDistillPanel('${esc(note.id)}')">${esc(t("common.cancel", "Cancel"))}</button>
         </div>
@@ -4608,124 +4603,114 @@
       const named = options.filter((option) => configString(option.name));
       return named.length ? named : options;
     }
-    function capturePreferredReasoningEffort(backendName, modelValue = "") {
-      const options = captureSelectableReasoningEffortOptions(backendName, modelValue);
-      const available = new Set(options.map((option) => configString(option.name)).filter(Boolean));
-      const selectedModel = configString(modelValue);
-      const model = captureModelOptions(backendName).find((item) => configString(item.name) === selectedModel);
-      const candidates = [
-        captureDefaultReasoningEffort(backendName),
-        configString(model?.default_reasoning_effort),
-        "xhigh",
-        configString(options[0]?.name),
-      ];
-      return candidates.find((value) => value && available.has(value)) || "";
-    }
     function captureDefaultModel(backendName) {
       const cfg = state.captureConfig?.[backendName] || {};
       if (backendName === "claude") return captureFirstModel(backendName) || configString(cfg.model) || captureEnvModelValue(cfg.env_active);
       if (backendName === "codex") return captureFirstModel(backendName) || configString(cfg.model) || captureEnvModelValue(cfg.env_active);
       return captureFirstModel(backendName) || configString(cfg.model);
     }
-    function captureDefaultReasoningEffort(backendName) {
-      return configString(state.captureConfig?.[backendName]?.reasoning_effort);
-    }
-    function captureDefaultProxyEnabled(backendName) {
-      const backendProxy = state.captureConfig?.[backendName]?.proxy || {};
-      return Boolean(backendProxy.enabled);
-    }
-    function syncCaptureProxyMode(useLast = true) {
-      const select = $("#cap-proxy-mode");
-      const backendEl = $("#cap-backend");
-      if (!select || !backendEl) return;
-      const remembered = typeof state.lastProxyEnabled === "boolean";
-      const enabled = useLast && remembered ? state.lastProxyEnabled : captureDefaultProxyEnabled(backendEl.value);
-      select.value = enabled ? "on" : "off";
-    }
-    function renderCaptureModels(selectedModel) {
-      const backendEl = $("#cap-backend");
-      const modelEl = $("#cap-model");
-      if (!backendEl || !modelEl) return;
-      const backendName = backendEl.value;
-      const models = captureSelectableModelOptions(backendName);
-      modelEl.innerHTML = models.map((m) => `<option value="${esc(m.name)}">${esc(m.label || m.name || "default")}</option>`).join("");
-      const values = [...modelEl.options].map((opt) => opt.value);
-      const requested = configString(selectedModel ?? state.lastModel ?? "");
-      const fallback = values.includes(requested) ? requested : captureDefaultModel(backendName);
-      if (values.includes(fallback)) modelEl.value = fallback;
-      else if (values.length) modelEl.value = values[0];
-      renderCaptureReasoningEfforts();
-    }
-    function renderReasoningEffortSelect(select, backendName, modelValue, selectedValue, configuredDefault) {
-      if (!select) return;
-      const options = captureSelectableReasoningEffortOptions(backendName, modelValue);
-      select.innerHTML = options.map((opt) => `<option value="${esc(configString(opt.name))}">${esc(configString(opt.label, opt.name || "default"))}</option>`).join("");
-      const values = [...select.options].map((opt) => opt.value);
-      const requested = configString(selectedValue);
-      const preferred = capturePreferredReasoningEffort(backendName, modelValue);
-      const configured = configString(configuredDefault);
-      const fallback = values.includes(requested) ? requested : values.includes(preferred) ? preferred : configured;
-      select.value = values.includes(fallback) ? fallback : "";
-    }
-    function renderCaptureReasoningEfforts(selectedEffort) {
-      const backendEl = $("#cap-backend");
-      const modelEl = $("#cap-model");
-      renderReasoningEffortSelect(
-        $("#cap-effort"),
-        backendEl?.value || "",
-        modelEl?.value || "",
-        selectedEffort ?? state.lastReasoningEffort ?? "",
-        captureDefaultReasoningEffort(backendEl?.value || "")
-      );
-    }
-    function syncCaptureDistillPanelControls(useLast = true) {
-      const backendEl = $("#cap-backend");
-      if (!backendEl) return;
-      backendEl.innerHTML = (state.captureBackends || []).map((b) => `<option value="${esc(b.name)}">${esc(b.name)}</option>`).join("");
-      const backends = [...backendEl.options].map((opt) => opt.value);
-      const selectedBackend = state.lastBackend || configString(state.captureConfig?.backend, "codex");
-      if (backends.includes(selectedBackend)) backendEl.value = selectedBackend;
+    function syncCaptureDistillPanelControls() {
       const modeEl = $("#cap-distill-mode");
       if (modeEl) modeEl.value = state.lastDistillMode || "organize";
-      renderCaptureModels();
-      syncCaptureProxyMode(useLast);
+      renderKbAgentSummaries();
     }
-    function renderNavigationAgents() {
-      const backendEl = $("#nav-backend");
-      if (!backendEl) return;
-      backendEl.innerHTML = (state.captureBackends || []).map((b) => `<option value="${esc(b.name)}">${esc(b.name)}</option>`).join("");
-      const backends = [...backendEl.options].map((opt) => opt.value);
-      const selectedBackend = state.navLastBackend || configString(state.captureConfig?.backend, "codex");
-      if (backends.includes(selectedBackend)) backendEl.value = selectedBackend;
-      renderNavigationModels();
-      syncNavigationProxyMode(false);
+
+    function nullableConfigString(value) {
+      const text = configString(value);
+      return text || null;
     }
-    function renderNavigationModels(selectedModel) {
-      const backendName = $("#nav-backend").value;
-      const models = captureSelectableModelOptions(backendName);
-      $("#nav-model").innerHTML = models.map((m) => `<option value="${esc(m.name)}">${esc(m.label || m.name || "default")}</option>`).join("");
-      const values = [...$("#nav-model").options].map((opt) => opt.value);
-      const requested = configString(selectedModel ?? state.navLastModel ?? "");
-      const fallback = values.includes(requested) ? requested : captureDefaultModel(backendName);
-      if (values.includes(fallback)) $("#nav-model").value = fallback;
-      else if (values.length) $("#nav-model").value = values[0];
-      renderNavigationReasoningEfforts();
+    function normalizeKbAgentConfig(value) {
+      const agent = value && typeof value === "object" ? value : {};
+      return {
+        backend: nullableConfigString(agent.backend),
+        model: nullableConfigString(agent.model),
+        reasoning_effort: nullableConfigString(agent.reasoning_effort),
+        proxy_enabled: typeof agent.proxy_enabled === "boolean" ? agent.proxy_enabled : null,
+      };
     }
-    function renderNavigationReasoningEfforts(selectedEffort) {
-      renderReasoningEffortSelect(
-        $("#nav-effort"),
-        $("#nav-backend")?.value || "",
-        $("#nav-model")?.value || "",
-        selectedEffort ?? state.navLastReasoningEffort ?? "",
-        captureDefaultReasoningEffort($("#nav-backend")?.value || "")
-      );
+    function kbAgentEffectiveBackend(value = state.kbAgent.backend) {
+      return configString(value) || configString(state.captureConfig?.backend, "codex");
     }
-    function syncNavigationProxyMode(useLast = true) {
-      const select = $("#nav-proxy-mode");
+    function kbAgentModelLabel(backendName, modelValue) {
+      const model = captureModelOptions(backendName).find((item) => configString(item.name) === configString(modelValue));
+      return configString(model?.label, modelValue);
+    }
+    function kbAgentSummaryText() {
+      const agent = state.kbAgent;
+      const backendName = kbAgentEffectiveBackend(agent.backend);
+      const backend = agent.backend || t("knowledge.kb_agent_follow_global", "Follow global");
+      const model = agent.model ? kbAgentModelLabel(backendName, agent.model) : t("knowledge.kb_agent_follow_backend", "Follow backend");
+      const effort = agent.reasoning_effort || t("knowledge.kb_agent_follow_backend", "Follow backend");
+      const proxy = agent.proxy_enabled === null
+        ? t("knowledge.kb_agent_follow_backend", "Follow backend")
+        : agent.proxy_enabled ? t("knowledge.proxy_on", "Proxy on") : t("knowledge.proxy_off", "Proxy off");
+      return [
+        `${t("knowledge.kb_agent_backend", "Backend")}: ${backend}`,
+        `${t("knowledge.kb_agent_model", "Model")}: ${model}`,
+        `${t("knowledge.kb_agent_reasoning_effort", "Reasoning effort")}: ${effort}`,
+        `${t("knowledge.kb_agent_proxy", "Proxy")}: ${proxy}`,
+      ].join(" · ");
+    }
+    function renderKbAgentSummaries() {
+      const summary = kbAgentSummaryText();
+      for (const id of ["#project-nav-agent-summary", "#cap-agent-summary"]) {
+        const target = $(id);
+        if (target) target.textContent = summary;
+      }
+    }
+    function kbAgentOptionHtml(value, label) {
+      return `<option value="${esc(value)}">${esc(label)}</option>`;
+    }
+    function renderKbAgentReasoningEfforts(selectedEffort = state.kbAgent.reasoning_effort) {
+      const select = $("#s-agent-effort");
       if (!select) return;
-      const remembered = typeof state.navLastProxyEnabled === "boolean";
-      const enabled = useLast && remembered ? state.navLastProxyEnabled : captureDefaultProxyEnabled($("#nav-backend").value);
-      select.value = enabled ? "on" : "off";
+      const backendName = kbAgentEffectiveBackend($("#s-agent-backend")?.value || "");
+      const modelValue = $("#s-agent-model")?.value || captureDefaultModel(backendName);
+      const options = captureSelectableReasoningEffortOptions(backendName, modelValue)
+        .filter((option) => configString(option.name));
+      const requested = configString(selectedEffort);
+      if (requested && !options.some((option) => configString(option.name) === requested)) {
+        options.unshift({ name: requested, label: requested });
+      }
+      select.innerHTML = kbAgentOptionHtml("", t("knowledge.kb_agent_follow_backend", "Follow backend"))
+        + options.map((option) => kbAgentOptionHtml(configString(option.name), configString(option.label, option.name))).join("");
+      select.value = requested;
+    }
+    function renderKbAgentModels(selectedModel = state.kbAgent.model, selectedEffort = state.kbAgent.reasoning_effort) {
+      const select = $("#s-agent-model");
+      if (!select) return;
+      const backendName = kbAgentEffectiveBackend($("#s-agent-backend")?.value || "");
+      const options = captureSelectableModelOptions(backendName).slice();
+      const requested = configString(selectedModel);
+      if (requested && !options.some((option) => configString(option.name) === requested)) {
+        options.unshift({ name: requested, label: requested });
+      }
+      select.innerHTML = kbAgentOptionHtml("", t("knowledge.kb_agent_follow_backend", "Follow backend"))
+        + options.map((option) => kbAgentOptionHtml(configString(option.name), configString(option.label, option.name))).join("");
+      select.value = requested;
+      renderKbAgentReasoningEfforts(selectedEffort);
+    }
+    function renderKbAgentSettings(agent = state.kbAgent) {
+      const backend = $("#s-agent-backend");
+      if (!backend) return;
+      backend.value = ["codex", "claude"].includes(configString(agent.backend)) ? configString(agent.backend) : "";
+      renderKbAgentModels(agent.model, agent.reasoning_effort);
+      $("#s-agent-proxy").value = agent.proxy_enabled === null ? "inherit" : agent.proxy_enabled ? "on" : "off";
+    }
+    function kbAgentSettingsPayload() {
+      const proxyMode = $("#s-agent-proxy").value;
+      return {
+        backend: $("#s-agent-backend").value || null,
+        model: $("#s-agent-model").value || null,
+        reasoning_effort: $("#s-agent-effort").value || null,
+        proxy_enabled: proxyMode === "inherit" ? null : proxyMode === "on",
+      };
+    }
+    function applyKbAgentConfig(value) {
+      state.kbAgent = normalizeKbAgentConfig(value);
+      state.kbAgentLoaded = true;
+      renderKbAgentSettings();
+      renderKbAgentSummaries();
     }
     function boolMode(value) {
       return value ? "on" : "off";
@@ -4735,14 +4720,48 @@
     }
 
     async function loadCaptureAgents() {
+      const status = $("#s-agent-options-status");
+      if (status) status.textContent = t("knowledge.kb_agent_options_loading", "Loading agent options...");
       try {
-        const data = await api("/api/bootstrap").catch(() => api("/api/backends"));
-        state.captureBackends = data.backends || [];
+        const data = await api("/api/kb/capture/agents");
+        if (!Array.isArray(data.backends) || !data.backends.length) {
+          throw new Error(t("knowledge.kb_agent_options_empty", "No agent options are available."));
+        }
+        state.captureBackends = data.backends;
         state.captureConfig = data.config || {};
-        syncCaptureDistillPanelControls(false);
-        renderNavigationAgents();
-      } catch (e) { /* selectors stay empty -> distill falls back to server default */ }
+        renderKbAgentSettings();
+        renderKbAgentSummaries();
+        if (status) status.textContent = "";
+      } catch (e) {
+        state.captureBackends = null;
+        state.captureConfig = {};
+        renderKbAgentSettings();
+        renderKbAgentSummaries();
+        if (status) {
+          status.textContent = formatText(
+            "knowledge.kb_agent_options_failed",
+            { error: e.message },
+            "Failed to load agent options: " + e.message
+          );
+        }
+      }
     }
+    async function loadKbAgentConfig() {
+      try {
+        const config = await api("/api/kb/config");
+        applyKbAgentConfig(config.agent);
+        return config;
+      } catch (e) {
+        state.kbAgentLoaded = false;
+        renderKbAgentSummaries();
+        return null;
+      }
+    }
+
+    window.openKbAgentSettings = async () => {
+      await showTab("settings");
+      $("#s-agent-backend")?.focus();
+    };
 
     window.editNote = (id) => {
       const note = state.capture.find((item) => item.id === id);
@@ -4786,79 +4805,6 @@
       }
       catch (e) { toast(formatText("knowledge.failed_with_error", { error: e.message }, "Failed: " + e.message)); }
     };
-    function closeDistillLogModal() {
-      if (state.distillLogPoll) {
-        clearTimeout(state.distillLogPoll);
-        state.distillLogPoll = null;
-      }
-      state.activeDistillLogNote = null;
-      state.captureViewMode = "view";
-      applyCaptureViewMode();
-    }
-
-    function distillLogPanelVisible() {
-      const panel = $("#cap-view-log");
-      return Boolean(panel && !panel.hidden && state.captureViewMode === "agent");
-    }
-
-    function renderDistillLog(log, fallbackMessage = "") {
-      log = log || {};
-      const model = log.model || "default";
-      const times = [log.started_at, log.finished_at].filter(Boolean).map(localTime).join(" -> ");
-      $("#cap-log-meta").textContent = [log.status || fallbackMessage, log.backend, model, times].filter(Boolean).join(" · ");
-      $("#cap-agent-log").innerHTML = renderCaptureDistillConversation(log, fallbackMessage);
-      state.captureViewMode = "agent";
-      applyCaptureViewMode();
-    }
-
-    function scheduleDistillLogPoll(log) {
-      if (state.distillLogPoll) {
-        clearTimeout(state.distillLogPoll);
-        state.distillLogPoll = null;
-      }
-      if (!state.activeDistillLogNote || !distillLogPanelVisible()) return;
-      if (!log || log.status === "running") {
-        state.distillLogPoll = setTimeout(refreshActiveDistillLog, 1500);
-      }
-    }
-
-    async function refreshActiveDistillLog(force = false) {
-      const id = state.activeDistillLogNote;
-      if (!id || (!force && !distillLogPanelVisible())) return;
-      try {
-        const data = await api("/api/kb/capture/distill-log?id=" + encodeURIComponent(id));
-        if (state.activeDistillLogNote !== id || state.captureViewMode !== "agent") return;
-        const log = data.log || {};
-        renderDistillLog(log);
-        scheduleDistillLogPoll(log);
-      } catch (e) {
-        if (state.activeDistillLogNote !== id || state.captureViewMode !== "agent") return;
-        const missing = t("knowledge.capture_log_missing", "No distill log yet");
-        if (e.message === "distill log not found") {
-          renderDistillLog(null, missing);
-          const note = state.capture.find((item) => item.id === id);
-          if (note?.status === "distilling") scheduleDistillLogPoll(null);
-        } else {
-          toast(formatText("knowledge.failed_with_error", { error: e.message }, "Failed: " + e.message));
-        }
-      }
-    };
-
-    window.showDistillLog = async (id) => {
-      const note = state.capture.find((item) => item.id === id);
-      if (note) {
-        state.activeCaptureNote = note;
-      } else if (!state.activeCaptureNote || state.activeCaptureNote.id !== id) {
-        toast("Capture note unavailable");
-        return;
-      }
-      state.activeDistillLogNote = id;
-      state.captureViewMode = "agent";
-      renderCaptureNoteModal();
-      renderDistillLog(null, t("common.loading", "Loading..."));
-      await refreshActiveDistillLog(true);
-    };
-    $("#cap-log-close").addEventListener("click", closeDistillLogModal);
     $("#cap-view-close").addEventListener("click", closeCaptureNoteModal);
     function readFileAsDataUrl(file) {
       return new Promise((resolve, reject) => {
@@ -4958,24 +4904,21 @@
       renderCaptureNoteModal();
       if (state.distillTarget) {
         if (!state.captureBackends) await loadCaptureAgents();
-        syncCaptureDistillPanelControls(true);
+        if (!state.kbAgentLoaded) await loadKbAgentConfig();
+        syncCaptureDistillPanelControls();
       }
     };
     window.startDistillFromPanel = () => {
       const id = state.distillTarget;
       state.lastDistillMode = $("#cap-distill-mode")?.value === "generate" ? "generate" : "organize";
-      state.lastBackend = $("#cap-backend")?.value || "";
-      state.lastModel = $("#cap-model")?.value || "";
-      state.lastReasoningEffort = $("#cap-effort")?.value || "";
-      state.lastProxyEnabled = $("#cap-proxy-mode")?.value === "on";
       state.distillTarget = null;
       renderCaptureNoteModal();
-      if (id) runDistill(id, state.lastBackend || null, state.lastModel || null, state.lastProxyEnabled, state.lastDistillMode, state.lastReasoningEffort || null);
+      if (id) runDistill(id, state.lastDistillMode);
     };
 
-    async function runDistill(id, backend, model, proxyEnabled, distillMode = "organize", reasoningEffort = null) {
+    async function runDistill(id, distillMode = "organize") {
       try {
-        await api("/api/kb/capture/distill", { method: "POST", body: JSON.stringify({ id, backend, model, reasoning_effort: reasoningEffort || "", proxy_enabled: Boolean(proxyEnabled), distill_mode: distillMode }) });
+        await api("/api/kb/capture/distill", { method: "POST", body: JSON.stringify({ id, distill_mode: distillMode }) });
         toast(t("knowledge.capture_distilling", "Distilling…"));
         await loadCapture();
         for (let i = 0; i < 60; i++) {
@@ -5187,18 +5130,6 @@
         if (submit) submit.disabled = false;
       }
     });
-    document.addEventListener("change", (event) => {
-      if (event.target?.id === "cap-backend") {
-        renderCaptureModels();
-        syncCaptureProxyMode(false);
-      } else if (event.target?.id === "cap-model") {
-        state.lastModel = $("#cap-model")?.value || "";
-        renderCaptureReasoningEfforts();
-      } else if (event.target?.id === "cap-effort") {
-        state.lastReasoningEffort = $("#cap-effort")?.value || "";
-      }
-    });
-
     function syncFailureMessage(result) {
       const steps = result?.steps || {};
       for (const [name, step] of Object.entries(steps)) {
@@ -5489,6 +5420,8 @@
 
     async function loadSettings() {
       const s = await api("/api/kb/config");
+      applyKbAgentConfig(s.agent);
+      if (!state.captureBackends) await loadCaptureAgents();
       $("#s-enabled").value = boolMode(s.enabled);
       $("#s-path").value = s.path || "";
       currentCurationGate = s.curation.gate || "manual";
@@ -5505,6 +5438,7 @@
 
     $("#settings-form").addEventListener("submit", async (ev) => {
       ev.preventDefault();
+      const agent = kbAgentSettingsPayload();
       const payload = {
         enabled: modeBool("#s-enabled"),
         path: $("#s-path").value.trim() || null,
@@ -5514,6 +5448,7 @@
             : $("#s-gate").value,
         },
         project_nav: { enabled: modeBool("#s-project-nav-enabled") },
+        agent,
         sync: { mode: $("#s-sync-mode").value },
         git: {
           enabled: modeBool("#s-git-enabled"),
@@ -5522,7 +5457,7 @@
           branch: $("#s-branch").value.trim() || "main",
         },
       };
-      try { await api("/api/kb/config", { method: "PATCH", body: JSON.stringify(payload) }); toast(t("knowledge.saved", "Saved")); await loadStatus(); await loadSyncStatus(); }
+      try { await api("/api/kb/config", { method: "PATCH", body: JSON.stringify(payload) }); applyKbAgentConfig(agent); toast(t("knowledge.saved", "Saved")); await loadStatus(); await loadSyncStatus(); }
       catch (e) { toast(formatText("knowledge.save_failed_with_error", { error: e.message }, "Save failed: " + e.message)); }
     });
 
@@ -5546,13 +5481,8 @@
       state.projectRelations = readProjectRelations().filter((_item, itemIndex) => itemIndex !== index);
       renderProjectRelations();
     });
-    $("#nav-backend").addEventListener("change", () => { state.navLastBackend = $("#nav-backend").value; renderNavigationModels(); syncNavigationProxyMode(false); });
-    $("#nav-model").addEventListener("change", () => { state.navLastModel = $("#nav-model").value; renderNavigationReasoningEfforts(); });
-    $("#nav-effort").addEventListener("change", () => { state.navLastReasoningEffort = $("#nav-effort").value; });
-    $("#nav-proxy-mode").addEventListener("change", () => {
-      const mode = $("#nav-proxy-mode").value;
-      state.navLastProxyEnabled = mode === "on";
-    });
+    $("#s-agent-backend").addEventListener("change", () => renderKbAgentModels(null, null));
+    $("#s-agent-model").addEventListener("change", () => renderKbAgentReasoningEfforts(null));
     $("#nav-draft-close").addEventListener("click", closeProjectNavDraftModal);
     $("#nav-draft-modal").addEventListener("click", (ev) => { if (ev.target.id === "nav-draft-modal") closeProjectNavDraftModal(); });
     $("#nav-draft-stop").addEventListener("click", () => { if (state.activeNavDraft?.id) stopProjectNavDraft(state.activeNavDraft.id); });
@@ -5568,10 +5498,6 @@
         return;
       }
       if (!confirm(formatText("knowledge.confirm_generate_project_nav", { workspace: payload.workspace_path }, "Generate project navigation for " + payload.workspace_path + "?"))) return;
-      state.navLastBackend = payload.backend || "";
-      state.navLastModel = payload.model || "";
-      state.navLastReasoningEffort = payload.reasoning_effort || "";
-      state.navLastProxyEnabled = Boolean(payload.proxy_enabled);
       try {
         const result = await api("/api/kb/project-nav", { method: "POST", body: JSON.stringify(payload) });
         const message = formatText("knowledge.project_nav_generation_started", { id: result.draft_id || "-" }, "Project nav generation started: " + (result.draft_id || "-"));
@@ -5635,8 +5561,7 @@
         return true;
       }
       if (knowledgeModalOpen("#cap-view-modal")) {
-        if (distillLogPanelVisible()) closeDistillLogModal();
-        else closeCaptureNoteModal();
+        closeCaptureNoteModal();
         return true;
       }
       if (knowledgeModalOpen("#cap-new-modal")) {
@@ -5718,7 +5643,8 @@
       renderProjectNavWorkspaceSelect();
       renderProjectIdentity();
       renderProjectRelations();
-      renderNavigationAgents();
+      renderKbAgentSettings();
+      renderKbAgentSummaries();
       renderSkills();
       if (state.activeTab === "settings") loadSettings();
       loadStatus();
@@ -5730,6 +5656,8 @@
     });
     syncChromeText();
     loadStatus();
+    void loadCaptureAgents();
+    void loadKbAgentConfig();
     loadProjectNavWorkspaces().finally(() => {
       let initialViewPromise;
       if (pageEntryId) {

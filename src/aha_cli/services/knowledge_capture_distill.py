@@ -10,12 +10,13 @@ candidates, emitted as the same ``<aha_knowledge_candidates>`` JSON sidecar the
 task final/memo path uses. Candidates always land in the manual review queue
 (``.pending``) — raw dumps are inherently unvetted.
 
-AHA exposes no stable in-process "prompt -> reply" API (backends run as
-subprocess CLIs), so the model call is isolated behind a narrow seam: the
-``agent`` callable ``CaptureAgent``. The default seam wraps the existing
-``run_claude_exec`` / ``run_codex_exec`` chain (no new dependency); tests inject
-a deterministic stub so the parse -> normalize -> enqueue -> mark-distilled
-pipeline is fully covered without invoking a real model.
+The model call is isolated behind a narrow seam: the ``agent`` callable
+``CaptureAgent``. Knowledge tasks execute that seam through the normal Task
+inbox/backend worker so prompt artifacts, sessions, runtime state, command logs,
+and usage are identical to ordinary Task turns. Standalone compatibility callers
+without a task context retain the direct backend fallback. Tests inject a
+deterministic stub so the parse -> normalize -> enqueue -> mark-distilled pipeline
+is fully covered without invoking a real model.
 """
 
 from __future__ import annotations
@@ -149,11 +150,20 @@ def _backend_proxy_env(config: dict | None, backend: str, proxy_enabled: bool | 
 
 
 def default_capture_agent(context: dict) -> str:
-    """Real seam: run the note through the existing backend exec chain.
+    """Run through the standard Task worker, with a standalone fallback.
 
-    Best-effort and dependency-free (reuses run_claude_exec / run_codex_exec).
     Kept replaceable: callers may pass their own ``agent`` to skip this.
     """
+    knowledge_root = context.get("knowledge_root")
+    knowledge_task_context = context.get("knowledge_task_context")
+    if isinstance(knowledge_root, Path) and isinstance(knowledge_task_context, dict):
+        from aha_cli.services.knowledge_tasks import KnowledgeAgentTurnError, run_knowledge_agent_turn
+
+        try:
+            return run_knowledge_agent_turn(knowledge_root, knowledge_task_context, context)
+        except KnowledgeAgentTurnError as exc:
+            raise CaptureAgentError(str(exc)) from exc
+
     model = context.get("model")
     config = context.get("config") if isinstance(context.get("config"), dict) else {}
     backend = _effective_backend(config, context.get("backend"))
@@ -166,6 +176,12 @@ def default_capture_agent(context: dict) -> str:
     proxy_env = _backend_proxy_env(config, backend, context.get("proxy_enabled"))
     reasoning_effort = _effective_reasoning_effort(config, backend, context.get("reasoning_effort"))
     progress_callback = context.get("progress_callback")
+    events_file_value = context.get("events_file")
+    events_file = Path(events_file_value) if events_file_value else None
+    run_id = str(context.get("run_id") or "")
+    task_id = str(context.get("task_id") or "") or None
+    source = str(context.get("source") or "main")
+    target = str(context.get("target") or "main") or None
     if callable(progress_callback):
         progress_callback(
             "backend_started",
@@ -191,6 +207,8 @@ def default_capture_agent(context: dict) -> str:
                     codex_bin=codex_bin, model=model, sandbox="read-only",
                     approval="never", codex_config=codex_config, proxy_env=proxy_env,
                     reasoning_effort=reasoning_effort,
+                    events_file=events_file, run_id=run_id, task_id=task_id,
+                    source=source, target=target,
                     event_callback=progress_callback if callable(progress_callback) else None,
                     start_new_session=True,
                     aha_home=cwd,
@@ -208,6 +226,8 @@ def default_capture_agent(context: dict) -> str:
                     claude_bin=claude_bin, model=command_model, permission_mode="plan",
                     claude_config=claude_config, proxy_env=proxy_env,
                     reasoning_effort=reasoning_effort,
+                    events_file=events_file, run_id=run_id, task_id=task_id,
+                    source=source, target=target,
                     event_callback=progress_callback if callable(progress_callback) else None,
                     start_new_session=True,
                 )

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import threading
+import time
 from pathlib import Path
 
 from aha_cli.domain.models import (
@@ -10,40 +11,70 @@ from aha_cli.domain.models import (
     is_knowledge_run,
     utc_now,
 )
-from aha_cli.services.knowledge_agent_progress import summarize_agent_progress
 from aha_cli.services.tasks import create_task_and_dispatch
-from aha_cli.store.filesystem import append_message, create_plan, set_agent_status, set_task_status, write_task_result
-from aha_cli.store.io import write_json
+from aha_cli.store.filesystem import append_event, append_message, create_plan, set_agent_status, set_task_status, write_task_result
+from aha_cli.store.io import read_json, write_json
 from aha_cli.store.knowledge import knowledge_root
-from aha_cli.store.paths import run_dir
+from aha_cli.store.paths import event_path, run_dir
 from aha_cli.store.runs import list_run_summaries, locked_plan, require_plan, save_plan
 
-KNOWLEDGE_RUN_TITLE = "KB 管理"
+KNOWLEDGE_RUN_TITLE = "AHA Knowledge Manager"
 
 _run_lock = threading.RLock()
 
 
-def _backend_defaults(config: dict | None, *, backend=None, model=None, reasoning_effort=None, proxy_enabled=None) -> dict:
+class KnowledgeAgentTurnError(RuntimeError):
+    """Raised when a standard task-scoped Knowledge agent turn fails."""
+
+
+def resolve_knowledge_agent_config(
+    config: dict | None,
+    *,
+    backend=None,
+    model=None,
+    reasoning_effort=None,
+    proxy_enabled=None,
+) -> dict:
     cfg = config if isinstance(config, dict) else {}
-    selected_backend = str(backend or cfg.get("backend") or "codex").strip().lower()
+    kb_cfg = cfg.get("knowledge") if isinstance(cfg.get("knowledge"), dict) else {}
+    agent_cfg = kb_cfg.get("agent") if isinstance(kb_cfg.get("agent"), dict) else {}
+    requested_backend = str(backend or "").strip().lower()
+    saved_backend = str(agent_cfg.get("backend") or "").strip().lower()
+    global_backend = str(cfg.get("backend") or "").strip().lower()
+    selected_backend = requested_backend or saved_backend or global_backend or "codex"
     if selected_backend not in {"codex", "claude"}:
         selected_backend = "codex"
     backend_cfg = cfg.get(selected_backend) if isinstance(cfg.get(selected_backend), dict) else {}
     proxy_cfg = backend_cfg.get("proxy") if isinstance(backend_cfg.get("proxy"), dict) else {}
+    profile_cfg = agent_cfg if not requested_backend else {}
+    saved_proxy = profile_cfg.get("proxy_enabled")
+    selected_proxy = (
+        bool(proxy_enabled)
+        if proxy_enabled is not None
+        else bool(saved_proxy)
+        if isinstance(saved_proxy, bool)
+        else bool(backend_cfg.get("proxy_enabled", proxy_cfg.get("enabled", False)))
+    )
     return {
         "backend": selected_backend,
-        "model": model or backend_cfg.get("model"),
-        "reasoning_effort": reasoning_effort or backend_cfg.get("reasoning_effort"),
-        "proxy_enabled": bool(backend_cfg.get("proxy_enabled", proxy_cfg.get("enabled", False)))
-        if proxy_enabled is None
-        else bool(proxy_enabled),
+        "model": model or profile_cfg.get("model") or backend_cfg.get("model"),
+        "reasoning_effort": reasoning_effort or profile_cfg.get("reasoning_effort") or backend_cfg.get("reasoning_effort"),
+        "proxy_enabled": selected_proxy,
     }
+
+
+_backend_defaults = resolve_knowledge_agent_config
 
 
 def _mark_knowledge_run(root: Path, run_id: str, config: dict | None) -> dict:
     workspace = str(knowledge_root(root, config).resolve())
+    defaults = resolve_knowledge_agent_config(config)
+    renamed = False
     with locked_plan(root, run_id):
         plan = require_plan(root, run_id)
+        if str(plan.get("goal") or "") != KNOWLEDGE_RUN_TITLE:
+            plan["goal"] = KNOWLEDGE_RUN_TITLE
+            renamed = True
         plan.update(
             {
                 "kind": SYSTEM_RUN_KIND,
@@ -54,11 +85,24 @@ def _mark_knowledge_run(root: Path, run_id: str, config: dict | None) -> dict:
             }
         )
         main_agent = plan.get("main_agent") if isinstance(plan.get("main_agent"), dict) else {}
-        main_agent.update({"workspace_path": workspace, "sandbox": "read-only", "approval": "never"})
+        main_agent.update(
+            {
+                "backend": defaults["backend"],
+                "model": defaults["model"],
+                "reasoning_effort": defaults["reasoning_effort"],
+                "proxy_enabled": defaults["proxy_enabled"],
+                "workspace_path": workspace,
+                "sandbox": "read-only",
+                "approval": "never",
+            }
+        )
         plan["main_agent"] = main_agent
         plan["updated_at"] = utc_now()
         save_plan(root, plan)
-        return plan
+        marked = dict(plan)
+    if renamed:
+        append_event(root, run_id, "run_renamed", {"name": KNOWLEDGE_RUN_TITLE})
+    return marked
 
 
 def ensure_knowledge_run(
@@ -123,6 +167,7 @@ def create_knowledge_task(
     model=None,
     reasoning_effort=None,
     proxy_enabled=None,
+    workspace_path: str | None = None,
     metadata: dict | None = None,
 ) -> dict:
     defaults = _backend_defaults(
@@ -133,6 +178,7 @@ def create_knowledge_task(
         proxy_enabled=proxy_enabled,
     )
     run_id = ensure_knowledge_run(root, config, **defaults)
+    task_workspace = str(workspace_path or knowledge_root(root, config).resolve())
     task = create_task_and_dispatch(
         root,
         run_id,
@@ -141,7 +187,7 @@ def create_knowledge_task(
         model=defaults["model"],
         reasoning_effort=defaults["reasoning_effort"],
         proxy_enabled=defaults["proxy_enabled"],
-        workspace_path=str(knowledge_root(root, config).resolve()),
+        workspace_path=task_workspace,
         sandbox="read-only",
         approval="never",
         collaboration_mode="solo",
@@ -164,6 +210,10 @@ def create_knowledge_task(
                 "system_owner": "aha",
                 "knowledge_operation": operation,
                 "knowledge_metadata": dict(metadata or {}),
+                "backend": defaults["backend"],
+                "model": defaults["model"],
+                "reasoning_effort": defaults["reasoning_effort"],
+                "proxy_enabled": defaults["proxy_enabled"],
                 "system_schema_version": 1,
             }
         )
@@ -174,23 +224,24 @@ def create_knowledge_task(
     append_message(
         root,
         run_id,
-        "browser",
+        "main",
         description,
-        sender="system",
+        sender="browser",
         task_id=task_id,
-        role="system",
-        display_sender="AHA",
-        display_target="KB Agent",
+        role="main",
+        from_agent="browser",
+        to_agent="main",
+        display_sender="browser",
+        display_target="main",
     )
     return {"run_id": run_id, "task_id": task_id, "task": task, **defaults}
 
 
-def start_knowledge_task(root: Path, context: dict, message: str = "KB Agent 已开始处理。") -> None:
+def start_knowledge_task(root: Path, context: dict) -> None:
     run_id = str(context["run_id"])
     task_id = str(context["task_id"])
     set_task_status(root, run_id, task_id, "running")
     set_agent_status(root, run_id, task_id, "main", "running")
-    append_knowledge_task_message(root, context, message)
 
 
 def append_knowledge_task_message(root: Path, context: dict, message: str) -> None:
@@ -212,21 +263,135 @@ def append_knowledge_task_message(root: Path, context: dict, message: str) -> No
 
 
 def knowledge_task_progress_callback(root: Path, context: dict, existing=None):
-    last_message = {"value": ""}
-
     def _progress(event_type: str, data: dict | None = None) -> None:
         if callable(existing):
             existing(event_type, data)
-        summary = summarize_agent_progress(event_type, data)
-        if not summary:
-            return
-        message = str(summary.get("message") or "").strip()
-        if not message or message == last_message["value"]:
-            return
-        last_message["value"] = message
-        append_knowledge_task_message(root, context, message)
 
     return _progress
+
+
+def knowledge_agent_execution_context(root: Path, task_context: dict | None, context: dict | None = None) -> dict:
+    prepared = dict(context or {})
+    if not isinstance(task_context, dict):
+        return prepared
+    run_id = str(task_context["run_id"])
+    task_id = str(task_context["task_id"])
+    prepared.update(
+        {
+            "events_file": event_path(root, run_id),
+            "run_id": run_id,
+            "task_id": task_id,
+            "source": "main",
+            "target": "main",
+            "knowledge_root": root,
+            "knowledge_task_context": task_context,
+        }
+    )
+    prepared["progress_callback"] = knowledge_task_progress_callback(
+        root,
+        task_context,
+        prepared.get("progress_callback"),
+    )
+    return prepared
+
+
+def run_knowledge_agent_turn(root: Path, task_context: dict, context: dict) -> str:
+    """Execute a Knowledge request through the normal task Chat backend.
+
+    Knowledge jobs need the raw reply synchronously so they can parse their
+    sidecar, but the model invocation itself must use the same inbox, prompt,
+    session, runtime, log, usage, and command-event path as an ordinary Task.
+    """
+    from aha_cli.services.backend_runtime import backend_status, start_backend, stop_backend
+    from aha_cli.services.chat_offsets import advance_chat_offset_to_inbox_end, chat_offset_path, chat_turn_checkpoint_path
+
+    run_id = str(task_context.get("run_id") or "").strip()
+    task_id = str(task_context.get("task_id") or "").strip()
+    prompt = str(context.get("prompt") or "")
+    if not run_id or not task_id:
+        raise KnowledgeAgentTurnError("knowledge task context is incomplete")
+    if not prompt.strip():
+        raise KnowledgeAgentTurnError("knowledge agent prompt is empty")
+
+    target = str(context.get("target") or "main").strip() or "main"
+    backend = str(context.get("backend") or task_context.get("backend") or "codex").strip().lower()
+    model = context.get("model") or task_context.get("model")
+    reasoning_effort = context.get("reasoning_effort") or task_context.get("reasoning_effort")
+    task_dir = run_dir(root, run_id)
+    offset_file = chat_offset_path(task_dir, target, task_id)
+    if not offset_file.exists():
+        advance_chat_offset_to_inbox_end(root, run_id, target, task_id)
+
+    append_message(
+        root,
+        run_id,
+        target,
+        prompt,
+        sender="browser",
+        task_id=task_id,
+        role="main",
+        from_agent="browser",
+        to_agent=target,
+        reply_target="browser",
+        display_sender="Knowledge",
+        display_target=target,
+    )
+    checkpoint_path = chat_turn_checkpoint_path(task_dir, target, task_id)
+    try:
+        start_backend(
+            root,
+            run_id,
+            target,
+            backend=backend,
+            model=model,
+            reasoning_effort=reasoning_effort,
+            sandbox="read-only",
+            approval="never",
+            from_start=False,
+            task_id=task_id,
+        )
+    except Exception as exc:  # noqa: BLE001 - convert runtime failures to the Knowledge seam error
+        raise KnowledgeAgentTurnError(f"failed to start {backend} task backend: {exc}") from exc
+
+    timeout_seconds = max(1.0, float(context.get("timeout_seconds") or 3600.0))
+    deadline = time.monotonic() + timeout_seconds
+    last_status: dict = {}
+    while time.monotonic() < deadline:
+        if checkpoint_path.exists():
+            try:
+                checkpoint = read_json(checkpoint_path)
+            except (OSError, ValueError):
+                checkpoint = {}
+            if checkpoint.get("phase") == "finished":
+                reply = str(checkpoint.get("reply") or "")
+                exit_code = int(checkpoint.get("exit_code") or 0)
+                if exit_code != 0 or not reply.strip():
+                    raise KnowledgeAgentTurnError(
+                        f"{backend} task backend failed with exit code {exit_code}: {reply.strip() or 'empty reply'}"
+                    )
+                return reply
+        last_status = backend_status(root, run_id, target, task_id)
+        if last_status.get("status") == "stopped" and checkpoint_path.exists():
+            try:
+                checkpoint = read_json(checkpoint_path)
+            except (OSError, ValueError):
+                checkpoint = {}
+            if checkpoint.get("phase") == "finished":
+                reply = str(checkpoint.get("reply") or "")
+                exit_code = int(checkpoint.get("exit_code") or 0)
+                if exit_code == 0 and reply.strip():
+                    return reply
+            raise KnowledgeAgentTurnError(f"{backend} task backend stopped before producing a reply")
+        time.sleep(0.1)
+
+    try:
+        stop_backend(root, run_id, target, task_id=task_id, timeout=2.0)
+    except Exception:  # noqa: BLE001 - timeout is already the primary failure
+        pass
+    raise KnowledgeAgentTurnError(
+        f"timed out after {timeout_seconds:g}s waiting for {backend} task reply"
+        + (f" ({last_status.get('status')})" if last_status.get("status") else "")
+    )
 
 
 def finish_knowledge_task(root: Path, context: dict, result: str, *, ok: bool) -> None:

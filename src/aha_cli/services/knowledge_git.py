@@ -914,7 +914,7 @@ def _normalize_action(action: str) -> str:
     return "merge"
 
 
-def default_resolutions(root: Path, config: dict | None = None) -> dict:
+def default_resolutions(root: Path, config: dict | None = None, *, safe_only: bool = False) -> dict:
     """Map every unmerged path to its default user-priority resolution.
 
     Used as the deterministic baseline the maintenance agent plan is layered
@@ -925,6 +925,8 @@ def default_resolutions(root: Path, config: dict | None = None) -> dict:
     detail = conflict_detail(root, config)
     decisions: dict[str, dict] = {}
     for conflict in detail.get("conflicts", []):
+        if safe_only and bool(conflict.get("local_agent")) == bool(conflict.get("remote_agent")):
+            continue
         action, _ = _default_resolution(conflict, user_priority)
         decisions[conflict["path"]] = {"action": action}
     return decisions

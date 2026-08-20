@@ -41,7 +41,7 @@ from aha_cli.services.knowledge_git import (
 from aha_cli.services.knowledge_tasks import (
     create_knowledge_task,
     finish_knowledge_task,
-    knowledge_task_progress_callback,
+    knowledge_agent_execution_context,
     public_knowledge_task,
     start_knowledge_task,
 )
@@ -220,6 +220,13 @@ def default_maintenance_agent(context: dict) -> str:
 # Job
 # --------------------------------------------------------------------------- #
 def _fresh_record(root: Path, config: dict | None, *, backend: str | None, task_context: dict | None = None) -> dict:
+    from aha_cli.services.knowledge_tasks import knowledge_agent_execution_context, resolve_knowledge_agent_config
+
+    resolved_backend = str(
+        backend
+        or (task_context or {}).get("backend")
+        or resolve_knowledge_agent_config(config)["backend"]
+    )
     record = {
         "status": "running",
         "started_at": utc_now(),
@@ -229,7 +236,7 @@ def _fresh_record(root: Path, config: dict | None, *, backend: str | None, task_
         "summary": "",
         "error": "",
         "pushed": False,
-        "agent_backend": backend or "claude",
+        "agent_backend": resolved_backend,
         "fallback_used": False,
     }
     management_task = public_knowledge_task(task_context)
@@ -263,12 +270,27 @@ def run_kb_maintenance_job(
     *,
     backend: str | None = None,
     model: str | None = None,
+    reasoning_effort: str | None = None,
+    proxy_enabled: bool | None = None,
     agent=None,
     progress_callback=None,
     task_context: dict | None = None,
     do_push: bool = True,
 ) -> dict:
     """Resolve an in-progress KB sync conflict. Returns the maintenance record."""
+    from aha_cli.services.knowledge_tasks import resolve_knowledge_agent_config
+
+    resolved_agent = resolve_knowledge_agent_config(
+        config,
+        backend=backend,
+        model=model,
+        reasoning_effort=reasoning_effort,
+        proxy_enabled=proxy_enabled,
+    )
+    backend = resolved_agent["backend"]
+    model = resolved_agent["model"]
+    reasoning_effort = resolved_agent["reasoning_effort"]
+    proxy_enabled = resolved_agent["proxy_enabled"]
     repo = knowledge_root(root, config)
     record = _fresh_record(root, config, backend=backend, task_context=task_context)
     try:
@@ -294,28 +316,43 @@ def run_kb_maintenance_job(
         try:
             prompt = build_maintenance_prompt(root, config, detail)
             reply = agent(
-                {
+                knowledge_agent_execution_context(root, task_context, {
                     "config": config,
                     "prompt": prompt,
                     "cwd": str(repo),
                     "backend": backend,
                     "model": model,
+                    "reasoning_effort": reasoning_effort,
+                    "proxy_enabled": proxy_enabled,
                     "progress_callback": progress_callback,
-                }
+                })
             )
             plan = parse_resolution_plan(reply)
-        except Exception as exc:  # noqa: BLE001 - agent failure falls back to defaults
+        except Exception as exc:  # noqa: BLE001 - task records the backend failure
             record["error"] = f"maintenance agent failed: {exc}"
-        # Layer agent decisions over the deterministic user-priority baseline so
-        # every unmerged path has a resolution even if the agent skipped some.
-        decisions = default_resolutions(root, config)
-        agent_decisions = normalize_decisions(plan)
+        decisions = default_resolutions(root, config, safe_only=True)
+        agent_decisions = {
+            path: decision
+            for path, decision in normalize_decisions(plan).items()
+            if path in set(detail.get("unmerged") or [])
+            and not (decision.get("action") == "merge" and "content" not in decision)
+        }
         if agent_decisions:
             decisions.update(agent_decisions)
         else:
             fallback_used = True
             if not record["error"]:
-                record["error"] = "agent produced no usable plan; used user-priority defaults"
+                record["error"] = "agent produced no usable conflict plan"
+        unresolved = [path for path in (detail.get("unmerged") or []) if path not in decisions]
+        if unresolved:
+            record["status"] = "failed"
+            record["fallback_used"] = fallback_used
+            record["summary"] = "KB Agent 不可用或方案不完整，用户双端冲突已保留，等待用户处理。"
+            record["error"] = (record["error"] + "; " if record["error"] else "") + (
+                "unresolved user-owned conflicts: " + ", ".join(unresolved)
+            )
+            rebase_abort(root, config)
+            return _finish(root, record)
         record["fallback_used"] = fallback_used
         record["resolutions"] = {p: d["action"] for p, d in decisions.items()}
         _apply_archives(root, config, decisions)
@@ -409,16 +446,33 @@ def run_kb_sync_recovery_job(
     *,
     backend: str | None = None,
     model: str | None = None,
+    reasoning_effort: str | None = None,
+    proxy_enabled: bool | None = None,
     agent=None,
     progress_callback=None,
     task_context: dict | None = None,
 ) -> dict:
+    from aha_cli.services.knowledge_tasks import resolve_knowledge_agent_config
+
+    resolved_agent = resolve_knowledge_agent_config(
+        config,
+        backend=backend,
+        model=model,
+        reasoning_effort=reasoning_effort,
+        proxy_enabled=proxy_enabled,
+    )
+    backend = resolved_agent["backend"]
+    model = resolved_agent["model"]
+    reasoning_effort = resolved_agent["reasoning_effort"]
+    proxy_enabled = resolved_agent["proxy_enabled"]
     if sync_result.get("conflict") or unmerged_paths(knowledge_root(root, config)):
         return run_kb_maintenance_job(
             root,
             config,
             backend=backend,
             model=model,
+            reasoning_effort=reasoning_effort,
+            proxy_enabled=proxy_enabled,
             agent=agent,
             progress_callback=progress_callback,
             task_context=task_context,
@@ -428,14 +482,16 @@ def run_kb_sync_recovery_job(
     try:
         agent_fn = agent or default_maintenance_agent
         reply = agent_fn(
-            {
+            knowledge_agent_execution_context(root, task_context, {
                 "config": config,
                 "prompt": build_sync_recovery_prompt(root, config, sync_result),
                 "cwd": str(knowledge_root(root, config)),
                 "backend": backend,
                 "model": model,
+                "reasoning_effort": reasoning_effort,
+                "proxy_enabled": proxy_enabled,
                 "progress_callback": progress_callback,
-            }
+            })
         )
         from aha_cli.services.knowledge_git import sync as knowledge_sync
 
@@ -457,6 +513,8 @@ def run_kb_sync_recovery_job(
                 config,
                 backend=backend,
                 model=model,
+                reasoning_effort=reasoning_effort,
+                proxy_enabled=proxy_enabled,
                 agent=agent_fn,
                 progress_callback=progress_callback,
                 task_context=task_context,
@@ -507,9 +565,15 @@ def _default_dispatch_maintenance_job(
         description=description,
         backend=backend,
         model=model,
+        reasoning_effort=None,
+        proxy_enabled=None,
         metadata={"source": source, "sync_result": sync_result or {}},
     )
     task_context["operation"] = operation
+    resolved_backend = task_context.get("backend")
+    resolved_model = task_context.get("model")
+    resolved_reasoning_effort = task_context.get("reasoning_effort")
+    resolved_proxy_enabled = task_context.get("proxy_enabled")
     state = read_sync_state(root)
     state["maintenance"] = {
         "status": "running",
@@ -520,7 +584,7 @@ def _default_dispatch_maintenance_job(
         "summary": "",
         "error": "",
         "pushed": False,
-        "agent_backend": backend or "claude",
+        "agent_backend": resolved_backend,
         "fallback_used": False,
         "management_task": public_knowledge_task(task_context),
     }
@@ -528,15 +592,16 @@ def _default_dispatch_maintenance_job(
 
     def _run() -> None:
         try:
-            start_knowledge_task(root, task_context, "KB Agent 正在读取同步状态。")
-            progress = knowledge_task_progress_callback(root, task_context)
+            start_knowledge_task(root, task_context)
             record = run_kb_sync_recovery_job(
                 root,
                 config,
                 sync_result or {"ok": False, "conflict": is_conflict},
-                backend=backend,
-                model=model,
-                progress_callback=progress,
+                backend=resolved_backend,
+                model=resolved_model,
+                reasoning_effort=resolved_reasoning_effort,
+                proxy_enabled=resolved_proxy_enabled,
+                progress_callback=None,
                 task_context=task_context,
             )
             diagnosis = str(record.get("diagnosis") or "").strip()

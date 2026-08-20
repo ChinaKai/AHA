@@ -125,6 +125,12 @@ def default_knowledge_config() -> dict:
             "enabled": True,
             "maintain_during_task": True,
         },
+        "agent": {
+            "backend": None,
+            "model": None,
+            "reasoning_effort": None,
+            "proxy_enabled": None,
+        },
         "retrieval": {
             "max_entries": 5,
             "max_chars": 4000,

@@ -210,6 +210,32 @@ def test_maintenance_job_resolves_via_agent_plan(tmp_path: Path):
     assert km.maintenance_record(root)["status"] == "resolved"
 
 
+def test_maintenance_job_passes_saved_agent_profile_to_agent(tmp_path: Path):
+    root, cfg, repo, local_entry = _diverged_repo(tmp_path)
+    cfg["knowledge"]["agent"] = {
+        "backend": "claude",
+        "model": "claude-sonnet-4-6",
+        "reasoning_effort": "high",
+        "proxy_enabled": True,
+    }
+    kg.sync(root, cfg, message="manual sync")
+    contexts: list[dict] = []
+
+    def agent(context: dict) -> str:
+        contexts.append(context)
+        return json.dumps([{"path": "general/wiki/concept.md", "action": "merge", "content": "PROFILE MERGE\n"}])
+
+    record = km.run_kb_maintenance_job(root, cfg, agent=agent, do_push=False)
+
+    assert record["status"] == "resolved"
+    assert len(contexts) == 1
+    assert contexts[0]["backend"] == "claude"
+    assert contexts[0]["model"] == "claude-sonnet-4-6"
+    assert contexts[0]["reasoning_effort"] == "high"
+    assert contexts[0]["proxy_enabled"] is True
+    assert local_entry.read_text(encoding="utf-8") == "PROFILE MERGE\n"
+
+
 def test_maintenance_job_falls_back_to_user_priority_when_agent_empty(tmp_path: Path):
     root, cfg, repo, local_entry = _diverged_repo(tmp_path, remote_is_agent=True)
     kg.sync(root, cfg, message="manual sync")
@@ -219,6 +245,25 @@ def test_maintenance_job_falls_back_to_user_priority_when_agent_empty(tmp_path: 
     # User-priority: the local user version beats the remote agent version.
     assert "USER LOCAL VERSION" in local_entry.read_text()
     assert record["resolutions"]["general/wiki/concept.md"] == "local"
+
+
+def test_maintenance_job_preserves_user_user_conflict_when_agent_unavailable(tmp_path: Path):
+    root, cfg, repo, local_entry = _diverged_repo(tmp_path, remote_is_agent=False)
+    local_head = _git(repo, "rev-parse", "HEAD")
+    kg.sync(root, cfg, message="manual sync")
+
+    record = km.run_kb_maintenance_job(root, cfg, agent=_stub_agent(None))
+
+    assert record["status"] == "failed"
+    assert record["fallback_used"] is True
+    assert record["pushed"] is False
+    assert record["resolutions"] == {}
+    assert "unresolved user-owned conflicts" in record["error"]
+    assert "用户双端冲突已保留" in record["summary"]
+    assert kg.rebase_in_progress(repo) is False
+    assert kg.unmerged_paths(repo) == []
+    assert _git(repo, "rev-parse", "HEAD") == local_head
+    assert local_entry.read_text(encoding="utf-8") == "USER LOCAL VERSION\n"
 
 
 def test_maintenance_job_archive_preserves_local_outside_repo(tmp_path: Path):

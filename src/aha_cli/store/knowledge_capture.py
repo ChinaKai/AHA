@@ -433,6 +433,8 @@ def update_note(
     status: str | None = None,
     candidate_ids: list[str] | None = None,
     last_error: str | None = None,
+    management_run_id: str | None = None,
+    management_task_id: str | None = None,
 ) -> dict:
     """Update a raw note in place, preserving id/created_at."""
     record = read_note(root, config, note_id)
@@ -450,6 +452,10 @@ def update_note(
         record["candidate_ids"] = list(candidate_ids)
     if last_error is not None:
         record["last_error"] = last_error
+    if management_run_id is not None:
+        record["management_run_id"] = management_run_id
+    if management_task_id is not None:
+        record["management_task_id"] = management_task_id
     record["updated_at"] = utc_now()
     _write_note_record(root, config, note_id, record)
     return record

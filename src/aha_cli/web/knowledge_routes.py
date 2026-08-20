@@ -19,7 +19,7 @@ from pathlib import Path
 import signal
 
 from aha_cli import process_control
-from aha_cli.backends.registry import normalize_reasoning_effort
+from aha_cli.backends.registry import agent_backends, normalize_reasoning_effort
 from aha_cli.domain.models import default_knowledge_config, utc_now
 from aha_cli.services.knowledge_agent_progress import agent_log_event, summarize_agent_progress, trim_agent_log
 from aha_cli.services.knowledge_git import auto_commit_after_change
@@ -106,7 +106,7 @@ def _default_dispatch_distill_job(
     from aha_cli.services.knowledge_tasks import (
         create_knowledge_task,
         finish_knowledge_task,
-        knowledge_task_progress_callback,
+        knowledge_agent_execution_context,
         public_knowledge_task,
         start_knowledge_task,
     )
@@ -126,28 +126,27 @@ def _default_dispatch_distill_job(
         metadata={"note_id": note_id, "distill_mode": mode or "organize"},
     )
     task_context["operation"] = "capture_distill"
+    resolved_backend = task_context.get("backend")
+    resolved_model = task_context.get("model")
+    resolved_reasoning_effort = task_context.get("reasoning_effort")
+    resolved_proxy_enabled = task_context.get("proxy_enabled")
 
     def _agent(context: dict) -> str:
-        visible_context = dict(context)
-        visible_context["progress_callback"] = knowledge_task_progress_callback(
-            root,
-            task_context,
-            context.get("progress_callback"),
-        )
+        visible_context = knowledge_agent_execution_context(root, task_context, context)
         return default_capture_agent(visible_context)
 
     def _run() -> None:
         try:
-            start_knowledge_task(root, task_context, "KB Agent 正在整理 Capture 内容。")
+            start_knowledge_task(root, task_context)
             result = run_distill_job(
                 root,
                 cfg,
                 note_id,
-                backend=backend,
-                model=model,
-                proxy_enabled=proxy_enabled,
+                backend=resolved_backend,
+                model=resolved_model,
+                proxy_enabled=resolved_proxy_enabled,
                 mode=mode or "organize",
-                reasoning_effort=reasoning_effort,
+                reasoning_effort=resolved_reasoning_effort,
                 agent=_agent,
             )
             if result.get("ok"):
@@ -162,11 +161,19 @@ def _default_dispatch_distill_job(
                 pass
             finish_knowledge_task(root, task_context, f"Capture 整理任务异常：{exc}", ok=False)
 
+    management_task = public_knowledge_task(task_context)
+    capture.update_note(
+        root,
+        cfg,
+        note_id,
+        management_run_id=management_task.get("run_id"),
+        management_task_id=management_task.get("task_id"),
+    )
     threading.Thread(
         target=_run,
         daemon=True,
     ).start()
-    return {"management_task": public_knowledge_task(task_context)}
+    return {"management_task": management_task}
 
 
 def _nav_agent_log_event(stage: str, message: str, **extra) -> dict:
@@ -352,7 +359,7 @@ def _default_dispatch_project_nav_job(root: Path, cfg: dict, draft_id: str, **kw
     from aha_cli.services.knowledge_tasks import (
         create_knowledge_task,
         finish_knowledge_task,
-        knowledge_task_progress_callback,
+        knowledge_agent_execution_context,
         public_knowledge_task,
         start_knowledge_task,
     )
@@ -369,23 +376,23 @@ def _default_dispatch_project_nav_job(root: Path, cfg: dict, draft_id: str, **kw
         model=kwargs.get("model"),
         reasoning_effort=kwargs.get("reasoning_effort"),
         proxy_enabled=kwargs.get("proxy_enabled"),
+        workspace_path=workspace_path,
         metadata={"draft_id": draft_id, "project_key": project_key_value, "workspace_path": workspace_path},
     )
     task_context["operation"] = "project_navigation"
+    kwargs["backend"] = task_context.get("backend")
+    kwargs["model"] = task_context.get("model")
+    kwargs["reasoning_effort"] = task_context.get("reasoning_effort")
+    kwargs["proxy_enabled"] = task_context.get("proxy_enabled")
     base_agent = kwargs.pop("agent", None) or default_navigation_agent
 
     def _agent(context: dict) -> str:
-        visible_context = dict(context)
-        visible_context["progress_callback"] = knowledge_task_progress_callback(
-            root,
-            task_context,
-            context.get("progress_callback"),
-        )
+        visible_context = knowledge_agent_execution_context(root, task_context, context)
         return base_agent(visible_context)
 
     def _run() -> None:
         try:
-            start_knowledge_task(root, task_context, "KB Agent 正在分析项目结构。")
+            start_knowledge_task(root, task_context)
             result = run_project_nav_draft_job(root, cfg, draft_id, agent=_agent, **kwargs)
             status = str(result.get("status") or "") if isinstance(result, dict) else ""
             ok = status == "completed" or bool(isinstance(result, dict) and result.get("ok"))
@@ -877,6 +884,7 @@ def _knowledge_settings(cfg: dict) -> dict:
     git = kb.get("git", {}) if isinstance(kb.get("git"), dict) else {}
     curation = kb.get("curation", {}) if isinstance(kb.get("curation"), dict) else {}
     project_nav = kb.get("project_nav", {}) if isinstance(kb.get("project_nav"), dict) else {}
+    agent = kb.get("agent", {}) if isinstance(kb.get("agent"), dict) else {}
     sync = kb.get("sync", {}) if isinstance(kb.get("sync"), dict) else {}
     return {
         "enabled": bool(kb.get("enabled")),
@@ -894,6 +902,12 @@ def _knowledge_settings(cfg: dict) -> dict:
             "enabled": bool(project_nav.get("enabled", True)),
             "maintain_during_task": bool(project_nav.get("maintain_during_task", True)),
         },
+        "agent": {
+            "backend": agent.get("backend"),
+            "model": agent.get("model"),
+            "reasoning_effort": agent.get("reasoning_effort"),
+            "proxy_enabled": agent.get("proxy_enabled") if isinstance(agent.get("proxy_enabled"), bool) else None,
+        },
         "curation": {"gate": curation.get("gate")},
         "sync": {
             "mode": str(sync.get("mode") or "auto"),
@@ -901,6 +915,19 @@ def _knowledge_settings(cfg: dict) -> dict:
             "resolve_conflicts": str(sync.get("resolve_conflicts") or "agent"),
         },
     }
+
+
+def _knowledge_agent_options(cfg: dict) -> dict:
+    safe_config: dict[str, object] = {"backend": cfg.get("backend")}
+    for backend in ("codex", "claude"):
+        section = cfg.get(backend) if isinstance(cfg.get(backend), dict) else {}
+        safe_config[backend] = {
+            "model": section.get("model"),
+            "reasoning_effort": section.get("reasoning_effort"),
+            "env_active": section.get("env_active"),
+            "model_source": section.get("model_source", "both"),
+        }
+    return {"backends": agent_backends(cfg), "config": safe_config}
 
 
 def _as_string_list(value) -> list[str]:
@@ -928,12 +955,9 @@ def _optional_bool(value, field: str) -> bool | None:
 
 
 def _agent_backend_for_options(cfg: dict, backend: object) -> str:
-    allowed = {"codex", "claude"}
-    clean = str(backend or "").strip().lower()
-    if clean in allowed:
-        return clean
-    configured = str(cfg.get("backend") or "").strip().lower() if isinstance(cfg, dict) else ""
-    return configured if configured in allowed else "claude"
+    from aha_cli.services.knowledge_tasks import resolve_knowledge_agent_config
+
+    return str(resolve_knowledge_agent_config(cfg, backend=backend)["backend"])
 
 
 def _apply_settings_patch(root: Path, payload: dict) -> dict:
@@ -951,6 +975,8 @@ def _apply_settings_patch(root: Path, payload: dict) -> dict:
         kb["curation"] = {}
     if not isinstance(kb.get("project_nav"), dict):
         kb["project_nav"] = {}
+    if not isinstance(kb.get("agent"), dict):
+        kb["agent"] = {}
     if not isinstance(kb.get("sync"), dict):
         kb["sync"] = {}
 
@@ -984,6 +1010,34 @@ def _apply_settings_patch(root: Path, payload: dict) -> dict:
         if gate not in _ALLOWED_GATES:
             raise ValueError(f"curation gate must be one of {sorted(_ALLOWED_GATES)}")
         kb["curation"]["gate"] = gate
+
+    agent_patch = payload.get("agent")
+    if isinstance(agent_patch, dict):
+        if "backend" in agent_patch:
+            backend = str(agent_patch.get("backend") or "").strip().lower()
+            if backend in {"", "inherit", "default"}:
+                kb["agent"]["backend"] = None
+            elif backend in {"codex", "claude"}:
+                kb["agent"]["backend"] = backend
+            else:
+                raise ValueError("agent.backend must be inherit, codex, or claude")
+        if "model" in agent_patch:
+            model = agent_patch.get("model")
+            kb["agent"]["model"] = str(model).strip() or None if model is not None else None
+        if "reasoning_effort" in agent_patch:
+            backend = _agent_backend_for_options(
+                {**load_config(root), "knowledge": {**kb, "agent": dict(kb["agent"])}},
+                kb["agent"].get("backend"),
+            )
+            kb["agent"]["reasoning_effort"] = normalize_reasoning_effort(
+                agent_patch.get("reasoning_effort"),
+                backend,
+            )
+        if "proxy_enabled" in agent_patch:
+            kb["agent"]["proxy_enabled"] = _optional_bool(
+                agent_patch.get("proxy_enabled"),
+                "agent.proxy_enabled",
+            )
 
     sync_patch = payload.get("sync")
     if isinstance(sync_patch, dict):
@@ -1300,6 +1354,9 @@ def knowledge_route_response(
     if not path.startswith("/api/kb/"):
         return None
     cfg = load_config(root)
+
+    if method in {"GET", "HEAD"} and path == "/api/kb/capture/agents":
+        return _ok(method, _knowledge_agent_options(cfg))
 
     if method in {"GET", "HEAD"} and path == "/api/kb/status":
         return _ok(method, knowledge_status(root, cfg))
@@ -2197,6 +2254,14 @@ def knowledge_route_response(
             reasoning_effort,
         )
         management_task = dispatched.get("management_task") if isinstance(dispatched, dict) else None
+        if management_task:
+            capture.update_note(
+                root,
+                cfg,
+                note_id,
+                management_run_id=management_task.get("run_id"),
+                management_task_id=management_task.get("task_id"),
+            )
         return json_response({
             "ok": True,
             "id": note_id,

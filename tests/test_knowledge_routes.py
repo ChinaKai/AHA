@@ -968,6 +968,13 @@ def test_capture_distill_forwards_backend_model_proxy_and_reasoning_effort(tmp_p
             "mode": mode,
             "reasoning_effort": reasoning_effort,
         })
+        return {
+            "management_task": {
+                "run_id": "knowledge-run",
+                "task_id": "task-distill",
+                "title": "Capture distill",
+            }
+        }
 
     monkeypatch.setattr(kr, "dispatch_distill_job", record_dispatch)
     resp = json_response_body(_post(home, "/api/kb/capture/distill", {
@@ -979,6 +986,7 @@ def test_capture_distill_forwards_backend_model_proxy_and_reasoning_effort(tmp_p
         "reasoning_effort": "xhigh",
     }))
     assert resp["reasoning_effort"] == "xhigh"
+    assert resp["management_task"]["task_id"] == "task-distill"
     assert seen == {
         "note_id": nid,
         "backend": "claude",
@@ -987,6 +995,9 @@ def test_capture_distill_forwards_backend_model_proxy_and_reasoning_effort(tmp_p
         "mode": "generate",
         "reasoning_effort": "xhigh",
     }
+    note = _get(home, "/api/kb/capture", {"id": [nid]})
+    assert note["management_run_id"] == "knowledge-run"
+    assert note["management_task_id"] == "task-distill"
 
 
 def test_capture_distill_missing_note_is_404(tmp_path: Path):
@@ -1121,6 +1132,54 @@ def test_entries_exclude_navigation_but_project_nav_api_lists_entry_points_and_c
     assert updated["entry"]["meta"]["slug"] == "modules/store"
     assert updated["entry"]["meta"]["title"] == "store 模块导航"
     assert updated["entry"]["body"] == "updated store details"
+
+
+def test_project_navigation_path_identity_disambiguates_duplicate_slugs(tmp_path: Path):
+    home = _setup(tmp_path)
+    cfg = load_config(home)
+    for project_key_value, label in (("project-a", "A"), ("project-b", "B")):
+        write_entry(
+            home,
+            config=cfg,
+            scope="project",
+            kind="navigation",
+            project_key_value=project_key_value,
+            title=f"{label} 项目导航",
+            body=f"- [{label} store](modules/store.md)",
+            slug="index",
+            meta={"type": "navigation", "navigation_role": "index"},
+        )
+        write_entry(
+            home,
+            config=cfg,
+            scope="project",
+            kind="navigation",
+            project_key_value=project_key_value,
+            title=f"{label} store",
+            body=f"{label} store details",
+            slug="modules/store",
+            meta={"type": "navigation", "navigation_role": "module"},
+        )
+
+    index_a = "path:projects/project-a/navigation/index.md"
+    child_a = "path:projects/project-a/navigation/modules/store.md"
+    index = _get(home, "/api/kb/entry", {"id": [index_a]})
+    child = _get(home, "/api/kb/entry", {"id": [child_a]})
+    assert index["meta"]["project_key"] == "project-a"
+    assert index["body"] == "- [A store](modules/store.md)"
+    assert child["meta"]["project_key"] == "project-a"
+    assert child["body"] == "A store details"
+
+    updated = json_response_body(_patch(home, "/api/kb/entry", {
+        "id": child_a,
+        "body": "updated A store details",
+    }))
+    assert updated["entry"]["meta"]["project_key"] == "project-a"
+    assert updated["entry"]["body"] == "updated A store details"
+    child_b = _get(home, "/api/kb/entry", {
+        "id": ["path:projects/project-b/navigation/modules/store.md"],
+    })
+    assert child_b["body"] == "B store details"
 
 
 def _write_project_nav_tree(home: Path, cfg: dict, project_key: str = "git-abc") -> list[str]:
@@ -1720,6 +1779,12 @@ def test_config_get_and_patch(tmp_path: Path):
     assert cfg["git"]["auto_push"] is True
     assert cfg["git"]["proxy_enabled"] is False
     assert cfg["sync"]["mode"] == "auto"
+    assert cfg["agent"] == {
+        "backend": None,
+        "model": None,
+        "reasoning_effort": None,
+        "proxy_enabled": None,
+    }
 
     resp = knowledge_route_response(
         home, "PATCH", "/api/kb/config", {},
@@ -1728,6 +1793,12 @@ def test_config_get_and_patch(tmp_path: Path):
             "project_nav": {"enabled": False},
             "sync": {"mode": "manual", "interval_minutes": 15},
             "curation": {"gate": "auto"},
+            "agent": {
+                "backend": "claude",
+                "model": "claude-sonnet-4-6",
+                "reasoning_effort": "high",
+                "proxy_enabled": True,
+            },
         }).encode(), {},
     )
     out = json_response_body(resp)
@@ -1739,12 +1810,95 @@ def test_config_get_and_patch(tmp_path: Path):
     assert out["knowledge"]["curation"]["gate"] == "auto"
     assert out["knowledge"]["sync"]["mode"] == "manual"
     assert out["knowledge"]["sync"]["interval_minutes"] == 15
+    assert out["knowledge"]["agent"] == {
+        "backend": "claude",
+        "model": "claude-sonnet-4-6",
+        "reasoning_effort": "high",
+        "proxy_enabled": True,
+    }
     # Persisted to disk and other defaults preserved (branch).
     saved = read_json(config_path(home))["knowledge"]
     assert saved["git"]["remote"] == "git@h:u/r.git"
     assert saved["git"]["proxy_enabled"] is True
     assert saved["project_nav"]["enabled"] is False
+    assert saved["agent"]["backend"] == "claude"
     assert load_config(home)["knowledge"]["git"]["branch"] == "main"
+
+
+def test_capture_agent_options_use_runtime_catalog_without_exposing_secrets(tmp_path: Path):
+    home = _setup(tmp_path)
+    raw = read_json(config_path(home))
+    raw.update({
+        "backend": "claude",
+        "codex": {
+            "model": "gpt-5.5",
+            "reasoning_effort": "high",
+            "model_source": "both",
+            "env_active": "work",
+            "env": [{"name": "work", "OPENAI_MODEL": "gpt-5.5", "OPENAI_API_KEY": "secret-codex"}],
+        },
+        "claude": {
+            "model": "claude-sonnet-4-6",
+            "reasoning_effort": "medium",
+            "model_source": "env",
+            "env_active": "team",
+            "env": [{"name": "team", "ANTHROPIC_MODEL": "claude-sonnet-4-6", "ANTHROPIC_API_KEY": "secret-claude"}],
+        },
+    })
+    write_json(config_path(home), raw)
+
+    out = _get(home, "/api/kb/capture/agents")
+
+    backends = {item["name"]: item for item in out["backends"]}
+    assert {"codex", "claude"}.issubset(backends)
+    assert backends["codex"]["models"]
+    assert backends["claude"]["models"]
+    assert backends["codex"]["reasoning_efforts"]
+    assert backends["claude"]["reasoning_efforts"]
+    assert any(item["name"] == "env:work" for item in backends["codex"]["models"])
+    assert any(item["name"] == "env:team" for item in backends["claude"]["models"])
+    assert out["config"] == {
+        "backend": "claude",
+        "codex": {
+            "model": "gpt-5.5",
+            "reasoning_effort": "high",
+            "env_active": "work",
+            "model_source": "both",
+        },
+        "claude": {
+            "model": "claude-sonnet-4-6",
+            "reasoning_effort": "medium",
+            "env_active": "team",
+            "model_source": "env",
+        },
+    }
+    serialized = json.dumps(out)
+    assert "secret-codex" not in serialized
+    assert "secret-claude" not in serialized
+    assert "OPENAI_API_KEY" not in serialized
+    assert "ANTHROPIC_API_KEY" not in serialized
+
+    head = knowledge_route_response(home, "HEAD", "/api/kb/capture/agents", {}, b"", {})
+    assert head.startswith(b"HTTP/1.1 200 OK")
+    assert head.endswith(b"\r\n\r\n")
+
+
+def test_config_patch_supports_inherited_knowledge_agent_values(tmp_path: Path):
+    home = _setup(tmp_path)
+    response = json_response_body(_patch(home, "/api/kb/config", {
+        "agent": {
+            "backend": "inherit",
+            "model": "",
+            "reasoning_effort": "",
+            "proxy_enabled": None,
+        }
+    }))
+    assert response["knowledge"]["agent"] == {
+        "backend": None,
+        "model": None,
+        "reasoning_effort": None,
+        "proxy_enabled": None,
+    }
 
 
 def test_sync_mode_off_is_distinct_from_manual(tmp_path: Path):

@@ -72,7 +72,7 @@ def _merge_backend_config(defaults: dict, loaded: dict, shared_proxy: dict) -> d
 def _merge_knowledge_config(defaults: dict, loaded: dict) -> dict:
     if not isinstance(loaded, dict):
         return {key: (dict(value) if isinstance(value, dict) else value) for key, value in defaults.items()}
-    nested_keys = ("git", "curation", "project_nav", "retrieval")
+    nested_keys = ("git", "curation", "project_nav", "agent", "retrieval")
     cfg = defaults | {key: value for key, value in loaded.items() if key not in set(nested_keys)}
     for nested in nested_keys:
         loaded_nested = loaded.get(nested, {})

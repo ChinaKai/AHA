@@ -426,7 +426,19 @@ def test_default_capture_agent_uses_claude_env_group_config(tmp_path: Path, monk
         return 0, _sidecar_reply(_ONE_CANDIDATE), None
 
     monkeypatch.setattr("aha_cli.backends.claude.run_claude_exec", fake_run)
-    reply = default_capture_agent({"prompt": "organize", "backend": "claude", "model": "env:work", "config": cfg, "cwd": tmp_path})
+    events_file = tmp_path / "events.jsonl"
+    reply = default_capture_agent({
+        "prompt": "organize",
+        "backend": "claude",
+        "model": "env:work",
+        "config": cfg,
+        "cwd": tmp_path,
+        "events_file": events_file,
+        "run_id": "run-knowledge",
+        "task_id": "task-001",
+        "source": "main",
+        "target": "main",
+    })
 
     assert "aha_knowledge_candidates" in reply
     assert seen["claude_bin"] == "/opt/claude/bin/claude"
@@ -437,9 +449,38 @@ def test_default_capture_agent_uses_claude_env_group_config(tmp_path: Path, monk
     assert seen["proxy_env"]["HTTPS_PROXY"] == "http://claude.proxy:7890"
     assert seen["proxy_env"]["https_proxy"] == "http://claude.proxy:7890"
     assert seen["proxy_env"]["NO_PROXY"] == "localhost,127.0.0.1"
+    assert seen["events_file"] == events_file
+    assert seen["run_id"] == "run-knowledge"
+    assert seen["task_id"] == "task-001"
+    assert seen["source"] == "main"
+    assert seen["target"] == "main"
     seen.clear()
     default_capture_agent({"prompt": "organize", "backend": "claude", "model": "env:work", "proxy_enabled": False, "config": cfg, "cwd": tmp_path})
     assert seen["proxy_env"] == {}
+
+
+def test_default_capture_agent_routes_knowledge_tasks_through_standard_turn(tmp_path: Path, monkeypatch):
+    from aha_cli.services.knowledge_capture_distill import default_capture_agent
+
+    task_context = {"run_id": "run-knowledge", "task_id": "task-001"}
+    seen = {}
+
+    def standard_turn(root, task, context):
+        seen.update({"root": root, "task": task, "context": context})
+        return "standard task reply"
+
+    monkeypatch.setattr("aha_cli.services.knowledge_tasks.run_knowledge_agent_turn", standard_turn)
+
+    reply = default_capture_agent({
+        "prompt": "organize",
+        "knowledge_root": tmp_path,
+        "knowledge_task_context": task_context,
+    })
+
+    assert reply == "standard task reply"
+    assert seen["root"] == tmp_path
+    assert seen["task"] == task_context
+    assert seen["context"]["prompt"] == "organize"
 
 
 def test_default_capture_agent_passes_codex_runtime_config_without_env_group(tmp_path: Path, monkeypatch):
@@ -464,7 +505,20 @@ def test_default_capture_agent_passes_codex_runtime_config_without_env_group(tmp
         return 0, _sidecar_reply(_ONE_CANDIDATE), None
 
     monkeypatch.setattr("aha_cli.backends.codex.run_codex_exec", fake_run)
-    reply = default_capture_agent({"prompt": "organize", "backend": "codex", "model": "gpt-5.5", "reasoning_effort": "xhigh", "config": cfg, "cwd": tmp_path})
+    events_file = tmp_path / "events.jsonl"
+    reply = default_capture_agent({
+        "prompt": "organize",
+        "backend": "codex",
+        "model": "gpt-5.5",
+        "reasoning_effort": "xhigh",
+        "config": cfg,
+        "cwd": tmp_path,
+        "events_file": events_file,
+        "run_id": "run-knowledge",
+        "task_id": "task-001",
+        "source": "main",
+        "target": "main",
+    })
 
     assert "aha_knowledge_candidates" in reply
     assert seen["codex_bin"] == "/opt/codex/bin/codex"
@@ -474,6 +528,11 @@ def test_default_capture_agent_passes_codex_runtime_config_without_env_group(tmp
     assert seen["proxy_env"]["HTTP_PROXY"] == "http://codex.proxy:7890"
     assert seen["proxy_env"]["http_proxy"] == "http://codex.proxy:7890"
     assert seen["proxy_env"]["NO_PROXY"] == "localhost,127.0.0.1"
+    assert seen["events_file"] == events_file
+    assert seen["run_id"] == "run-knowledge"
+    assert seen["task_id"] == "task-001"
+    assert seen["source"] == "main"
+    assert seen["target"] == "main"
     seen.clear()
     default_capture_agent({"prompt": "organize", "backend": "codex", "model": "gpt-5.5", "proxy_enabled": False, "config": cfg, "cwd": tmp_path})
     assert seen["proxy_env"] == {}

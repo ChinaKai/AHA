@@ -812,10 +812,21 @@ def iter_all_entry_summaries(root: Path, config: dict | None = None) -> list[dic
 
 
 def find_entry(root: Path, config: dict | None, identifier: str) -> dict | None:
-    """Find a tracked entry by its meta id or slug."""
+    """Find a tracked entry by its meta id, slug, or knowledge-root path."""
+    repo = knowledge_root(root, config)
+    path_identifier = str(identifier or "").removeprefix("path:").replace("\\", "/")
     for entry in iter_all_entries(root, config):
         meta = entry.get("meta", {})
         if identifier in (meta.get("id"), meta.get("slug")):
+            return entry
+        path = str(entry.get("path") or "").strip()
+        if not path:
+            continue
+        try:
+            relative_path = Path(path).resolve().relative_to(repo.resolve()).as_posix()
+        except (OSError, ValueError):
+            relative_path = Path(path).as_posix()
+        if path_identifier == relative_path:
             return entry
     return None
 
