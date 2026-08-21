@@ -64,7 +64,8 @@ from aha_cli.store.filesystem import (
     update_task_supervision_config,
     update_task_token_saving_config,
 )
-from aha_cli.store.knowledge import resolved_project_identity
+from aha_cli.store.knowledge import knowledge_root, resolved_project_identity
+from aha_cli.store.project_identity import list_project_manifests
 from aha_cli.store.task_memos import (
     create_task_memo,
     delete_task_memo,
@@ -1074,10 +1075,24 @@ def _token_saving_with_related_project_snapshot(
             goal=goal,
         )
         manifest = identity.get("manifest") if identity.get("source") == "manifest" else None
+        policy["project_id"] = str(identity.get("project_id") or "")
+        policy["project_key"] = str(identity.get("project_key") or "")
+        policy["binding_revision"] = int((manifest or {}).get("revision") or 0)
+        policy["identity_source"] = str(identity.get("source") or "")
         policy["related_project_keys"] = [
             str(item.get("project_key") or "")
             for item in ((manifest or {}).get("related_projects") or [])
             if isinstance(item, dict) and item.get("project_key")
+        ]
+        related_manifests = {
+            str(item.get("project_key") or ""): item
+            for item in list_project_manifests(knowledge_root(root, config))
+            if isinstance(item, dict)
+        }
+        policy["related_project_ids"] = [
+            str((related_manifests.get(key) or {}).get("project_id") or "")
+            for key in policy["related_project_keys"]
+            if (related_manifests.get(key) or {}).get("project_id")
         ]
     except (OSError, ValueError, SystemExit):
         pass

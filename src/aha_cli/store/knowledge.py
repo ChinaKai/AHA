@@ -32,7 +32,9 @@ from aha_cli.domain.models import default_knowledge_config, utc_now
 from aha_cli.store.io import read_json, write_json
 from aha_cli.store.paths import default_knowledge_dir
 from aha_cli.store.project_identity import (
+    canonical_project_key,
     derived_project_key_aliases,
+    migrate_project_identity_manifests,
     normalize_git_remote,
     resolve_project_identity,
     slugify,
@@ -202,7 +204,7 @@ def scope_dir(kb_root: Path, scope: str, project_key_value: str | None) -> Path:
     if scope == "project":
         if not project_key_value:
             raise ValueError("project scope requires a project_key")
-        return kb_root / PROJECTS_DIR / project_key_value
+        return kb_root / PROJECTS_DIR / canonical_project_key(kb_root, project_key_value)
     raise ValueError(f"unknown scope: {scope!r}")
 
 
@@ -222,6 +224,7 @@ def init_knowledge_base(root: Path, config: dict | None = None) -> dict:
     for kind in entry_kinds_for_scope("personal"):
         (kb_root / PERSONAL_DIR / kind).mkdir(parents=True, exist_ok=True)
     (kb_root / PROJECTS_DIR).mkdir(parents=True, exist_ok=True)
+    migrate_project_identity_manifests(kb_root)
 
     index_path = _index_path(kb_root)
     if index_path.exists():

@@ -16,7 +16,7 @@ from aha_cli.store.knowledge import (
     knowledge_root,
     resolved_project_identity,
 )
-from aha_cli.store.project_identity import read_project_manifest
+from aha_cli.store.project_identity import read_project_manifest, resolve_project_manifest
 from aha_cli.store.runs import require_plan
 
 
@@ -111,20 +111,42 @@ def _knowledge_pull_reference(root: Path, run_id: str, task: dict, config: dict,
     if not cfg.get("enabled"):
         return {}
     try:
-        identity = resolved_project_identity(
+        token_saving = normalize_task_token_saving(
+            task.get("token_saving"),
+            task.get("context_management"),
+        )
+        live_identity = resolved_project_identity(
             root, config, workspace, goal=_plan_goal(root, run_id)
         )
-        project_keys = list(identity.get("aliases") or [identity["project_key"]])
         kb_root = knowledge_root(root, config)
+        snapshot_key = str(token_saving.get("project_key") or "")
+        snapshot_manifest = resolve_project_manifest(kb_root, snapshot_key) if snapshot_key else None
+        identity = (
+            {
+                **live_identity,
+                "project_id": str(token_saving.get("project_id") or (snapshot_manifest or {}).get("project_id") or ""),
+                "project_key": str((snapshot_manifest or {}).get("project_key") or snapshot_key),
+                "source": str(token_saving.get("identity_source") or "task_snapshot"),
+                "manifest": snapshot_manifest,
+            }
+            if snapshot_key
+            else live_identity
+        )
+        project_keys = list(dict.fromkeys(
+            key
+            for key in [
+                str(identity.get("project_key") or ""),
+                *((snapshot_manifest or {}).get("aliases") or []),
+                *((snapshot_manifest or {}).get("legacy_keys") or []),
+                *(live_identity.get("aliases") or []),
+            ]
+            if key
+        ))
         nav_rel, nav_exists = _navigation_index_reference(kb_root, project_keys)
         solutions_rel, solutions_exist = _project_kind_reference(kb_root, project_keys, "solutions")
         project_worklogs_rel, project_worklogs_exist = _project_kind_reference(kb_root, project_keys, "worklog")
         worklog_rel, worklog_exists = _task_worklog_reference(kb_root, project_keys, run_id, task)
         worklog_frontmatter = _task_worklog_frontmatter(project_keys[0], run_id, task)
-        token_saving = normalize_task_token_saving(
-            task.get("token_saving"),
-            task.get("context_management"),
-        )
         related_projects = _related_project_references(
             kb_root,
             current_project_key=project_keys[0],

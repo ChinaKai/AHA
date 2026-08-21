@@ -635,7 +635,12 @@ def default_task_token_saving() -> dict:
     return {
         "enabled": False,
         "provider": "nav",
+        "project_id": "",
+        "project_key": "",
+        "binding_revision": 0,
+        "identity_source": "",
         "related_project_keys": [],
+        "related_project_ids": [],
     }
 
 
@@ -793,6 +798,21 @@ def normalize_task_token_saving(value: object | None = None, legacy_context: obj
     if provider == "map":
         provider = "nav"
     token_saving["provider"] = provider if provider in TOKEN_SAVING_PROVIDERS else "nav"
+    token_saving["project_id"] = str(raw.get("project_id") or "").strip()
+    project_key = str(raw.get("project_key") or "").strip()
+    token_saving["project_key"] = (
+        project_key
+        if project_key
+        and len(project_key) <= 128
+        and project_key[0].isalnum()
+        and all(char.isalnum() or char in "._-" for char in project_key)
+        else ""
+    )
+    try:
+        token_saving["binding_revision"] = max(0, int(raw.get("binding_revision") or 0))
+    except (TypeError, ValueError):
+        token_saving["binding_revision"] = 0
+    token_saving["identity_source"] = str(raw.get("identity_source") or "").strip()
     related_keys: list[str] = []
     seen: set[str] = set()
     raw_related = raw.get("related_project_keys")
@@ -812,6 +832,11 @@ def normalize_task_token_saving(value: object | None = None, legacy_context: obj
             if len(related_keys) >= MAX_TASK_RELATED_PROJECTS:
                 break
     token_saving["related_project_keys"] = related_keys
+    token_saving["related_project_ids"] = [
+        str(item or "").strip()
+        for item in (raw.get("related_project_ids") or [])
+        if str(item or "").strip()
+    ][:MAX_TASK_RELATED_PROJECTS]
     return token_saving
 
 

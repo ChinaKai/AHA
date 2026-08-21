@@ -604,6 +604,52 @@ def cmd_kb(args: argparse.Namespace) -> int:
             verb = "Created" if result["created"] else "Verified"
             print(f"{verb} knowledge base at {result['path']} (schema v{result['schema_version']})")
         return 0
+    if args.kb_cmd == "identity-migrate":
+        from aha_cli.store.knowledge import knowledge_root
+        from aha_cli.store.project_identity import (
+            backup_project_identity_manifests,
+            migrate_project_identity_manifests,
+            project_identity_migration_plan,
+        )
+
+        kb_root = knowledge_root(root, cfg)
+        plan = project_identity_migration_plan(kb_root)
+        changed = [item for item in plan if item.get("changed")]
+        backup_paths: list[Path] = []
+        migrated: list[Path] = []
+        if args.apply:
+            if args.backup_dir:
+                backup_paths = backup_project_identity_manifests(
+                    kb_root,
+                    Path(args.backup_dir).expanduser().resolve(),
+                    plan=plan,
+                )
+            migrated = migrate_project_identity_manifests(kb_root)
+        payload = {
+            "ok": True,
+            "dry_run": not args.apply,
+            "knowledge_root": str(kb_root),
+            "manifest_count": len(plan),
+            "changed_count": len(changed),
+            "migrated_count": len(migrated),
+            "backup_count": len(backup_paths),
+            "backup_dir": str(Path(args.backup_dir).expanduser().resolve()) if args.backup_dir else "",
+            "manifests": [
+                {key: value for key, value in item.items() if key != "payload"}
+                for item in plan
+            ],
+        }
+        if getattr(args, "json", False):
+            print(json.dumps(payload, indent=2, ensure_ascii=False))
+        else:
+            mode = "applied" if args.apply else "dry-run"
+            print(
+                f"Project Identity migration {mode}: "
+                f"{len(changed)} changed / {len(plan)} manifests"
+            )
+            if backup_paths:
+                print(f"backup: {payload['backup_dir']} ({len(backup_paths)} files)")
+        return 0
     if args.kb_cmd == "map":
         from aha_cli.services.knowledge_navigation import generate_navigation_candidate
 

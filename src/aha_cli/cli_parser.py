@@ -371,6 +371,22 @@ def build_parser(handlers: Mapping[str, Callable[[argparse.Namespace], int]]) ->
     kb_sync_status.add_argument("--remote", action="store_true", help="Check remote (fetch) before reporting")
     kb_sync_status.add_argument("--json", action="store_true", help="Emit JSON output")
     kb_sync_status.set_defaults(func=handlers["kb"])
+    kb_identity_migrate = kb_sub.add_parser(
+        "identity-migrate",
+        help="Preview or apply Project Identity manifest migration",
+    )
+    kb_identity_migrate.add_argument(
+        "--apply",
+        action="store_true",
+        help="Write v3 manifests; default is dry-run",
+    )
+    kb_identity_migrate.add_argument(
+        "--backup-dir",
+        default=None,
+        help="Copy current project manifests here before applying",
+    )
+    kb_identity_migrate.add_argument("--json", action="store_true", help="Emit JSON output")
+    kb_identity_migrate.set_defaults(func=handlers["kb"])
 
     skill_p = sub.add_parser("skill", help="Manage AHA skills (system/personal)")
     skill_sub = skill_p.add_subparsers(dest="skill_cmd", required=True)

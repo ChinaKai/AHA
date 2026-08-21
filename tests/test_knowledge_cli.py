@@ -7,17 +7,19 @@ from pathlib import Path
 
 from aha_cli.cli import main
 from aha_cli.domain.models import default_knowledge_config
-from aha_cli.store.io import write_json
+from aha_cli.store.io import read_json, write_json
 from aha_cli.store.knowledge import (
     _legacy_candidate_identity,
     approve_candidate,
     enqueue_candidate,
     init_knowledge_base,
+    knowledge_root,
     list_pending,
     read_entry,
     write_entry,
 )
 from aha_cli.store.paths import config_path
+from aha_cli.store.project_identity import project_manifest_path
 
 
 def _home(tmp_path: Path) -> Path:
@@ -89,6 +91,46 @@ def test_kb_show_by_id(tmp_path: Path):
     assert entry_id.startswith("kb_")
     rc, out = _run(home, "show", entry_id)
     assert rc == 0 and "rerun with clean cache" in out
+
+
+def test_kb_identity_migrate_supports_dry_run_apply_and_backup(tmp_path: Path):
+    home = _home(tmp_path)
+    cfg = _cfg()
+    kb_root = knowledge_root(home, cfg)
+    manifest_path = project_manifest_path(kb_root, "legacy-project")
+    write_json(manifest_path, {
+        "schema_version": 2,
+        "project_key": "legacy-project",
+        "display_name": "Legacy",
+        "git_identities": ["git@github.com:user/legacy.git"],
+        "legacy_keys": [],
+        "related_projects": [],
+    })
+    backup = tmp_path / "identity-backup"
+
+    rc, output = _run(home, "identity-migrate", "--json")
+    dry_run = json.loads(output)
+    assert rc == 0
+    assert dry_run["dry_run"] is True
+    assert dry_run["changed_count"] == 1
+    assert read_json(manifest_path)["schema_version"] == 2
+
+    rc, output = _run(
+        home,
+        "identity-migrate",
+        "--apply",
+        "--backup-dir",
+        str(backup),
+        "--json",
+    )
+    applied = json.loads(output)
+    assert rc == 0
+    assert applied["dry_run"] is False
+    assert applied["migrated_count"] == 1
+    assert applied["backup_count"] == 1
+    assert read_json(manifest_path)["schema_version"] == 3
+    backup_manifest = backup / "projects" / "legacy-project" / "project.json"
+    assert read_json(backup_manifest)["schema_version"] == 2
 
 
 def test_kb_approve_cross_scope_same_slug_is_created(tmp_path: Path):

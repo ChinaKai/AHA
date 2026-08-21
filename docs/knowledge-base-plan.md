@@ -50,7 +50,7 @@
 │       └── <slug>.md
 └── projects/
     └── <project-key>/            # 项目分区
-        ├── project.json          # 同步项目身份与关联拓扑（稳定 key、Git identities、旧 key、related_projects）
+        ├── project.json          # Project Identity v3（project_id、bindings、aliases、revision、related_projects）
         ├── navigation/
         │   ├── index.md          # 小入口：项目介绍 + 模块/流程文档链接
         │   ├── modules/
@@ -69,26 +69,50 @@
 - Root `navigation/index.md` 首次缺失时优先由 workspace scan 生成完整 bootstrap index；已有 index 后只做最小增量补链接。
 - Web Entries 主列表只展示项目导航入口；模块/流程文档作为入口的可点击引用在弹窗中查看/编辑，不铺平成一堆平级知识卡片，也不撑乱主列表。
 
-### 2.1 project-key 推导
+### 2.1 Project Identity v3
 
 需要一个**稳定**且**可迁移**的项目标识，不能用绝对路径（换机器就失效）。
 
-策略（按优先级）：
-1. 将当前 `remote origin` 规范化后，优先匹配同步知识库 `projects/*/project.json` 的 `git_identities`；命中时使用 manifest 中稳定的 `project_key`。
-2. 未命中 manifest 且 workspace 是 git 仓库 → 用 repo 名 + normalized origin hash 推导，例如 `aha-git-<hash>`。
-3. 非 git workspace → 先读取当前 AHA Home 的 `runtime/project_identity_bindings.json` 本机绑定；命中后使用其指向的同步 Knowledge Project。
-4. 未命中本机绑定的非 git workspace → 用 run goal + workspace 目录名生成 slug。
-5. Web Nav 顶部选择当前 workspace，各项目导航卡片通过单排 `Bind / Unbind` 操作管理 Project Identity：Git origin 写入同步 `project.json`；非 Git workspace 的绝对路径映射只写当前客户端 AHA Home 的 runtime。本方案始终不向业务 workspace 写 AHA 文件。解绑不会删除项目知识；Git 解绑仅移除当前 normalized origin，非 Git 解绑仅移除当前客户端路径映射。
+`project.json` schema v3 引入不可变、确定性 `project_id`，同时保留
+`project_key/git_identities/legacy_keys` 兼容投影。物理目录暂时继续使用
+`projects/<project_key>/`，待所有客户端支持 project_id 后再独立迁移。
 
-> 边界：同一项目在不同机器/路径下应映射到同一 project-key。git remote 优先正是为此。
-> 兼容：旧版本写入的 `git-<hash>` 目录作为 legacy alias 继续参与检索，不强制迁移。
-> 改名：仓库或 remote 改名后需要在任一客户端手动绑定一次；`project.json` 同步后，其他客户端会自动命中新增 identity。
-> 非 Git：本机绝对路径不进入同步知识库；每个客户端首次使用时需各绑定一次。workspace 增加 Git origin 后，Git manifest 匹配优先于已有本机路径绑定。
+解析顺序：
+1. 当前设备的显式 local binding（Git workspace 只有显式 local override 才优先）。
+2. Git binding 按 normalized remote、repository root fingerprint、workspace subpath 评分。
+3. 唯一最高分项目作为 manifest 命中；并返回 `confidence/matched_by/alternatives`。
+4. 多个项目同分时返回 `ambiguous`，Web Manage Binding 可显式选择目标并 tombstone 其他冲突 binding。
+5. 无匹配时按 remote + subpath 推导 key；非 Git workspace 使用 goal + 目录名推导。
+
+Git facts 通过 `git rev-parse --show-toplevel/--absolute-git-dir/--show-prefix`、
+`git remote get-url origin` 与 root commits 获取，支持普通仓库、`.git` file、
+worktree、submodule 和 monorepo 子目录。一个 remote 的不同 subpath 可以绑定到
+不同 Knowledge Project。
+
+Binding 是带稳定 `binding_id` 的记录；共享删除使用 `active=false` tombstone，
+防止多端 Git 合并后旧 identity 复活。本机路径 binding 继续只存放在
+`runtime/project_identity_bindings.json`，并区分 `fallback` 与 Git workspace
+显式 `explicit` override。
+
+Web Nav 统一使用 Manage Binding 对话框：
+- 展示 workspace Git/subpath 与匹配证据。
+- 目标列表覆盖全部 Knowledge Projects，不要求已有 navigation/index。
+- 支持 Create New、This device only / All devices、Local/Shared Unbind。
+- 支持重复项目 Merge preview/apply；非冲突文件迁入目标，冲突源文件归档到
+  目标 `.merge_conflicts/`，旧目录留下 redirect manifest。
+
+Use KB Task 创建时快照 `project_id/project_key/binding_revision/identity_source`
+和 related project IDs；任务运行中不因其他设备修改 Bind 而漂移。
+
+> 兼容：旧 v2 manifest 初始化时确定性迁移到 v3；旧 key 作为 alias 和 redirect
+> 继续参与读取，不要求一次性物理目录迁移。
 
 关联知识库采用“项目级配置 + 任务内部快照”：
 
 - Knowledge → Nav 的项目卡片通过单排 `Related` 操作打开弹窗，独立维护最多 5 个 `related_projects`，关系类型固定为 `upstream/sdk/fork/reference/other`，并允许可选说明；无需先把当前 workspace 绑定到该项目。
-- New Task / Task Settings 不展示关联项目选择器。创建任务时，服务端自动把当前 manifest 的 project keys 快照到 task `token_saving.related_project_keys`；后续只允许任务 UI 修改 AHA KB 开关。
+- New Task / Task Settings 不展示关联项目选择器。创建任务时，服务端自动快照
+  当前 `project_id/project_key/binding_revision` 以及关联项目的 keys/IDs 到 task
+  `token_saving`；后续只允许任务 UI 修改 AHA KB 开关。
 - 旧任务已有快照继续使用；没有快照的旧任务保持为空，不因项目关系变化突然改变上下文。
 - AHA KB 只向 agent 暴露快照项目的 relation/note 与 navigation/solutions/worklog 入口，不递归、不枚举或注入历史正文。
 
@@ -357,6 +381,7 @@ task 收尾 / round finalize 或 memo completion report 完成
 | 2026-07-28 | Follow-up | 新增同步 `projects/<project-key>/project.json` identity manifest；task/nav/distill 统一 manifest 优先解析；Knowledge Web 支持把当前 Git origin 绑定到已有 project | 原仓库零 AHA 文件；remote 改名只需绑定一次并随 KB 多端同步 |
 | 2026-07-30 | Follow-up | Related projects 改为 Project Identity 项目级唯一配置源；创建任务时服务端保存只读快照，任务 UI 只保留 AHA KB 开关 | 关系随 KB 多端同步，任务上下文可复现，不做自动正文检索 |
 | 2026-07-31 | Follow-up | Project Identity 支持非 Git workspace 本机绑定；路径映射保存到 AHA Home runtime，Git manifest 仍保持最高优先级 | 不写业务目录；非 Git workspace 每个客户端首次各绑定一次 |
+| 2026-08-21 | Project Identity v3 | 引入确定性 project_id、结构化 binding/tombstone、Git plumbing + subpath、可解释匹配、local/shared unbind、Manage Binding、project merge/redirect 和 Task identity snapshot | 保留旧 key/API/frontmatter 投影与物理目录，幂等迁移 v2 manifest |
 | 2026-06-19 | Follow-up | memo completion report 成功生成后接入知识沉淀；distill 时附带本项目命中的既有知识摘要，候选中提示审核时更新/废弃冲突旧条目 | 完善生产入口与消费后的更新复核线 |
 | 2026-06-20 | Follow-up | Web entries 支持 project-key 模糊过滤与标题/标签/正文搜索；heuristic 改为保留 Markdown 结构、抽取高价值章节，不再硬截断存储正文 | 修复知识库可查性与候选内容质量 |
 | 2026-06-20 | Follow-up | final/report 提示词支持 knowledge sidecar；AHA 写入 final/report 前剥离 sidecar 并以 sidecar 优先生成候选；pending 按 source_group + normalized title 幂等合并 | 明确 final/report/KB 三层心智模型，解决执行顺序与重复执行问题 |

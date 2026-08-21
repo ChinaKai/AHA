@@ -3,6 +3,7 @@ from __future__ import annotations
 import contextlib
 import io
 import json
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -33,7 +34,11 @@ from aha_cli.store.project_identity import (
     ProjectIdentityConflict,
     ProjectIdentityError,
     bind_project_identity,
+    create_project_identity,
+    git_workspace_facts,
     local_project_bindings_path,
+    merge_project_identities,
+    migrate_project_identity_manifests,
     project_manifest_path,
     read_project_manifest,
     resolve_project_identity,
@@ -108,6 +113,18 @@ def _make_git_workspace(path: Path, remote: str) -> Path:
     return path
 
 
+def _make_real_git_workspace(path: Path, remote: str) -> Path:
+    path.mkdir(parents=True, exist_ok=True)
+    subprocess.run(["git", "-C", str(path), "init"], check=True, capture_output=True)
+    subprocess.run(["git", "-C", str(path), "config", "user.name", "t"], check=True)
+    subprocess.run(["git", "-C", str(path), "config", "user.email", "t@t"], check=True)
+    subprocess.run(["git", "-C", str(path), "remote", "add", "origin", remote], check=True)
+    (path / "README.md").write_text("root\n", encoding="utf-8")
+    subprocess.run(["git", "-C", str(path), "add", "README.md"], check=True)
+    subprocess.run(["git", "-C", str(path), "commit", "-m", "init"], check=True, capture_output=True)
+    return path
+
+
 def test_project_key_stable_across_paths_for_same_remote(tmp_path: Path):
     ws_a = _make_git_workspace(tmp_path / "a", "git@github.com:user/repo.git")
     ws_b = _make_git_workspace(tmp_path / "b", "https://github.com/user/repo")
@@ -165,7 +182,8 @@ def test_non_git_workspace_can_bind_to_project_in_local_aha_state(tmp_path: Path
     assert bound["source"] == "local_binding"
     assert bound["project_key"] == target_key
     assert bound["git_identity"] == ""
-    assert local_state["schema_version"] == 1
+    assert local_state["schema_version"] == 2
+    assert local_state["bindings"][0]["binding_mode"] == "fallback"
     assert local_state["bindings"][0]["workspace_path"] == str(workspace.resolve())
     assert local_state["bindings"][0]["project_key"] == target_key
     assert resolve_project_identity(
@@ -210,6 +228,113 @@ def test_git_manifest_takes_priority_over_stale_local_workspace_binding(tmp_path
     resolved = resolve_project_identity(kb_root, workspace, aha_root=home)
     assert resolved["source"] == "manifest"
     assert resolved["project_key"] == "git-project"
+
+
+def test_v2_project_manifest_is_projected_as_v3(tmp_path: Path):
+    kb_root = tmp_path / "knowledge"
+    path = project_manifest_path(kb_root, "legacy-project")
+    write_json(path, {
+        "schema_version": 2,
+        "project_key": "legacy-project",
+        "display_name": "Legacy",
+        "git_identities": ["git@github.com:user/legacy.git"],
+        "legacy_keys": ["git-old"],
+        "related_projects": [],
+    })
+
+    manifest = read_project_manifest(kb_root, "legacy-project")
+
+    assert manifest["schema_version"] == 3
+    assert manifest["project_id"].startswith("prj_")
+    assert manifest["bindings"][0]["kind"] == "git"
+    assert manifest["bindings"][0]["remote"] == "github.com/user/legacy"
+    assert manifest["git_identities"] == ["github.com/user/legacy"]
+    assert manifest["aliases"] == ["git-old"]
+    assert migrate_project_identity_manifests(kb_root) == [path]
+    migrated = read_json(path)
+    assert migrated["schema_version"] == 3
+    assert migrated["project_id"] == manifest["project_id"]
+    assert migrated["bindings"][0]["binding_id"] == manifest["bindings"][0]["binding_id"]
+
+
+def test_git_plumbing_supports_worktree_and_subpath(tmp_path: Path):
+    repo = _make_real_git_workspace(
+        tmp_path / "repo",
+        "git@github.com:user/monorepo.git",
+    )
+    worktree = tmp_path / "worktree"
+    subprocess.run(
+        ["git", "-C", str(repo), "worktree", "add", "-b", "feature", str(worktree)],
+        check=True,
+        capture_output=True,
+    )
+    nested = worktree / "products" / "camera"
+    nested.mkdir(parents=True)
+
+    facts = git_workspace_facts(nested)
+
+    assert facts["is_git"] is True
+    assert facts["repo_root"] == str(worktree.resolve())
+    assert facts["git_dir"]
+    assert facts["git_identity"] == "github.com/user/monorepo"
+    assert facts["repository_fingerprint"].startswith("roots:")
+    assert facts["subpath"] == "products/camera"
+
+
+def test_monorepo_subpaths_can_bind_to_distinct_projects(tmp_path: Path):
+    home = tmp_path / ".aha"
+    cfg = load_config(home)
+    init_knowledge_base(home, cfg)
+    kb_root = knowledge_root(home, cfg)
+    repo = _make_real_git_workspace(
+        tmp_path / "repo",
+        "git@github.com:user/monorepo.git",
+    )
+    camera = repo / "products" / "camera"
+    cloud = repo / "products" / "cloud"
+    camera.mkdir(parents=True)
+    cloud.mkdir(parents=True)
+    for key in ("camera-project", "cloud-project"):
+        (kb_root / "projects" / key).mkdir(parents=True)
+
+    bind_project_identity(kb_root, camera, "camera-project")
+    bind_project_identity(kb_root, cloud, "cloud-project")
+
+    camera_identity = resolve_project_identity(kb_root, camera)
+    cloud_identity = resolve_project_identity(kb_root, cloud)
+    assert camera_identity["project_key"] == "camera-project"
+    assert cloud_identity["project_key"] == "cloud-project"
+    assert camera_identity["matched_by"] == ["remote", "repository_fingerprint", "subpath"]
+    assert [item["project_key"] for item in camera_identity["alternatives"]] == [
+        "camera-project"
+    ]
+
+
+def test_explicit_local_binding_can_override_git_binding(tmp_path: Path):
+    home = tmp_path / ".aha"
+    cfg = load_config(home)
+    init_knowledge_base(home, cfg)
+    kb_root = knowledge_root(home, cfg)
+    workspace = _make_git_workspace(
+        tmp_path / "workspace",
+        "git@github.com:user/repo.git",
+    )
+    for key in ("shared-project", "local-project"):
+        (kb_root / "projects" / key).mkdir(parents=True)
+
+    bind_project_identity(kb_root, workspace, "shared-project")
+    bind_project_identity(
+        kb_root,
+        workspace,
+        "local-project",
+        aha_root=home,
+        binding_scope="local",
+    )
+
+    resolved = resolve_project_identity(kb_root, workspace, aha_root=home)
+    assert resolved["source"] == "local_binding"
+    assert resolved["project_key"] == "local-project"
+    assert resolved["binding"]["binding_mode"] == "explicit"
 
 
 def test_unbind_non_git_workspace_removes_only_local_mapping(tmp_path: Path):
@@ -262,7 +387,7 @@ def test_unbind_git_workspace_preserves_other_identities_and_project_metadata(tm
     manifest = read_project_manifest(kb_root, "stable-project")
 
     assert result["source"] == "derived_git"
-    assert result["binding_scope"] == "git"
+    assert result["binding_scope"] == "shared"
     assert result["synced_changed"] is True
     assert manifest is not None
     assert manifest["git_identities"] == ["gitlab.com/user/stable-project"]
@@ -270,6 +395,33 @@ def test_unbind_git_workspace_preserves_other_identities_and_project_metadata(tm
         {"project_key": "related-project", "relation": "reference", "note": "Docs"}
     ]
     assert resolve_project_identity(kb_root, mirror)["source"] == "manifest"
+
+
+def test_shared_binding_can_be_reactivated_at_same_timestamp(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    home = tmp_path / ".aha"
+    cfg = load_config(home)
+    init_knowledge_base(home, cfg)
+    kb_root = knowledge_root(home, cfg)
+    (kb_root / "projects" / "stable-project").mkdir(parents=True)
+    workspace = _make_git_workspace(
+        tmp_path / "workspace", "git@github.com:user/stable-project.git"
+    )
+    monkeypatch.setattr(
+        "aha_cli.store.project_identity.utc_now",
+        lambda: "2026-08-21T15:01:07+00:00",
+    )
+
+    first = bind_project_identity(kb_root, workspace, "stable-project")
+    unbind_project_identity(kb_root, workspace, aha_root=home)
+    rebound = bind_project_identity(kb_root, workspace, "stable-project")
+
+    assert rebound["source"] == "manifest"
+    assert rebound["binding"]["binding_id"] == first["binding"]["binding_id"]
+    assert rebound["binding"]["active"] is True
+    assert rebound["binding"]["removed_at"] == ""
 
 
 def test_synced_project_manifest_overrides_changed_remote(tmp_path: Path):
@@ -314,6 +466,45 @@ def test_git_identity_cannot_bind_two_knowledge_projects(tmp_path: Path):
     bind_project_identity(kb_root, workspace, "project-a")
     with pytest.raises(ProjectIdentityConflict):
         bind_project_identity(kb_root, workspace, "project-b")
+
+
+def test_explicit_bind_can_resolve_ambiguous_shared_identity(tmp_path: Path):
+    home = tmp_path / ".aha"
+    cfg = load_config(home)
+    init_knowledge_base(home, cfg)
+    kb_root = knowledge_root(home, cfg)
+    for key in ("project-a", "project-b"):
+        (kb_root / "projects" / key).mkdir(parents=True)
+    workspace = _make_git_workspace(
+        tmp_path / "workspace",
+        "https://github.com/user/repo",
+    )
+    bind_project_identity(kb_root, workspace, "project-a")
+    manifest_a = read_project_manifest(kb_root, "project-a")
+    write_json(project_manifest_path(kb_root, "project-b"), {
+        **{key: value for key, value in manifest_a.items() if key != "path"},
+        "project_id": "prj_duplicate",
+        "project_key": "project-b",
+        "slug": "project-b",
+        "display_name": "Project B",
+    })
+
+    ambiguous = resolve_project_identity(kb_root, workspace)
+    rebound = bind_project_identity(
+        kb_root,
+        workspace,
+        "project-a",
+        resolve_conflicts=True,
+    )
+
+    assert ambiguous["source"] == "ambiguous"
+    assert ambiguous["ambiguous_project_keys"] == ["project-a", "project-b"]
+    assert rebound["source"] == "manifest"
+    assert rebound["project_key"] == "project-a"
+    assert all(
+        binding["active"] is False
+        for binding in read_project_manifest(kb_root, "project-b")["bindings"]
+    )
 
 
 def test_project_manifest_stores_validated_related_projects_and_preserves_them_on_rebind(tmp_path: Path):
@@ -362,6 +553,75 @@ def test_project_manifest_stores_validated_related_projects_and_preserves_them_o
             "project-a",
             [{"project_key": "project-b", "relation": "generated"}],
         )
+
+
+def test_merge_projects_preserves_conflicts_and_leaves_redirect(tmp_path: Path):
+    home = tmp_path / ".aha"
+    cfg = load_config(home)
+    init_knowledge_base(home, cfg)
+    kb_root = knowledge_root(home, cfg)
+    create_project_identity(kb_root, "source-project")
+    create_project_identity(kb_root, "target-project")
+    write_entry(
+        home,
+        config=cfg,
+        scope="project",
+        kind="solutions",
+        project_key_value="source-project",
+        title="Source only",
+        body="source body",
+        slug="source-only",
+    )
+    write_entry(
+        home,
+        config=cfg,
+        scope="project",
+        kind="solutions",
+        project_key_value="source-project",
+        title="Collision",
+        body="source collision",
+        slug="collision",
+    )
+    write_entry(
+        home,
+        config=cfg,
+        scope="project",
+        kind="solutions",
+        project_key_value="target-project",
+        title="Collision",
+        body="target collision",
+        slug="collision",
+    )
+
+    preview = merge_project_identities(
+        kb_root,
+        "source-project",
+        "target-project",
+        aha_root=home,
+        dry_run=True,
+    )
+    applied = merge_project_identities(
+        kb_root,
+        "source-project",
+        "target-project",
+        aha_root=home,
+        dry_run=False,
+    )
+
+    assert preview["move_count"] == 1
+    assert preview["conflict_count"] == 1
+    assert applied["applied"] is True
+    assert read_project_manifest(kb_root, "source-project")["redirect_to"] == "target-project"
+    moved = list_entries(
+        home,
+        config=cfg,
+        scope="project",
+        kind="solutions",
+        project_key_value="source-project",
+    )
+    assert {entry["meta"]["slug"] for entry in moved} == {"source-only", "collision"}
+    archive = kb_root / "projects" / "target-project" / ".merge_conflicts" / "source-project" / "solutions" / "collision.md"
+    assert archive.is_file()
 
 
 # --------------------------------------------------------------------------- #

@@ -63,7 +63,9 @@ from aha_cli.store.project_identity import (
     ProjectIdentityConflict,
     ProjectIdentityError,
     bind_project_identity,
+    create_project_identity,
     list_project_manifests,
+    merge_project_identities,
     read_project_manifest,
     unbind_project_identity,
     update_project_relations,
@@ -1167,10 +1169,15 @@ def _project_identity_candidates(root: Path, cfg: dict) -> list[dict]:
         key = str(project.get("project_key") or "")
         manifest = manifests.get(key)
         candidates.append({
+            "project_id": str((manifest or {}).get("project_id") or ""),
             "project_key": key,
+            "slug": str((manifest or {}).get("slug") or key),
             "display_name": str((manifest or {}).get("display_name") or key),
+            "bindings": list((manifest or {}).get("bindings") or []),
             "git_identities": list((manifest or {}).get("git_identities") or []),
             "legacy_keys": list((manifest or {}).get("legacy_keys") or []),
+            "revision": int((manifest or {}).get("revision") or 0),
+            "redirect_to": str((manifest or {}).get("redirect_to") or ""),
             "counts": project.get("counts") or {},
             "has_manifest": manifest is not None,
         })
@@ -1435,12 +1442,21 @@ def knowledge_route_response(
             return json_response({"error": "target_project_key required"}, "400 Bad Request")
         try:
             context = _project_nav_bootstrap_context(root, payload, query)
+            create_new = bool(_optional_bool(payload.get("create_new"), "create_new"))
+            if create_new:
+                create_project_identity(
+                    knowledge_root(root, cfg),
+                    target_project_key,
+                    display_name=str(payload.get("display_name") or "").strip() or None,
+                )
             identity = bind_project_identity(
                 knowledge_root(root, cfg),
                 Path(context["workspace_path"]),
                 target_project_key,
                 display_name=str(payload.get("display_name") or "").strip() or None,
                 aha_root=root,
+                binding_scope=str(payload.get("binding_scope") or "shared"),
+                resolve_conflicts=bool(_optional_bool(payload.get("resolve_conflicts"), "resolve_conflicts")),
             )
         except FileNotFoundError as exc:
             return json_response({"error": str(exc)}, "404 Not Found")
@@ -1468,6 +1484,8 @@ def knowledge_route_response(
                 knowledge_root(root, cfg),
                 Path(context["workspace_path"]),
                 aha_root=root,
+                binding_scope=str(payload.get("binding_scope") or "auto"),
+                binding_id=str(payload.get("binding_id") or "").strip() or None,
             )
         except FileNotFoundError as exc:
             return json_response({"error": str(exc)}, "404 Not Found")
@@ -1487,6 +1505,58 @@ def knowledge_route_response(
             "projects": _project_identity_candidates(root, cfg),
             "relation_types": list(PROJECT_RELATION_TYPES),
             "workspace_path": context["workspace_path"],
+            "git": git_result,
+        })
+
+    if method == "POST" and path == "/api/kb/projects":
+        payload = parse_json_body(body) if body.strip() else {}
+        project_key_value = str(payload.get("project_key") or "").strip()
+        if not project_key_value:
+            return json_response({"error": "project_key required"}, "400 Bad Request")
+        try:
+            manifest = create_project_identity(
+                knowledge_root(root, cfg),
+                project_key_value,
+                display_name=str(payload.get("display_name") or "").strip() or None,
+            )
+        except (OSError, ProjectIdentityError, ValueError) as exc:
+            return json_response({"error": str(exc)}, "400 Bad Request")
+        git_result = auto_commit_after_change(
+            root, f"chore(knowledge): create project identity '{project_key_value}'", cfg
+        )
+        return json_response({
+            "ok": True,
+            "manifest": manifest,
+            "projects": _project_identity_candidates(root, cfg),
+            "git": git_result,
+        })
+
+    if method == "POST" and path == "/api/kb/projects/merge":
+        payload = parse_json_body(body) if body.strip() else {}
+        source_key = str(payload.get("source_project_key") or "").strip()
+        target_key = str(payload.get("target_project_key") or "").strip()
+        try:
+            apply_merge = bool(_optional_bool(payload.get("apply"), "apply"))
+            result = merge_project_identities(
+                knowledge_root(root, cfg),
+                source_key,
+                target_key,
+                aha_root=root,
+                dry_run=not apply_merge,
+            )
+        except FileNotFoundError as exc:
+            return json_response({"error": str(exc)}, "404 Not Found")
+        except (OSError, ProjectIdentityError, ValueError) as exc:
+            return json_response({"error": str(exc)}, "400 Bad Request")
+        git_result = None
+        if result.get("applied"):
+            git_result = auto_commit_after_change(
+                root, f"chore(knowledge): merge project '{source_key}' into '{target_key}'", cfg
+            )
+        return json_response({
+            "ok": True,
+            "merge": result,
+            "projects": _project_identity_candidates(root, cfg),
             "git": git_result,
         })
 

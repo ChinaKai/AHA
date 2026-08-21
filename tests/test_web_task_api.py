@@ -121,14 +121,23 @@ class WebTaskApiTests(unittest.TestCase):
                 with mock.patch(
                     "aha_cli.web.task_routes.resolved_project_identity",
                     return_value={
+                        "project_id": "prj_current",
+                        "project_key": "project-a",
                         "source": "manifest",
                         "manifest": {
+                            "revision": 7,
                             "related_projects": [
                                 {"project_key": "project-b", "relation": "upstream"},
                                 {"project_key": "project-c", "relation": "sdk"},
                             ]
                         },
                     },
+                ), mock.patch(
+                    "aha_cli.web.task_routes.list_project_manifests",
+                    return_value=[
+                        {"project_id": "prj_b", "project_key": "project-b"},
+                        {"project_id": "prj_c", "project_key": "project-c"},
+                    ],
                 ):
                     response = asyncio.run(
                         fetch_ui_response(
@@ -153,7 +162,12 @@ class WebTaskApiTests(unittest.TestCase):
         self.assertTrue(body["ok"])
         self.assertTrue(body["task"]["token_saving"]["enabled"])
         self.assertEqual(body["task"]["token_saving"]["provider"], "nav")
+        self.assertEqual(body["task"]["token_saving"]["project_id"], "prj_current")
+        self.assertEqual(body["task"]["token_saving"]["project_key"], "project-a")
+        self.assertEqual(body["task"]["token_saving"]["binding_revision"], 7)
+        self.assertEqual(body["task"]["token_saving"]["identity_source"], "manifest")
         self.assertEqual(body["task"]["token_saving"]["related_project_keys"], ["project-b", "project-c"])
+        self.assertEqual(body["task"]["token_saving"]["related_project_ids"], ["prj_b", "prj_c"])
         self.assertEqual(status["tasks"][-1]["token_saving"], body["task"]["token_saving"])
 
     def test_api_task_create_persists_codex_default_model_for_empty_ui_model(self) -> None:

@@ -336,6 +336,77 @@ def test_project_identity_api_binds_non_git_workspace_locally(tmp_path: Path):
     assert not (workspace / "project.json").exists()
 
 
+def test_project_identity_api_supports_create_scope_and_explainable_result(tmp_path: Path):
+    home = _setup(tmp_path)
+    workspace = tmp_path / "plain-workspace"
+    workspace.mkdir()
+
+    created = json_response_body(_post(
+        home,
+        "/api/kb/project-identity/bind",
+        {
+            "workspace_path": str(workspace),
+            "target_project_key": "created-project",
+            "display_name": "Created Project",
+            "binding_scope": "local",
+            "create_new": True,
+        },
+    ))
+    loaded = _get(
+        home,
+        "/api/kb/project-identity",
+        {"workspace_path": [str(workspace)]},
+    )
+
+    assert created["identity"]["source"] == "local_binding"
+    assert created["identity"]["project_id"].startswith("prj_")
+    assert created["identity"]["matched_by"] == ["local_workspace_path"]
+    assert created["identity"]["confidence"] == 1.0
+    assert loaded["identity"]["workspace_identity"]["workspace_path"] == str(workspace.resolve())
+    project = next(item for item in loaded["projects"] if item["project_key"] == "created-project")
+    assert project["project_id"].startswith("prj_")
+    assert project["has_manifest"] is True
+
+
+def test_project_merge_api_previews_and_applies_redirect(tmp_path: Path):
+    home = _setup(tmp_path)
+    cfg = load_config(home)
+    for key in ("source-project", "target-project"):
+        write_entry(
+            home,
+            config=cfg,
+            scope="project",
+            kind="solutions",
+            project_key_value=key,
+            title=f"{key} entry",
+            body=key,
+        )
+
+    preview = json_response_body(_post(
+        home,
+        "/api/kb/projects/merge",
+        {
+            "source_project_key": "source-project",
+            "target_project_key": "target-project",
+            "apply": False,
+        },
+    ))
+    applied = json_response_body(_post(
+        home,
+        "/api/kb/projects/merge",
+        {
+            "source_project_key": "source-project",
+            "target_project_key": "target-project",
+            "apply": True,
+        },
+    ))
+
+    assert preview["merge"]["applied"] is False
+    assert preview["merge"]["move_count"] == 1
+    assert applied["merge"]["applied"] is True
+    assert read_json(project_manifest_path(knowledge_root(home, cfg), "source-project"))["redirect_to"] == "target-project"
+
+
 def test_project_relations_api_updates_bound_project_manifest(tmp_path: Path):
     home = _setup(tmp_path)
     cfg = load_config(home)
