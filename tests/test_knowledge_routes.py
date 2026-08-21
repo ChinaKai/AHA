@@ -647,6 +647,30 @@ def test_capture_api_crud_and_distill(tmp_path: Path, monkeypatch):
     assert _get(home, "/api/kb/capture")["count"] == 0
 
 
+def test_capture_distill_rejects_duplicate_local_request(tmp_path: Path, monkeypatch):
+    import aha_cli.web.knowledge_routes as kr
+
+    home = _setup(tmp_path)
+    note_id = json_response_body(_post(home, "/api/kb/capture", {"text": "raw"}))["note"]["id"]
+    monkeypatch.setattr(
+        kr,
+        "dispatch_distill_job",
+        lambda *args, **kwargs: {
+            "management_task": {
+                "run_id": "knowledge-run",
+                "task_id": "task-distill",
+                "title": "Capture distill",
+            }
+        },
+    )
+
+    first = _post(home, "/api/kb/capture/distill", {"id": note_id})
+    assert json_response_body(first)["status"] == "distilling"
+    second = _post(home, "/api/kb/capture/distill", {"id": note_id})
+    assert b"409 Conflict" in second.split(b"\r\n", 1)[0]
+    assert b"already distilling" in second
+
+
 def test_capture_search_and_relationship_refs(tmp_path: Path, monkeypatch):
     import aha_cli.web.knowledge_routes as kr
     from aha_cli.services.knowledge_capture_distill import run_distill_job

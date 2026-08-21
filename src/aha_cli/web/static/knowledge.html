@@ -346,10 +346,19 @@
     .kb-cap-thumb button { position: absolute; top: -6px; right: -6px; width: 18px; height: 18px; line-height: 16px; padding: 0; border-radius: 50%; font-size: 12px; }
     .kb-cap-upload { font-size: 12px; cursor: pointer; padding: 4px 8px; border: 1px dashed var(--color-border, #ccc); border-radius: 6px; }
     .kb-cap-distill-panel { margin: 8px 0; padding: 10px; border: 1px solid var(--color-border, #d7dce3); border-radius: 8px; background: var(--color-surface-muted, #f7f9fb); }
-    .kb-cap-distill-controls { align-items: center; gap: 8px; margin: 0; flex-wrap: wrap; min-width: 0; }
-    .kb-cap-distill-controls button { flex: 0 0 auto; }
-    .kb-cap-distill-controls select { min-width: 0; max-width: 140px; }
-    .kb-cap-distill-controls #cap-distill-mode { width: 88px; }
+    .kb-cap-distill-controls {
+      display: flex; align-items: center; justify-content: space-between;
+      gap: 10px; margin: 0; flex-wrap: wrap; min-width: 0;
+    }
+    .kb-cap-distill-mode { display: flex; align-items: center; gap: 8px; min-width: 0; }
+    .kb-cap-distill-mode > span { flex: 0 0 auto; white-space: nowrap; }
+    .kb-cap-distill-mode #cap-distill-mode { width: 132px; min-width: 132px; }
+    .kb-cap-distill-help {
+      flex: 1 1 280px; min-width: 180px; margin: 0;
+      color: var(--color-text-subtle); font-size: 12px; line-height: 1.4;
+    }
+    .kb-cap-distill-actions { display: flex; align-items: center; gap: 8px; flex: 0 0 auto; }
+    .kb-cap-distill-actions button { flex: 0 0 auto; }
     .kb-field { display: block; margin: 10px 0 4px; font-size: 12px; color: var(--color-text-muted); }
     .kb-form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0 24px; align-items: start; }
     .kb-form-grid > div { min-width: 0; display: flex; flex-direction: column; }
@@ -513,6 +522,11 @@
       .kb-agent-settings-grid { grid-template-columns: 1fr; }
       .kb-agent-readonly { flex-basis: 100%; align-items: flex-start; }
       .kb-agent-readonly button { width: 100%; margin-left: 0; }
+      .kb-cap-distill-mode { display: grid; grid-template-columns: auto minmax(0, 1fr); width: 100%; }
+      .kb-cap-distill-mode #cap-distill-mode { width: 100%; min-width: 0; }
+      .kb-cap-distill-help { width: 100%; min-width: 0; }
+      .kb-cap-distill-actions { display: grid; grid-template-columns: 1fr 1fr; width: 100%; }
+      .kb-cap-distill-actions button { width: 100%; }
       .kb-skills-layout { grid-template-columns: 1fr; }
       .kb-skills-list { max-height: none; overflow: visible; }
       .kb-skills-detail { padding: 10px; }
@@ -4407,7 +4421,6 @@
       return `
         <button class="kb-approve" type="button" aria-expanded="${distillOpen ? "true" : "false"}" ${note.status === "distilling" ? "disabled" : ""} onclick="toggleDistillPanel('${esc(note.id)}')">${esc(distillLabel)}</button>
         ${managementTaskHref ? `<a class="button-ghost kb-button-link" href="${esc(managementTaskHref)}" target="_top">${esc(t("knowledge.open_task", "Open task"))}</a>` : ""}
-        ${hasManagementTask && !note.management_task_available ? `<span class="kb-muted">${esc(t("knowledge.task_unavailable_on_device", "Task unavailable on this device"))}</span>` : ""}
         <button class="button-ghost" type="button" onclick="editNote('${esc(note.id)}')">${esc(t("knowledge.edit", "Edit"))}</button>
         <button class="kb-reject" type="button" onclick="deleteNote('${esc(note.id)}')">${esc(t("knowledge.delete", "Delete"))}</button>`;
     }
@@ -4420,19 +4433,37 @@
       ].map(([mode, label]) => `<option value="${mode}" ${mode === value ? "selected" : ""}>${esc(label)}</option>`).join("");
     }
 
+    function captureDistillModeHelpText(mode) {
+      return mode === "generate"
+        ? t(
+            "knowledge.capture_mode_generate_help",
+            "Expands the note into a complete, structured knowledge article for review.",
+          )
+        : t(
+            "knowledge.capture_mode_organize_help",
+            "Structures the original note into reviewable knowledge candidates without adding new information.",
+          );
+    }
+
+    window.updateCaptureDistillModeHelp = (mode) => {
+      state.lastDistillMode = mode === "generate" ? "generate" : "organize";
+      const help = $("#cap-distill-mode-help");
+      if (help) help.textContent = captureDistillModeHelpText(state.lastDistillMode);
+    };
+
     function renderCaptureDistillPanel(note) {
       if (!note || state.distillTarget !== note.id) return "";
       return `<div class="kb-cap-distill-panel" id="cap-distill-panel">
         <div class="kb-row kb-cap-distill-controls">
-          <span class="kb-muted">${esc(t("knowledge.capture_distill_mode", "Distill mode"))}</span>
-          <select id="cap-distill-mode" aria-label="${esc(t("knowledge.capture_distill_mode", "Distill mode"))}">${renderCaptureDistillModeOptions(state.lastDistillMode)}</select>
-          <div class="kb-agent-readonly" role="note" aria-label="${esc(t("knowledge.kb_agent_summary_aria", "KB Agent configuration"))}">
-            <strong>${esc(t("knowledge.kb_agent_summary_label", "KB Agent:"))}</strong>
-            <span id="cap-agent-summary" class="kb-agent-readonly-summary">${esc(kbAgentSummaryText())}</span>
-            <button class="button-ghost" type="button" onclick="openKbAgentSettings()">${esc(t("knowledge.kb_agent_open_settings", "Open Settings"))}</button>
+          <label class="kb-cap-distill-mode">
+            <span class="kb-muted">${esc(t("knowledge.capture_distill_mode", "Distill mode"))}</span>
+            <select id="cap-distill-mode" onchange="updateCaptureDistillModeHelp(this.value)">${renderCaptureDistillModeOptions(state.lastDistillMode)}</select>
+          </label>
+          <p class="kb-cap-distill-help" id="cap-distill-mode-help" aria-live="polite">${esc(captureDistillModeHelpText(state.lastDistillMode))}</p>
+          <div class="kb-cap-distill-actions">
+            <button class="kb-approve" type="button" onclick="startDistillFromPanel()">${esc(t("knowledge.capture_distill", "Distill"))}</button>
+            <button class="button-ghost" type="button" onclick="toggleDistillPanel('${esc(note.id)}')">${esc(t("common.cancel", "Cancel"))}</button>
           </div>
-          <button class="kb-approve" type="button" onclick="startDistillFromPanel()">${esc(t("knowledge.capture_distill", "Distill"))}</button>
-          <button class="button-ghost" type="button" onclick="toggleDistillPanel('${esc(note.id)}')">${esc(t("common.cancel", "Cancel"))}</button>
         </div>
       </div>`;
     }
@@ -4604,6 +4635,7 @@
     function syncCaptureDistillPanelControls() {
       const modeEl = $("#cap-distill-mode");
       if (modeEl) modeEl.value = state.lastDistillMode || "organize";
+      window.updateCaptureDistillModeHelp(state.lastDistillMode);
       renderKbAgentSummaries();
     }
 
@@ -4645,7 +4677,7 @@
     }
     function renderKbAgentSummaries() {
       const summary = kbAgentSummaryText();
-      for (const id of ["#project-nav-agent-summary", "#cap-agent-summary"]) {
+      for (const id of ["#project-nav-agent-summary"]) {
         const target = $(id);
         if (target) target.textContent = summary;
       }
@@ -5656,6 +5688,7 @@
       renderKbAgentSettings();
       renderKbAgentSummaries();
       renderSkills();
+      if (state.activeCaptureNote) renderCaptureNoteModal();
       if (state.activeTab === "settings") loadSettings();
       loadStatus();
       loadSyncStatus();

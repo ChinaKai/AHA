@@ -448,7 +448,9 @@ def _note_view(note: dict | None, root: Path | None = None, cfg: dict | None = N
                 view["path"] = Path(raw_path).resolve().relative_to(knowledge_root(root, cfg).resolve()).as_posix()
             except (OSError, ValueError):
                 pass
-    view.pop("_path", None)
+    for key in list(view):
+        if key.startswith("_"):
+            view.pop(key, None)
     return view
 
 
@@ -2276,7 +2278,12 @@ def knowledge_route_response(
             return json_response({"error": str(exc)}, "400 Bad Request")
         # Mark distilling synchronously so an immediate poll observes the job,
         # then run the slow model call off the request thread.
-        capture.update_note(root, cfg, note_id, status="distilling", last_error="")
+        claim = capture.claim_note_distill(root, cfg, note_id)
+        if not claim.get("claimed"):
+            return json_response(
+                {"error": claim.get("error") or "capture note is already distilling"},
+                "409 Conflict",
+            )
         dispatched = dispatch_distill_job(
             root,
             cfg,

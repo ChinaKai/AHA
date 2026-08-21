@@ -21,6 +21,7 @@ from aha_cli.store.knowledge import (
     list_pending,
     parse_entry,
     read_entry,
+    serialize_entry,
     write_entry,
 )
 from aha_cli.store.knowledge_capture import promote_assets_for_entry
@@ -29,6 +30,7 @@ from aha_cli.store.knowledge_capture import (
     CAPTURE_DIR,
     CAPTURE_DISTILL_DIR,
     CAPTURE_INBOX_DIR,
+    CAPTURE_STATE_DIR,
     LEGACY_CAPTURE_DIR,
     ImageRejected,
     add_note_image,
@@ -95,7 +97,10 @@ def test_capture_crud_roundtrip(tmp_path: Path):
     assert updated["text"] == "cleaned up idea" and updated["scope_hint"] == "general"
     assert updated["created_at"] == note["created_at"]  # id/created_at preserved
 
+    state_path = capture_dir(home, cfg) / CAPTURE_STATE_DIR / f"{note['id']}.json"
+    assert state_path.is_file()
     assert delete_note(home, cfg, note["id"]) is True
+    assert not state_path.exists()
     assert list_notes(home, cfg) == []
     assert read_note(home, cfg, note["id"]) is None
 
@@ -118,12 +123,14 @@ def test_capture_assets_are_syncable_and_distill_logs_are_ignored(tmp_path: Path
     assert note_path.suffix == ".md"
     meta, body = parse_entry(note_path.read_text(encoding="utf-8"))
     assert meta["id"] == note["id"] and meta["type"] == "capture"
+    assert not any(key in meta for key in cap_store.CAPTURE_RUNTIME_FIELDS)
     assert body == "raw user material"
 
     kb_root = home / "knowledge"
     gitignore = (kb_root / ".gitignore").read_text(encoding="utf-8").splitlines()
     assert f"{CAPTURE_DIR}/" not in gitignore
     assert f"{CAPTURE_DIR}/{CAPTURE_DISTILL_DIR}/" in gitignore
+    assert f"{CAPTURE_DIR}/{CAPTURE_STATE_DIR}/" in gitignore
     assert f"{LEGACY_CAPTURE_DIR}/" not in gitignore
     assert ".pending/" in gitignore  # existing exclusion preserved
 
@@ -219,12 +226,97 @@ def test_plain_nested_capture_markdown_is_discovered_and_managed(tmp_path: Path)
     assert note["status"] == "raw"
     original_id = note["id"]
 
+    original_markdown = path.read_text(encoding="utf-8")
     updated = update_note(home, cfg, original_id, status="distilled", candidate_ids=["cand_1"])
     assert updated["id"] == original_id
+    assert updated["status"] == "distilled" and updated["candidate_ids"] == ["cand_1"]
+    assert path.read_text(encoding="utf-8") == original_markdown
+    state = read_json(capture_dir(home, cfg) / CAPTURE_STATE_DIR / f"{original_id}.json")
+    assert state["status"] == "distilled" and state["candidate_ids"] == ["cand_1"]
+
+
+def test_capture_runtime_state_isolated_between_devices(tmp_path: Path):
+    home_a = _home(tmp_path / "a")
+    home_b = _home(tmp_path / "b")
+    cfg = _cfg()
+    note = create_note(home_a, cfg, text="shared raw note", title="Shared")
+    source = Path(read_note(home_a, cfg, note["id"])["_path"])
+    target = capture_dir(home_b, cfg) / CAPTURE_INBOX_DIR / source.name
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(source.read_text(encoding="utf-8"), encoding="utf-8")
+    original = source.read_text(encoding="utf-8")
+
+    update_note(
+        home_a,
+        cfg,
+        note["id"],
+        status="distilling",
+        management_run_id="run-a",
+        management_task_id="task-a",
+    )
+    update_note(
+        home_b,
+        cfg,
+        note["id"],
+        status="distilled",
+        candidate_ids=["cand-b"],
+        management_run_id="run-b",
+        management_task_id="task-b",
+    )
+
+    assert source.read_text(encoding="utf-8") == original
+    assert target.read_text(encoding="utf-8") == original
+    assert read_note(home_a, cfg, note["id"])["management_run_id"] == "run-a"
+    note_b = read_note(home_b, cfg, note["id"])
+    assert note_b["management_run_id"] == "run-b"
+    assert note_b["candidate_ids"] == ["cand-b"]
+
+
+def test_legacy_capture_runtime_frontmatter_migrates_to_local_state(tmp_path: Path):
+    home = _home(tmp_path)
+    cfg = _cfg()
+    path = capture_dir(home, cfg) / CAPTURE_INBOX_DIR / "legacy-runtime.md"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        serialize_entry(
+            {
+                "id": "cap_legacy_runtime",
+                "type": "capture",
+                "title": "Legacy runtime",
+                "scope_hint": "personal",
+                "status": "distilled",
+                "candidate_ids": ["cand-old"],
+                "management_run_id": "run-old",
+                "management_task_id": "task-old",
+            },
+            "legacy body",
+        ),
+        encoding="utf-8",
+    )
+
+    legacy = read_note(home, cfg, "cap_legacy_runtime")
+    assert legacy["status"] == "distilled"
+    updated = update_note(home, cfg, "cap_legacy_runtime", status="error", last_error="retry")
+
+    assert updated["status"] == "error"
     meta, body = parse_entry(path.read_text(encoding="utf-8"))
-    assert meta["type"] == "capture" and meta["status"] == "distilled"
-    assert meta["candidate_ids"] == ["cand_1"]
-    assert "设备重启后无输出" in body
+    assert body == "legacy body"
+    assert not any(key in meta for key in cap_store.CAPTURE_RUNTIME_FIELDS)
+    state = read_json(capture_dir(home, cfg) / CAPTURE_STATE_DIR / "cap_legacy_runtime.json")
+    assert state["candidate_ids"] == ["cand-old"]
+    assert state["management_run_id"] == "run-old"
+    assert state["status"] == "error"
+
+
+def test_claim_note_distill_rejects_duplicate_local_job(tmp_path: Path):
+    home = _home(tmp_path)
+    cfg = _cfg()
+    note = create_note(home, cfg, text="raw")
+
+    assert cap_store.claim_note_distill(home, cfg, note["id"])["claimed"] is True
+    duplicate = cap_store.claim_note_distill(home, cfg, note["id"])
+    assert duplicate["claimed"] is False
+    assert "already distilling" in duplicate["error"]
 
 
 def test_plain_capture_markdown_relative_image_renders_through_safe_api(tmp_path: Path):
@@ -290,10 +382,12 @@ def test_distill_note_enqueues_candidates_and_marks_distilled(tmp_path: Path):
     assert pending[0]["project_key"] is None
     assert pending[0]["title"] == "重试要带指数退避"
     assert pending[0]["meta"]["distill_mode"] == "organize"
+    assert pending[0]["meta"]["source_fingerprint"] == result["distill_fingerprint"]
 
     updated = read_note(home, cfg, note["id"])
     assert updated["status"] == "distilled"
     assert updated["candidate_ids"] == result["candidate_ids"]
+    assert updated["distill_fingerprint"] == result["distill_fingerprint"]
     assert result["distill_mode"] == "organize"
 
 

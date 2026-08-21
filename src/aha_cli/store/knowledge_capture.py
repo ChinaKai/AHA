@@ -8,8 +8,9 @@ A capture note is unstructured raw material the user dumps in to deal with
 later (pasted logs, half-formed ideas, screenshots). It is neither a candidate
 nor a tracked entry. Notes live as normal Markdown files under ``capture/``
 with attachments under ``capture/assets/``. These are user materials and stay
-syncable across machines; only generated distill logs under
-``capture/distill/`` are ignored.
+syncable across machines. Device-local runtime state lives under
+``capture/state/`` and generated distill logs under ``capture/distill/``; both
+are ignored by Git.
 
 Phase 2 owns storage + CRUD only; the distill trigger is wired in Phase 3.
 """
@@ -26,7 +27,7 @@ from pathlib import Path
 from urllib.parse import quote, unquote
 
 from aha_cli.domain.models import utc_now
-from aha_cli.store.io import read_json, write_json
+from aha_cli.store.io import exclusive_sidecar_lock, read_json, write_json
 from aha_cli.store.knowledge import (
     KNOWLEDGE_GITIGNORE_FILE,
     PENDING_DIR,
@@ -40,7 +41,16 @@ LEGACY_CAPTURE_DIR = ".capture"
 CAPTURE_INBOX_DIR = "inbox"
 CAPTURE_ASSETS_DIR = "assets"
 CAPTURE_DISTILL_DIR = "distill"
+CAPTURE_STATE_DIR = "state"
 CAPTURE_SCOPES = ("personal", "project", "general")
+CAPTURE_RUNTIME_FIELDS = (
+    "status",
+    "candidate_ids",
+    "last_error",
+    "management_run_id",
+    "management_task_id",
+    "distill_fingerprint",
+)
 
 # Image guardrails (no new dependency): allow only these types, sniffed from the
 # bytes (not the filename), and bound per-image / per-note total size.
@@ -114,7 +124,9 @@ def _ensure_capture_gitignored(kb_root: Path) -> None:
     wanted = {
         f"{PENDING_DIR}/",
         f"{CAPTURE_DIR}/{CAPTURE_DISTILL_DIR}/",
+        f"{CAPTURE_DIR}/{CAPTURE_STATE_DIR}/",
         f"{LEGACY_CAPTURE_DIR}/{CAPTURE_DISTILL_DIR}/",
+        f"{LEGACY_CAPTURE_DIR}/{CAPTURE_STATE_DIR}/",
     }
     obsolete = {f"{CAPTURE_DIR}/", f"{LEGACY_CAPTURE_DIR}/"}
     existing: set[str] = set()
@@ -133,6 +145,79 @@ def _ensure_capture_gitignored(kb_root: Path) -> None:
     if missing or not gitignore.exists():
         out = [line for line in lines if line.strip()] + missing
         gitignore.write_text("\n".join(out) + "\n", encoding="utf-8")
+
+
+def _safe_note_state_id(note_id: str) -> str:
+    clean = str(note_id or "").strip()
+    if not clean or not re.fullmatch(r"[A-Za-z0-9._-]+", clean):
+        raise ValueError("invalid capture note id")
+    return clean
+
+
+def _note_state_path(root: Path, config: dict | None, note_id: str) -> Path:
+    return capture_dir(root, config) / CAPTURE_STATE_DIR / f"{_safe_note_state_id(note_id)}.json"
+
+
+def _note_state_lock_path(root: Path, config: dict | None, note_id: str) -> Path:
+    return _note_state_path(root, config, note_id).with_suffix(".lock")
+
+
+def _read_note_state(root: Path, config: dict | None, note_id: str) -> dict:
+    try:
+        path = _note_state_path(root, config, note_id)
+    except ValueError:
+        return {}
+    if not path.is_file():
+        return {}
+    try:
+        state = read_json(path)
+    except (OSError, ValueError):
+        return {}
+    return state if isinstance(state, dict) else {}
+
+
+def _runtime_state_from_record(record: dict) -> dict:
+    state = {
+        key: record[key]
+        for key in CAPTURE_RUNTIME_FIELDS
+        if key in record and record.get(key) is not None
+    }
+    if "candidate_ids" in state:
+        state["candidate_ids"] = list(state.get("candidate_ids") or [])
+    return state
+
+
+def _write_note_state(root: Path, config: dict | None, note_id: str, state: dict) -> dict:
+    path = _note_state_path(root, config, note_id)
+    _ensure_capture_gitignored(knowledge_root(root, config))
+    record = {
+        key: value
+        for key, value in state.items()
+        if key in CAPTURE_RUNTIME_FIELDS and value is not None
+    }
+    record["id"] = note_id
+    record["runtime_updated_at"] = utc_now()
+    record.setdefault("status", "raw")
+    record.setdefault("candidate_ids", [])
+    write_json(path, record)
+    return record
+
+
+def _with_note_state(root: Path, config: dict | None, record: dict) -> dict:
+    state = _read_note_state(root, config, str(record.get("id") or ""))
+    legacy = _runtime_state_from_record(record)
+    record["_legacy_runtime_state"] = bool(legacy)
+    merged = {**legacy, **state}
+    record["status"] = str(merged.get("status") or "raw")
+    record["candidate_ids"] = list(merged.get("candidate_ids") or [])
+    for key in CAPTURE_RUNTIME_FIELDS:
+        if key in {"status", "candidate_ids"}:
+            continue
+        if key in merged:
+            record[key] = merged[key]
+        else:
+            record.pop(key, None)
+    return record
 
 
 def _safe_note_filename(title: str, note_id: str, created_at: str) -> str:
@@ -208,8 +293,6 @@ def _read_markdown_note(target: Path, path: Path) -> dict:
     record["text"] = body
     record["scope_hint"] = record.get("scope_hint") if record.get("scope_hint") in CAPTURE_SCOPES else "personal"
     record["images"] = list(record.get("images") or [])
-    record["status"] = str(record.get("status") or "raw")
-    record["candidate_ids"] = list(record.get("candidate_ids") or [])
     record["created_at"] = str(record.get("created_at") or now)
     record["updated_at"] = str(record.get("updated_at") or now)
     record["_path"] = str(path)
@@ -220,7 +303,9 @@ def _markdown_note_meta(record: dict) -> dict:
     return {
         key: value
         for key, value in record.items()
-        if key not in {"_path", "text", "render_text"} and value is not None
+        if not key.startswith("_")
+        and key not in {"text", "render_text", *CAPTURE_RUNTIME_FIELDS}
+        and value is not None
     }
 
 
@@ -285,6 +370,7 @@ def migrate_legacy_capture_notes(root: Path, config: dict | None = None) -> list
                         shutil.copy2(asset, target_assets / asset.name)
             note_path = _new_note_path(target, record)
             _normalize_note_image_refs(record, note_path, target)
+            _write_note_state(root, config, note_id, _runtime_state_from_record(record))
             _write_markdown_note(note_path, record)
             path.unlink()
             migrated.append(note_path)
@@ -381,6 +467,7 @@ def create_note(
     }
     path = _new_note_path(target, record)
     _write_note_record(root, config, note_id, {**record, "_path": str(path)})
+    _write_note_state(root, config, note_id, _runtime_state_from_record(record))
     return record
 
 
@@ -393,7 +480,7 @@ def list_notes(root: Path, config: dict | None = None) -> list[dict]:
             continue
         for path in _iter_markdown_note_paths(target) or []:
             try:
-                record = _read_markdown_note(target, path)
+                record = _with_note_state(root, config, _read_markdown_note(target, path))
                 note_id = str(record.get("id") or "")
                 if note_id in seen:
                     continue
@@ -419,7 +506,7 @@ def read_note(root: Path, config: dict | None, note_id: str) -> dict | None:
     except (OSError, ValueError):
         return None
     record["_path"] = str(path)
-    return record
+    return _with_note_state(root, config, record)
 
 
 def update_note(
@@ -435,30 +522,64 @@ def update_note(
     last_error: str | None = None,
     management_run_id: str | None = None,
     management_task_id: str | None = None,
+    distill_fingerprint: str | None = None,
 ) -> dict:
-    """Update a raw note in place, preserving id/created_at."""
+    """Update synced note content and device-local runtime state."""
     record = read_note(root, config, note_id)
     if record is None:
         raise FileNotFoundError(f"capture note not found: {note_id}")
+    content_changed = False
     if text is not None:
         record["text"] = text
+        content_changed = True
     if scope_hint is not None and scope_hint in CAPTURE_SCOPES:
         record["scope_hint"] = scope_hint
+        content_changed = True
     if title is not None:
         record["title"] = title.strip()
-    if status is not None:
-        record["status"] = status
-    if candidate_ids is not None:
-        record["candidate_ids"] = list(candidate_ids)
-    if last_error is not None:
-        record["last_error"] = last_error
-    if management_run_id is not None:
-        record["management_run_id"] = management_run_id
-    if management_task_id is not None:
-        record["management_task_id"] = management_task_id
-    record["updated_at"] = utc_now()
-    _write_note_record(root, config, note_id, record)
+        content_changed = True
+    runtime_updates = {
+        key: value
+        for key, value in {
+            "status": status,
+            "candidate_ids": list(candidate_ids) if candidate_ids is not None else None,
+            "last_error": last_error,
+            "management_run_id": management_run_id,
+            "management_task_id": management_task_id,
+            "distill_fingerprint": distill_fingerprint,
+        }.items()
+        if value is not None
+    }
+    state = _read_note_state(root, config, note_id)
+    if record.get("_legacy_runtime_state") and not state:
+        state.update(_runtime_state_from_record(record))
+    if runtime_updates or record.get("_legacy_runtime_state"):
+        state.update(runtime_updates)
+        state = _write_note_state(root, config, note_id, state)
+        for key in CAPTURE_RUNTIME_FIELDS:
+            if key in state:
+                record[key] = state[key]
+    if content_changed:
+        record["updated_at"] = utc_now()
+    if content_changed or record.get("_legacy_runtime_state"):
+        _write_note_record(root, config, note_id, record)
     return record
+
+
+def claim_note_distill(root: Path, config: dict | None, note_id: str) -> dict:
+    """Atomically claim a local note for distillation."""
+    try:
+        lock_path = _note_state_lock_path(root, config, note_id)
+    except ValueError:
+        return {"claimed": False, "error": "invalid capture note id"}
+    with exclusive_sidecar_lock(lock_path, timeout=5.0, stale_seconds=120.0):
+        note = read_note(root, config, note_id)
+        if note is None:
+            return {"claimed": False, "error": f"capture note not found: {note_id}"}
+        if note.get("status") == "distilling":
+            return {"claimed": False, "note": note, "error": "capture note is already distilling"}
+        note = update_note(root, config, note_id, status="distilling", last_error="")
+        return {"claimed": True, "note": note}
 
 
 def delete_note(root: Path, config: dict | None, note_id: str) -> bool:
@@ -470,6 +591,11 @@ def delete_note(root: Path, config: dict | None, note_id: str) -> bool:
         path.unlink()
         deleted = True
     if deleted:
+        try:
+            _note_state_path(root, config, note_id).unlink(missing_ok=True)
+            _note_state_lock_path(root, config, note_id).unlink(missing_ok=True)
+        except (OSError, ValueError):
+            pass
         for assets in _note_asset_dirs(root, config, note_id):
             if assets.is_dir():
                 shutil.rmtree(assets, ignore_errors=True)

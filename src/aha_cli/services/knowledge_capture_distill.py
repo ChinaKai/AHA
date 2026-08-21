@@ -21,6 +21,8 @@ is fully covered without invoking a real model.
 
 from __future__ import annotations
 
+import hashlib
+import json
 import tempfile
 from collections.abc import Callable
 from pathlib import Path
@@ -50,6 +52,7 @@ from aha_cli.store.knowledge_sidecar import split_knowledge_sidecar
 # Seam: raw context -> agent reply text (expected to contain the sidecar block).
 CaptureAgent = Callable[[dict], str]
 CAPTURE_DISTILL_MODES = ("organize", "generate")
+CAPTURE_DISTILL_FINGERPRINT_VERSION = 1
 
 
 class CaptureAgentError(RuntimeError):
@@ -63,6 +66,24 @@ def normalize_distill_mode(value: object = None) -> str:
     if clean in {"generate", "generated", "create", "gen", "生成"}:
         return "generate"
     raise ValueError("distill_mode must be organize or generate")
+
+
+def capture_distill_fingerprint(
+    prompt: str,
+    *,
+    backend: str,
+    model: str | None,
+    reasoning_effort: str | None,
+) -> str:
+    payload = {
+        "version": CAPTURE_DISTILL_FINGERPRINT_VERSION,
+        "prompt": prompt,
+        "backend": backend,
+        "model": model,
+        "reasoning_effort": reasoning_effort,
+    }
+    raw = json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8")
+    return hashlib.sha256(raw).hexdigest()[:20]
 
 
 def _distill_mode_prompt_parts(mode: str) -> dict[str, str]:
@@ -400,12 +421,20 @@ def distill_note(
     effective_model = _effective_model(config, effective_backend, model)
     effective_proxy_enabled = _effective_proxy_enabled(config, effective_backend, proxy_enabled)
     effective_reasoning_effort = _effective_reasoning_effort(config, effective_backend, reasoning_effort)
+    distill_fingerprint = capture_distill_fingerprint(
+        prompt,
+        backend=effective_backend,
+        model=effective_model,
+        reasoning_effort=effective_reasoning_effort,
+    )
+    update_note(root, config, note_id, distill_fingerprint=distill_fingerprint)
     log = create_distill_log(root, config, note_id, {
         "backend": effective_backend,
         "model": effective_model,
         "proxy_enabled": effective_proxy_enabled,
         "reasoning_effort": effective_reasoning_effort,
         "distill_mode": distill_mode,
+        "distill_fingerprint": distill_fingerprint,
         "status": "running",
         "prompt": prompt,
         "started_at": utc_now(),
@@ -461,6 +490,7 @@ def distill_note(
         # (a reverse lookup via note.candidate_ids remains as a compat path).
         c["source_note_id"] = note_id
         c.setdefault("meta", {})["distill_mode"] = distill_mode
+        c["meta"]["source_fingerprint"] = distill_fingerprint
         normalized.append(c)
     normalized = _bind_candidates_to_existing_entries(normalized, _entries_for_note(root, config, note_id))
     normalized, skipped_navigation = filter_project_nav_candidates(root, config, normalized, {"source_type": "capture_note"})
@@ -493,7 +523,15 @@ def distill_note(
         log_id,
         agent_log_event("completed", f"{len(enqueued_ids)} candidate(s) ready for review", candidates=len(enqueued_ids)),
     )
-    update_note(root, config, note_id, status="distilled", candidate_ids=enqueued_ids, last_error="")
+    update_note(
+        root,
+        config,
+        note_id,
+        status="distilled",
+        candidate_ids=enqueued_ids,
+        last_error="",
+        distill_fingerprint=distill_fingerprint,
+    )
     update_distill_log(
         root, config, note_id, log_id,
         status="distilled",
@@ -511,6 +549,7 @@ def distill_note(
         "log_id": log_id,
         "distill_mode": distill_mode,
         "reasoning_effort": effective_reasoning_effort,
+        "distill_fingerprint": distill_fingerprint,
         "navigation": navigation,
     }
 
