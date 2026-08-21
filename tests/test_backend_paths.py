@@ -7,7 +7,7 @@ import zipfile
 from pathlib import Path
 from unittest import mock
 
-from aha_cli.services import backend_paths
+from aha_cli.services import backend_paths, onebin
 
 
 class TestBackendPaths:
@@ -17,20 +17,24 @@ class TestBackendPaths:
             backend_paths.add_user_backend_paths(env)
         return env
 
-    def test_win32_onebin_creates_python3_shim(self) -> None:
+    def test_win32_onebin_uses_command_shims_in_a_dedicated_path(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             zipapp = Path(tmp) / "aha"
             zipapp.write_bytes(b"PK\x03\x04")
             with mock.patch("aha_cli.services.backend_paths.sys.platform", "win32"):
                 env = self._run_with_zipapp(zipapp)
 
-            shim = zipapp.parent / "python3"
-            assert shim.is_file()
-            body = shim.read_text(encoding="utf-8")
-            assert body.startswith("#!/bin/sh\n")
-            assert sys.executable.replace("\\", "/") in body
-            # The onebin directory is prepended so backend shells can resolve `aha`.
-            assert str(zipapp.parent) in env["PATH"].split(os.pathsep)
+            backend_bin = zipapp.parent / "backend-bin"
+            aha_shim = backend_bin / "aha.cmd"
+            python_shim = backend_bin / "python3.cmd"
+            assert aha_shim.is_file()
+            assert python_shim.is_file()
+            assert str(zipapp) in aha_shim.read_text(encoding="utf-8")
+            assert sys.executable in python_shim.read_text(encoding="utf-8")
+            parts = env["PATH"].split(os.pathsep)
+            assert parts[0] == str(backend_bin)
+            assert str(zipapp.parent) not in parts
+            assert env["AHA_RUNTIME_PYTHON"]
 
     def test_non_win32_skips_python3_shim(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -49,7 +53,7 @@ class TestBackendPaths:
             with mock.patch("aha_cli.services.backend_paths.sys.platform", "win32"):
                 env = self._run_with_zipapp(None)
 
-            # No onebin -> no install dir to place a shim in; only user bin dirs.
+            # No onebin -> no install dir to place command shims in; only user bin dirs.
             assert all("python3" not in Path(item).name for item in env["PATH"].split(os.pathsep))
 
     def test_wsl_forwarded_onebin_repairs_aha_path_from_source_entry(self) -> None:
@@ -101,13 +105,13 @@ class TestBackendPaths:
             bridge_bin = root / "data" / "aha" / "backend-bin"
             assert Path(os.readlink(bridge_bin / "aha")) == forwarded
 
-    def test_shim_rewrites_only_when_target_changes(self) -> None:
+    def test_windows_command_shim_rewrites_only_when_target_changes(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             zipapp = Path(tmp) / "aha"
             zipapp.write_bytes(b"PK\x03\x04")
             with mock.patch("aha_cli.services.backend_paths.sys.platform", "win32"):
                 env = self._run_with_zipapp(zipapp)
-            shim = zipapp.parent / "python3"
+            shim = zipapp.parent / "backend-bin" / "aha.cmd"
             before = shim.stat().st_mtime
 
             # Same interpreter -> no rewrite.
@@ -118,7 +122,26 @@ class TestBackendPaths:
             # Different interpreter target -> rewrite.
             with (
                 mock.patch("aha_cli.services.backend_paths.sys.platform", "win32"),
-                mock.patch("aha_cli.services.backend_paths.sys.executable", r"C:\other\python.exe"),
+                mock.patch("aha_cli.services.onebin.sys.executable", r"C:\other\python.exe"),
             ):
                 env = self._run_with_zipapp(zipapp)
-            assert "C:/other/python.exe" in shim.read_text(encoding="utf-8")
+            assert r"C:\other\python.exe" in shim.read_text(encoding="utf-8")
+
+    def test_resolve_aha_python_uses_configured_runtime_for_missing_module(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            candidate = Path(tmp) / "python.exe"
+            candidate.write_bytes(b"python")
+            with (
+                mock.patch.object(onebin.importlib, "import_module", side_effect=ImportError),
+                mock.patch.object(onebin, "authoritative_onebin_path", return_value=None),
+                mock.patch.object(onebin, "_python_supports_module", return_value=True) as supports,
+                mock.patch.dict(
+                    os.environ,
+                    {onebin.AHA_RUNTIME_PYTHON_ENV: str(candidate)},
+                    clear=False,
+                ),
+            ):
+                resolved = onebin.resolve_aha_python("playwright")
+
+            assert resolved == str(candidate.resolve())
+            supports.assert_called_once_with(candidate.resolve(), "playwright")

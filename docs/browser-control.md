@@ -14,8 +14,11 @@ aha browser doctor
 
 Playwright 是可选依赖。未安装 Python 包或 Chromium 时，AHA 的其他 CLI/Web
 功能不受影响；Browser 面板和 `doctor` 会返回明确的安装提示。onebin 不内嵌
-浏览器二进制，需要给运行 onebin 的 Python 环境单独安装 Playwright 和
-Chromium。
+浏览器二进制。Browser Bridge 优先使用当前 AHA Python；Windows 当前解释器
+缺少 Playwright 时，会依次检查 `AHA_RUNTIME_PYTHON`、onebin 同目录的
+`install-report.json` 和默认 `%USERPROFILE%\.venvs\aha\Scripts\python.exe`，
+仅选择已验证可导入 Playwright 的解释器。`doctor` 返回实际使用的
+`python_executable` 和是否发生 `python_fallback`。
 
 ## 任务配置
 
@@ -218,6 +221,11 @@ Browser 内容区可滚动到被键盘遮挡的部分。键盘打开时触摸共
 沿用旧设备帧。
 
 ## Agent CLI
+
+Windows onebin 不直接以无扩展名 `aha` 文件暴露给 agent shell。AHA 会生成并
+优先加入 PATH 的 `backend-bin\aha.cmd` 和 `python3.cmd`，由当前 AHA 的控制台
+Python 执行同一个 onebin，避免 Windows 弹出“选择打开方式”，也避免 agent
+误用系统 Python 后把 Browser Bridge 判定为缺少 Playwright。
 
 ```bash
 aha browser status <run-id> <task-id>

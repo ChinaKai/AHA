@@ -23,6 +23,7 @@ from aha_cli.services.browser_runtime import (
     browser_bridge_manual_stop_path,
     browser_context_launch_options,
     browser_display_status,
+    browser_doctor,
     browser_frame_size,
     browser_initial_viewport,
     browser_launch_signature,
@@ -173,13 +174,52 @@ class BrowserPolicyTests(unittest.TestCase):
                     return_value={"status": "stopped", "alive": False},
                 ) as stop,
                 mock.patch("aha_cli.services.browser_runtime.subprocess.Popen", return_value=process),
-                mock.patch("aha_cli.services.browser_runtime.bridge_launcher", return_value=["python", "-m", "aha_cli"]),
+                mock.patch(
+                    "aha_cli.services.browser_runtime.browser_bridge_launcher",
+                    return_value=["python", "-m", "aha_cli"],
+                ),
             ):
                 status = ensure_browser_bridge(root, run_id, task_id)
 
             stop.assert_called_once_with(root, run_id, task_id, timeout=2.0)
             self.assertEqual(status["pid"], 5678)
-            self.assertEqual(status["status"], "starting")
+        self.assertEqual(status["status"], "starting")
+
+    def test_browser_bridge_launcher_requests_playwright_capable_python(self) -> None:
+        with mock.patch(
+            "aha_cli.services.browser_runtime.aha_cli_invocation",
+            return_value=[r"C:\Users\me\.venvs\aha\Scripts\python.exe", "aha"],
+        ) as invocation:
+            command = __import__(
+                "aha_cli.services.browser_runtime",
+                fromlist=["browser_bridge_launcher"],
+            ).browser_bridge_launcher()
+
+        self.assertEqual(command[0], r"C:\Users\me\.venvs\aha\Scripts\python.exe")
+        invocation.assert_called_once_with(required_module="playwright")
+
+    def test_browser_doctor_uses_detected_playwright_environment(self) -> None:
+        detected = r"C:\Users\me\.venvs\aha\Scripts\python.exe"
+        with (
+            mock.patch(
+                "aha_cli.services.browser_runtime.resolve_aha_python",
+                return_value=detected,
+            ),
+            mock.patch(
+                "aha_cli.services.browser_runtime._browser_doctor_with_python",
+                return_value={
+                    "ok": True,
+                    "playwright_installed": True,
+                    "python_executable": detected,
+                    "python_fallback": True,
+                },
+            ) as inspect,
+        ):
+            result = asyncio.run(browser_doctor())
+
+        self.assertTrue(result["ok"])
+        self.assertTrue(result["python_fallback"])
+        inspect.assert_called_once_with(detected)
 
     def test_lifecycle_ready_waits_for_running_socket(self) -> None:
         with (

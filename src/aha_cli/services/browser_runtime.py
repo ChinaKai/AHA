@@ -24,7 +24,8 @@ import uuid
 from aha_cli import platform, process_control
 from aha_cli.services import loopback_ipc
 from aha_cli.domain.models import normalize_browser_profile_name, normalize_task_browser_control, utc_now
-from aha_cli.services.hardware_bridge import bridge_launcher, pid_alive
+from aha_cli.services.hardware_bridge import pid_alive
+from aha_cli.services.onebin import aha_cli_invocation, resolve_aha_python
 from aha_cli.services.proxy import backend_proxy_config
 from aha_cli.store.config import load_config
 from aha_cli.store.filesystem import require_plan, task_snapshot
@@ -36,12 +37,19 @@ MAX_BROWSER_FRAME_BYTES = 8 * 1024 * 1024
 BROWSER_BRIDGE_START_TIMEOUT_SECONDS = 12.0
 BROWSER_DESKTOP_CAPTURE_SCALE = 1.5
 BROWSER_MOBILE_CAPTURE_SCALE = 3.0
+BROWSER_DOCTOR_CHILD_ENV = "AHA_BROWSER_DOCTOR_CHILD"
 
 
 class BrowserBridgeError(RuntimeError):
     def __init__(self, code: str, message: str) -> None:
         super().__init__(message)
         self.code = code
+
+
+def browser_bridge_launcher() -> list[str]:
+    """Launch Browser Bridge with an interpreter that can import Playwright."""
+
+    return aha_cli_invocation(required_module="playwright")
 
 
 def _scope_key(value: object) -> str:
@@ -529,7 +537,7 @@ def ensure_browser_bridge(
                 return browser_bridge_status(root, run_id, task_id)
             _stop_browser_bridge(root, run_id, task_id, timeout=2.0)
         cmd = [
-            *(launcher or bridge_launcher()),
+            *(launcher or browser_bridge_launcher()),
             "--home",
             str(aha_home_path(root)),
             "browser-bridge",
@@ -774,10 +782,12 @@ async def browser_bridge_request(
         await writer.wait_closed()
 
 
-async def browser_doctor() -> dict:
+async def _browser_doctor_current() -> dict:
     result = {
         "ok": False,
         "playwright_installed": importlib.util.find_spec("playwright") is not None,
+        "python_executable": sys.executable,
+        "python_fallback": False,
         "chromium_path": "",
         "chromium_installed": False,
         "channel": "",
@@ -825,6 +835,56 @@ async def browser_doctor() -> dict:
             "or run `python -m playwright install chromium`."
         )
     return result
+
+
+def _browser_doctor_with_python(executable: str) -> dict:
+    command = [
+        *aha_cli_invocation(required_module="playwright"),
+        "browser",
+        "doctor",
+    ]
+    command[0] = executable
+    child_env = dict(os.environ)
+    child_env[BROWSER_DOCTOR_CHILD_ENV] = "1"
+    child_env["PYTHONPATH"] = os.pathsep.join(path for path in sys.path if path) + (
+        os.pathsep + child_env["PYTHONPATH"] if child_env.get("PYTHONPATH") else ""
+    )
+    try:
+        completed = subprocess.run(
+            command,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            check=False,
+            timeout=20,
+            env=child_env,
+            **platform.hidden_subprocess_kwargs(),
+        )
+        payload = json.loads(completed.stdout)
+    except (OSError, subprocess.SubprocessError, json.JSONDecodeError) as exc:
+        return {
+            "ok": False,
+            "playwright_installed": True,
+            "python_executable": executable,
+            "python_fallback": True,
+            "error": f"Failed to inspect the detected AHA browser environment: {exc}",
+        }
+    if not isinstance(payload, dict):
+        payload = {"ok": False, "error": "AHA browser doctor returned an invalid response."}
+    payload["python_executable"] = executable
+    payload["python_fallback"] = True
+    return payload
+
+
+async def browser_doctor() -> dict:
+    if str(os.environ.get(BROWSER_DOCTOR_CHILD_ENV) or "") != "1":
+        executable = resolve_aha_python("playwright")
+        if executable and os.path.normcase(os.path.abspath(executable)) != os.path.normcase(
+            os.path.abspath(sys.executable)
+        ):
+            return await asyncio.to_thread(_browser_doctor_with_python, executable)
+    return await _browser_doctor_current()
 
 
 async def read_browser_frame(reader: asyncio.StreamReader) -> dict | None:

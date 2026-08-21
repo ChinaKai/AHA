@@ -5,6 +5,7 @@ import io
 import json
 import os
 from pathlib import Path
+import sys
 import tempfile
 import textwrap
 import threading
@@ -910,7 +911,7 @@ class BackendRunnerSessionTests(unittest.TestCase):
                 Path("/mnt/c/Users/toope/AppData/Local/AHA/aha"),
             )
 
-    def test_user_backend_paths_keep_native_onebin_dir(self) -> None:
+    def test_user_backend_paths_keep_native_onebin_authoritative(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             fake_home = Path(tmp) / "home"
             local_bin = fake_home / ".local" / "bin"
@@ -924,9 +925,13 @@ class BackendRunnerSessionTests(unittest.TestCase):
             ):
                 add_user_backend_paths(env, home=fake_home)
 
-        parts = env["PATH"].split(os.pathsep)
-        self.assertLess(parts.index(str(onebin_dir)), parts.index(str(local_bin)))
-        self.assertLess(parts.index(str(local_bin)), parts.index("/usr/bin"))
+            parts = env["PATH"].split(os.pathsep)
+            authoritative_dir = onebin_dir / "backend-bin" if sys.platform == "win32" else onebin_dir
+            self.assertLess(parts.index(str(authoritative_dir)), parts.index(str(local_bin)))
+            self.assertLess(parts.index(str(local_bin)), parts.index("/usr/bin"))
+            if sys.platform == "win32":
+                self.assertNotIn(str(onebin_dir), parts)
+                self.assertTrue((authoritative_dir / "aha.cmd").is_file())
 
     def test_codex_command_events_are_recorded(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

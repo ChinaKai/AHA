@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import importlib
+import json
 import os
 import re
 from pathlib import Path
@@ -12,6 +14,7 @@ import zipapp
 import zipfile
 
 AHA_WSL_AHA_BIN_ENV = "AHA_WSL_AHA_BIN"
+AHA_RUNTIME_PYTHON_ENV = "AHA_RUNTIME_PYTHON"
 
 
 def _ignore_build_artifacts(_path: str, names: list[str]) -> set[str]:
@@ -58,17 +61,112 @@ def authoritative_onebin_path() -> Path | None:
     return running_zipapp_path()
 
 
-def aha_cli_invocation() -> list[str]:
+def console_python_executable(executable: str | Path | None = None) -> str:
+    """Return a console-capable Python executable when one is available."""
+
+    current = Path(executable or sys.executable)
+    if current.name.lower() != "pythonw.exe":
+        return str(current)
+    candidate = current.with_name("python.exe")
+    return str(candidate if candidate.is_file() else current)
+
+
+def _install_report_python(zipapp_path: Path | None) -> Path | None:
+    if zipapp_path is None:
+        return None
+    report_path = zipapp_path.parent / "install-report.json"
+    try:
+        payload = json.loads(report_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    candidate = Path(str(payload.get("python") or "")).expanduser()
+    return candidate if candidate.is_file() else None
+
+
+def _python_supports_module(executable: Path, module: str) -> bool:
+    code = (
+        "import importlib,sys;"
+        f"importlib.import_module({module!r});sys.exit(0)"
+    )
+    kwargs: dict[str, object] = {}
+    if sys.platform == "win32":
+        kwargs["creationflags"] = int(getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000))
+    try:
+        result = subprocess.run(
+            [str(executable), "-c", code],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+            timeout=5,
+            **kwargs,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return result.returncode == 0
+
+
+def resolve_aha_python(required_module: str | None = None) -> str | None:
+    """Resolve the interpreter AHA should use for a child CLI invocation.
+
+    The running interpreter remains authoritative unless a required optional
+    module is missing. On Windows, installed AHA metadata and the default AHA
+    virtual environment provide conservative recovery candidates.
+    """
+
+    current = Path(sys.executable)
+    if not required_module:
+        return str(current)
+    try:
+        importlib.import_module(required_module)
+        return str(current)
+    except ImportError:
+        pass
+
+    candidates: list[Path] = []
+    configured = str(os.environ.get(AHA_RUNTIME_PYTHON_ENV) or "").strip()
+    if configured:
+        candidates.append(Path(configured).expanduser())
+    zipapp_path = authoritative_onebin_path()
+    reported = _install_report_python(zipapp_path)
+    if reported is not None:
+        candidates.append(reported)
+    if sys.platform == "win32":
+        try:
+            candidates.append(Path.home() / ".venvs" / "aha" / "Scripts" / "python.exe")
+        except RuntimeError:
+            pass
+
+    current_key = os.path.normcase(os.path.abspath(str(current)))
+    seen = {current_key}
+    for candidate in candidates:
+        try:
+            resolved = candidate.resolve()
+        except OSError:
+            continue
+        key = os.path.normcase(os.path.abspath(str(resolved)))
+        if key in seen or not resolved.is_file():
+            continue
+        seen.add(key)
+        if _python_supports_module(resolved, required_module):
+            return str(resolved)
+    return None
+
+
+def aha_cli_invocation(*, required_module: str | None = None) -> list[str]:
     """Command prefix to invoke this AHA runtime's CLI in a subprocess.
 
     Uses the running zipapp (onebin) when present so a packaged dashboard can
     spawn bridges/backends without an importable ``aha_cli`` module; otherwise
     ``python -m aha_cli`` for source checkouts.
     """
+    python = resolve_aha_python(required_module) or sys.executable
     zipapp_path = authoritative_onebin_path()
     if zipapp_path:
-        return [sys.executable, str(zipapp_path)]
-    return [sys.executable, "-m", "aha_cli"]
+        return [str(python), str(zipapp_path)]
+    return [str(python), "-m", "aha_cli"]
 
 
 def default_source_root() -> Path:

@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import os
-import stat
 import sys
 from pathlib import Path
 
-from aha_cli.services.onebin import AHA_WSL_AHA_BIN_ENV
+from aha_cli.services.onebin import (
+    AHA_RUNTIME_PYTHON_ENV,
+    AHA_WSL_AHA_BIN_ENV,
+    console_python_executable,
+)
 
 
 def _running_zipapp() -> Path | None:
@@ -32,30 +35,25 @@ def _aha_cli_dir(zipapp_path: Path | None = None) -> Path | None:
     return executable_dir if executable_dir.is_dir() else None
 
 
-def _ensure_windows_python3_shim(zipapp_path: Path | None) -> None:
-    """On Windows, ensure a ``python3`` shim exists next to the onebin.
+def _ensure_windows_backend_bin(zipapp_path: Path) -> Path | None:
+    """Create Windows command shims without exposing the raw extensionless zipapp."""
 
-    The zipapp shebang is ``#!/usr/bin/env python3``; on Windows the bare
-    ``python3`` commonly resolves to the Microsoft Store redirector stub
-    (AppInstallerPythonRedirector.exe), which exits non-zero without a Store
-    install. An extensionless POSIX shim lets ``env`` find a real interpreter in
-    backend shells (Git Bash / MSYS2). Linux and macOS already provide a working
-    ``python3``, so no shim is created there - shadowing the system command in a
-    PATH-prepended directory would be harmful.
-    """
-    if sys.platform != "win32" or zipapp_path is None:
-        return
-    target = str(sys.executable).replace("\\", "/")
-    shim = zipapp_path.parent / "python3"
-    body = f"#!/bin/sh\nexec \"{target}\" \"$@\"\n"
+    bin_dir = zipapp_path.parent / "backend-bin"
+    python = console_python_executable()
+    wrappers = {
+        "aha.cmd": f'@echo off\r\n"{python}" "{zipapp_path}" %*\r\n',
+        "python3.cmd": f'@echo off\r\n"{python}" %*\r\n',
+    }
     try:
-        if not shim.exists() or shim.read_text(encoding="utf-8") != body:
-            shim.write_text(body, encoding="utf-8")
-            shim.chmod(shim.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+        bin_dir.mkdir(parents=True, exist_ok=True)
+        for name, body in wrappers.items():
+            shim = bin_dir / name
+            encoded = body.encode("utf-8")
+            if not shim.exists() or shim.read_bytes() != encoded:
+                shim.write_text(body, encoding="utf-8", newline="")
     except OSError:
-        # Best-effort: a missing/stale shim only affects `python3` resolution in
-        # backend shells, never AHA itself.
-        pass
+        return None
+    return bin_dir
 
 
 def _ensure_wsl_backend_bin(zipapp_path: Path, home: Path) -> Path:
@@ -99,15 +97,20 @@ def add_user_backend_paths(env: dict[str, str], *, home: Path | None = None) -> 
         candidates.extend(sorted(nvm_root.glob("*/bin"), reverse=True))
 
     zipapp_path = _running_zipapp()
-    _ensure_windows_python3_shim(zipapp_path)
-    # Prepend the running onebin's directory only when running as a packaged
-    # zipapp: the onebin ships its own ``aha`` + python3 shim that child backend
-    # processes must resolve. Under an editable/source install the ``aha``
-    # console-script is already on PATH via pip, so prepending sys.executable's
-    # directory here would shadow user bin dirs (.local/bin, nvm) with the
-    # system interpreter dir.
+    # Prepend an authoritative AHA command only for packaged runtimes. Windows
+    # uses a dedicated .cmd-only directory so the extensionless zipapp is never
+    # offered to ShellExecute; POSIX can execute the zipapp directly. Under an
+    # editable/source install the ``aha`` console-script is already on PATH via
+    # pip, so prepending sys.executable's directory would shadow user bin dirs.
     if zipapp_path is not None:
         aha_dir = _aha_cli_dir(zipapp_path)
+        forwarded_wsl_onebin = bool(str(os.environ.get(AHA_WSL_AHA_BIN_ENV) or "").strip())
+        if sys.platform == "win32" and not forwarded_wsl_onebin:
+            backend_bin = _ensure_windows_backend_bin(zipapp_path)
+            if backend_bin is not None:
+                candidates.insert(0, backend_bin)
+                env[AHA_RUNTIME_PYTHON_ENV] = console_python_executable()
+            aha_dir = None
         # A WSL-hosted watcher runs the Windows onebin from /mnt/<drive>/...;
         # that directory's ``python3`` shim targets Windows pythonw (CRLF,
         # unusable here) and would shadow /usr/bin/python3 for every backend
@@ -115,10 +118,9 @@ def add_user_backend_paths(env: dict[str, str], *, home: Path | None = None) -> 
         # orchestrating Windows instance stays first for ``aha`` lookups
         # (ahead of any separate WSL AHA the user keeps) without dragging the
         # Windows python3 shim onto PATH.
-        forwarded_wsl_onebin = bool(str(os.environ.get(AHA_WSL_AHA_BIN_ENV) or "").strip())
         if aha_dir is not None and not forwarded_wsl_onebin and not str(aha_dir).startswith("/mnt/"):
             candidates.insert(0, aha_dir)
-        else:
+        elif forwarded_wsl_onebin or sys.platform != "win32":
             candidates.insert(0, _ensure_wsl_backend_bin(zipapp_path, home))
 
     existing = [item for item in env.get("PATH", "").split(os.pathsep) if item]
