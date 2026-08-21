@@ -211,9 +211,10 @@ def sync_legacy_backend_env(config: dict) -> dict:
                 threshold = _auto_compact_threshold_percent(binding.get("auto_compact_threshold_percent"))
                 context_window = _positive_window(binding.get("context_window"))
                 if threshold and context_window:
-                    # Codex has no percent knob; translate the threshold into the
-                    # absolute model_auto_compact_token_limit it understands.
-                    common["CODEX_AUTO_COMPACT_TOKEN_LIMIT"] = str(int(context_window * threshold / 100))
+                    # Preserve the user-facing percentage until the Codex model
+                    # catalog is available, so the backend can apply it to the
+                    # effective context window rather than the raw window.
+                    common["CODEX_AUTO_COMPACT_THRESHOLD_PERCENT"] = str(threshold)
             else:
                 anthropic_base = _text(provider.get("anthropic_base_url")) or str(provider.get("base_url") or "")
                 common.update({"ANTHROPIC_BASE_URL": anthropic_base, "ANTHROPIC_MODEL": model_id})

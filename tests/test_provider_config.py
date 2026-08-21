@@ -154,7 +154,8 @@ class ProviderConfigTests(unittest.TestCase):
         claude_group = cfg["claude"]["env"][0]
         self.assertEqual(claude_group["CLAUDE_AUTOCOMPACT_PCT_OVERRIDE"], "60")
         gpt_group = cfg["codex"]["env"][0]
-        self.assertEqual(gpt_group["CODEX_AUTO_COMPACT_TOKEN_LIMIT"], "154800")
+        self.assertEqual(gpt_group["CODEX_AUTO_COMPACT_THRESHOLD_PERCENT"], "60")
+        self.assertNotIn("CODEX_AUTO_COMPACT_TOKEN_LIMIT", gpt_group)
         # Codex has no percent knob of its own; without a context window the
         # threshold cannot be translated and is left to the backend default.
         kimi_group = next(group for group in cfg["codex"]["env"] if group.get("OPENAI_MODEL") == "kimi-k3")

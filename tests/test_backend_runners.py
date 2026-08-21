@@ -328,6 +328,105 @@ class BackendRunnerSessionTests(unittest.TestCase):
         joined = " ".join(overrides)
         self.assertIn("model_auto_compact_token_limit=154800", joined)
 
+    def test_codex_config_overrides_calculates_auto_compact_from_effective_window(self) -> None:
+        cfg = {
+            "configured_models": [
+                {"provider_id": "p1", "model_id": "gpt-5.6-sol", "backend": "codex", "wire_api": "responses", "context_window": 1_000_000},
+            ],
+        }
+        codex_config = codex_config_for_model(
+            {
+                "env": [
+                    {
+                        "name": "gateway",
+                        "AHA_PROVIDER_ID": "p1",
+                        "OPENAI_BASE_URL": "https://example.test/v1",
+                        "OPENAI_MODEL": "gpt-5.6-sol",
+                        "CODEX_AUTO_COMPACT_THRESHOLD_PERCENT": "80",
+                    }
+                ]
+            },
+            "env:gateway",
+        )
+        template = {
+            "slug": "gpt-5.5",
+            "context_window": 258_400,
+            "max_context_window": 272_000,
+            "effective_context_window_percent": 90,
+            "base_instructions": "test",
+        }
+
+        with tempfile.TemporaryDirectory() as tmp:
+            with mock.patch("aha_cli.backends.codex._codex_catalog_template", return_value=template):
+                overrides = codex_config_overrides(codex_config, aha_home=Path(tmp), cfg=cfg)
+
+        joined = " ".join(overrides)
+        self.assertIn("model_auto_compact_token_limit=720000", joined)
+
+    def test_codex_config_overrides_uses_codex_default_effective_percent(self) -> None:
+        cfg = {
+            "configured_models": [
+                {"provider_id": "p1", "model_id": "gpt-5.6-sol", "backend": "codex", "wire_api": "responses", "context_window": 1_000_000},
+            ],
+        }
+        codex_config = codex_config_for_model(
+            {
+                "env": [
+                    {
+                        "name": "gateway",
+                        "AHA_PROVIDER_ID": "p1",
+                        "OPENAI_BASE_URL": "https://example.test/v1",
+                        "OPENAI_MODEL": "gpt-5.6-sol",
+                        "CODEX_AUTO_COMPACT_THRESHOLD_PERCENT": "80",
+                    }
+                ]
+            },
+            "env:gateway",
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            with mock.patch("aha_cli.backends.codex._codex_catalog_template", return_value=None):
+                overrides = codex_config_overrides(codex_config, aha_home=Path(tmp), cfg=cfg)
+
+        joined = " ".join(overrides)
+        self.assertIn("model_auto_compact_token_limit=760000", joined)
+
+    def test_codex_config_overrides_replaces_stale_generated_absolute_limit(self) -> None:
+        cfg = {
+            "configured_models": [
+                {
+                    "provider_id": "p1",
+                    "model_id": "gpt-5.6-sol",
+                    "backend": "codex",
+                    "wire_api": "responses",
+                    "context_window": 1_000_000,
+                    "auto_compact_threshold_percent": 80,
+                },
+            ],
+        }
+        codex_config = codex_config_for_model(
+            {
+                "env": [
+                    {
+                        "name": "gateway",
+                        "AHA_PROVIDER_ID": "p1",
+                        "OPENAI_BASE_URL": "https://example.test/v1",
+                        "OPENAI_MODEL": "gpt-5.6-sol",
+                        "CODEX_AUTO_COMPACT_TOKEN_LIMIT": "800000",
+                    }
+                ]
+            },
+            "env:gateway",
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            with mock.patch("aha_cli.backends.codex._codex_catalog_template", return_value=None):
+                overrides = codex_config_overrides(codex_config, aha_home=Path(tmp), cfg=cfg)
+
+        joined = " ".join(overrides)
+        self.assertIn("model_auto_compact_token_limit=760000", joined)
+        self.assertNotIn("model_auto_compact_token_limit=800000", joined)
+
     def test_codex_config_overrides_skip_auto_compact_without_env_group(self) -> None:
         overrides = codex_config_overrides({"reasoning_effort": "xhigh", "_aha_disable_env": True})
 
@@ -350,6 +449,27 @@ class BackendRunnerSessionTests(unittest.TestCase):
             self.assertEqual(len(payload["models"]), 1)
             self.assertEqual(payload["models"][0]["slug"], "deepseek-v4-flash")
             self.assertEqual(payload["models"][0]["context_window"], 1000000)
+
+    def test_ensure_codex_models_catalog_preserves_template_effective_percent(self) -> None:
+        cfg = {
+            "configured_models": [
+                {"provider_id": "p1", "model_id": "deepseek-v4-flash", "backend": "codex", "wire_api": "responses", "context_window": 1_000_000},
+            ],
+        }
+        template = {
+            "slug": "gpt-5.5",
+            "context_window": 258_400,
+            "max_context_window": 272_000,
+            "effective_context_window_percent": 87,
+            "base_instructions": "test",
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            aha_home = Path(tmp) / "aha"
+            with mock.patch("aha_cli.backends.codex._codex_catalog_template", return_value=template):
+                path = ensure_codex_models_catalog(cfg, aha_home)
+
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            self.assertEqual(payload["models"][0]["effective_context_window_percent"], 87)
 
     def test_ensure_codex_models_catalog_scopes_to_provider(self) -> None:
         cfg = {
@@ -395,6 +515,40 @@ class BackendRunnerSessionTests(unittest.TestCase):
             self.assertTrue(catalog_path.exists())
             payload = json.loads(catalog_path.read_text(encoding="utf-8"))
             self.assertEqual(payload["models"][0]["slug"], "deepseek-v4-flash")
+
+    def test_codex_env_group_scopes_catalog_with_configured_provider_id(self) -> None:
+        cfg = {
+            "configured_models": [
+                {"provider_id": "hualai", "model_id": "gpt-5.6-sol", "backend": "codex", "wire_api": "responses", "context_window": 1_050_000},
+                {"provider_id": "other", "model_id": "gpt-5.6-sol", "backend": "codex", "wire_api": "responses", "context_window": 258_000},
+            ],
+        }
+        codex_config = codex_config_for_model(
+            {
+                "env": [
+                    {
+                        "name": "hualai-sol",
+                        "AHA_PROVIDER_ID": "hualai",
+                        "OPENAI_BASE_URL": "https://example.test/v1",
+                        "OPENAI_MODEL": "gpt-5.6-sol",
+                    }
+                ]
+            },
+            "env:hualai-sol",
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            aha_home = Path(tmp) / "aha"
+            with mock.patch("aha_cli.backends.codex._codex_catalog_template", return_value=None):
+                overrides = codex_config_overrides(codex_config, aha_home=aha_home, cfg=cfg)
+
+            joined = " ".join(overrides)
+            self.assertIn("model_catalog_json=", joined)
+            self.assertIn('model_provider="aha_codex_hualai_sol_', joined)
+            payload = json.loads((aha_home / "codex-models.json").read_text(encoding="utf-8"))
+            self.assertEqual(len(payload["models"]), 1)
+            self.assertEqual(payload["models"][0]["slug"], "gpt-5.6-sol")
+            self.assertEqual(payload["models"][0]["context_window"], 1_050_000)
 
     def test_codex_exec_records_resolved_default_model_in_session(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

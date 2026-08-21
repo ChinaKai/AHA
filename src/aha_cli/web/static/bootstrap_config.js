@@ -336,7 +336,7 @@
             <label class="field-label"><span>Context window</span><input data-bootstrap-model-field="context_window" type="number" min="0" placeholder="200000" value="${escapeHtml(configString(binding.context_window))}"></label>
             <label class="field-label"><span>Auto-compact threshold %</span><input data-bootstrap-model-field="auto_compact_threshold_percent" type="number" min="1" max="99" placeholder="e.g. 75" value="${escapeHtml(configString(binding.auto_compact_threshold_percent))}"></label>
           </div>
-          <div class="field-help">Trigger the backend's own auto-compact at this context usage (1-99). Claude: CLAUDE_AUTOCOMPACT_PCT_OVERRIDE. Codex: needs a Context window to compute model_auto_compact_token_limit. Leave blank for the backend default.</div>
+          <div class="field-help">Trigger the backend's own auto-compact at this context usage (1-99). Claude: CLAUDE_AUTOCOMPACT_PCT_OVERRIDE. Codex: needs a Context window and applies the percentage to its effective context window. Leave blank for the backend default.</div>
           <details class="bootstrap-env-advanced">
             <summary>Claude role models (optional)</summary>
             <div class="bootstrap-env-fields">${roleRows}<div class="field-help">Role overrides for Claude Code; leave blank to use the primary model.</div></div>

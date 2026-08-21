@@ -838,6 +838,10 @@ class BackendRuntimeTests(unittest.TestCase):
                 mock.patch("pathlib.Path.home", return_value=home),
             ):
                 self.run_cli("--home", str(aha_root), "init", "--portable", "--backend", "codex")
+                cfg_path = aha_root / "config.json"
+                cfg = read_json(cfg_path)
+                cfg["context_windows"] = {"codex": {"gpt-5.5": 1_000_000}}
+                write_json(cfg_path, cfg)
                 code, plan_output = self.run_cli("--home", str(aha_root), "plan", "Context pressure", "--agents", "1")
                 self.assertEqual(code, 0)
                 run_id = plan_output.splitlines()[0].split(": ", 1)[1]

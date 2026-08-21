@@ -48,10 +48,12 @@ BACKEND_AUTO_CONTEXT_COMPACT_MESSAGE_MARKERS = (
 )
 CODEX_ENV_MODEL_PREFIX = "env:"
 CODEX_PROVIDER_OVERRIDE_KEY = "_provider_override"
+CODEX_CONFIGURED_PROVIDER_ID_KEY = "_configured_provider_id"
 CODEX_PROVIDER_DEFAULT_WIRE_API = "responses"
 CODEX_DISABLE_ENV_KEY = "_aha_disable_env"
 CODEX_LITELLM_RESPONSES_BRIDGE_KEY = "_litellm_responses_bridge"
 CODEX_ENV_GROUP_FIELDS = (
+    "AHA_PROVIDER_ID",
     "OPENAI_BASE_URL",
     "OPENAI_MODEL",
     "OPENAI_API_KEY",
@@ -331,6 +333,9 @@ def codex_provider_override_from_env_group(codex_config: dict | None) -> dict:
         "requires_openai_auth": False,
         "env_key": env_key,
     }
+    configured_provider_id = _codex_group_value(group, "AHA_PROVIDER_ID")
+    if configured_provider_id:
+        provider[CODEX_CONFIGURED_PROVIDER_ID_KEY] = configured_provider_id
     if bridge:
         provider[CODEX_LITELLM_RESPONSES_BRIDGE_KEY] = bridge
     return provider
@@ -346,6 +351,7 @@ def _toml_bool(value: object) -> str:
 
 CODEX_MODELS_CATALOG_FILE = "codex-models.json"
 CODEX_CATALOG_TEMPLATE_SLUG = "gpt-5.5"
+CODEX_DEFAULT_EFFECTIVE_CONTEXT_WINDOW_PERCENT = 95
 
 
 def _positive_int(value: object) -> int | None:
@@ -358,6 +364,52 @@ def _positive_int(value: object) -> int | None:
 
 def _codex_models_catalog_path(aha_home: Path) -> Path:
     return aha_home / CODEX_MODELS_CATALOG_FILE
+
+
+def _codex_effective_context_window(catalog_path: Path, model: str) -> int | None:
+    try:
+        payload = json.loads(catalog_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    models = payload.get("models") if isinstance(payload.get("models"), list) else []
+    entry = next(
+        (
+            item
+            for item in models
+            if isinstance(item, dict) and str(item.get("slug") or "").strip() == model
+        ),
+        None,
+    )
+    if not entry:
+        return None
+    context_window = _positive_int(entry.get("context_window"))
+    effective_percent = _positive_int(entry.get("effective_context_window_percent"))
+    if effective_percent is None or effective_percent > 100:
+        effective_percent = CODEX_DEFAULT_EFFECTIVE_CONTEXT_WINDOW_PERCENT
+    return int(context_window * effective_percent / 100) if context_window else None
+
+
+def _configured_codex_auto_compact_threshold(
+    cfg: dict | None,
+    provider_id: str | None,
+    model: str,
+) -> int | None:
+    configured = cfg.get("configured_models") if isinstance(cfg, dict) else []
+    if not isinstance(configured, list):
+        return None
+    normalized_provider = str(provider_id or "").strip()
+    for item in configured:
+        if not isinstance(item, dict):
+            continue
+        if str(item.get("backend") or "").strip().lower() != "codex":
+            continue
+        if str(item.get("model_id") or "").strip() != model:
+            continue
+        if normalized_provider and str(item.get("provider_id") or "").strip() != normalized_provider:
+            continue
+        threshold = _positive_int(item.get("auto_compact_threshold_percent"))
+        return threshold if threshold and threshold <= 99 else None
+    return None
 
 
 def _codex_catalog_template() -> dict | None:
@@ -430,14 +482,12 @@ def ensure_codex_models_catalog(
             entry["display_name"] = str(item.get("name") or model_id)
             entry["context_window"] = window
             entry["max_context_window"] = max(window, _positive_int(template.get("max_context_window")) or 0)
-            entry["effective_context_window_percent"] = 95
             entry.pop("auto_compact_token_limit", None)
         else:
             entry = {
                 "slug": model_id,
                 "context_window": window,
                 "max_context_window": window,
-                "effective_context_window_percent": 95,
                 "supported_in_api": True,
                 "visibility": "list",
             }
@@ -543,28 +593,43 @@ def codex_config_overrides(
     cfg: dict | None = None,
 ) -> list[str]:
     overrides: list[str] = []
+    active_group = codex_active_env_group(codex_config)
     if isinstance(codex_config, dict):
         reasoning_effort = normalize_reasoning_effort(codex_config.get("reasoning_effort"), "codex")
         if reasoning_effort:
             overrides.extend(["-c", f"model_reasoning_effort={_toml_string(reasoning_effort)}"])
-        # Configured models may set an auto-compact threshold percent; the env
-        # group carries it pre-computed as an absolute token limit because Codex
-        # only understands model_auto_compact_token_limit.
-        token_limit = _positive_int(
-            _codex_group_value(codex_active_env_group(codex_config), "CODEX_AUTO_COMPACT_TOKEN_LIMIT")
-        )
-        if token_limit:
-            overrides.extend(["-c", f"model_auto_compact_token_limit={token_limit}"])
     # Declare configured model windows via a codex model catalog so custom models
     # (e.g. deepseek-v4-flash at 1M) are honored instead of the 258K fallback.
     # Scope the catalog to the active provider so the same model_id bound to two
     # providers with different windows does not share an entry.
+    catalog_path: Path | None = None
+    active_provider = _provider_override(codex_config)
+    active_provider_id = str(
+        active_provider.get(CODEX_CONFIGURED_PROVIDER_ID_KEY)
+        or active_provider.get("provider_id")
+        or ""
+    ).strip() or None
     if aha_home is not None:
-        active_provider = _provider_override(codex_config)
-        active_provider_id = str(active_provider.get("provider_id") or "").strip() or None
         catalog_path = ensure_codex_models_catalog(cfg, aha_home, provider_id=active_provider_id)
         if catalog_path is not None:
             overrides.extend(["-c", f"model_catalog_json={_toml_string(str(catalog_path))}"])
+    # Keep accepting the legacy absolute limit. Newly generated Env Groups carry
+    # a percentage, which is resolved against the same effective window Codex
+    # reports as the CTX denominator.
+    model = _codex_group_value(active_group, "OPENAI_MODEL")
+    threshold = _configured_codex_auto_compact_threshold(cfg, active_provider_id, model)
+    threshold = threshold or _positive_int(
+        _codex_group_value(active_group, "CODEX_AUTO_COMPACT_THRESHOLD_PERCENT")
+    )
+    token_limit: int | None = None
+    if threshold and threshold <= 99 and catalog_path is not None:
+        effective_window = _codex_effective_context_window(catalog_path, model)
+        if effective_window:
+            token_limit = int(effective_window * threshold / 100)
+    if not token_limit:
+        token_limit = _positive_int(_codex_group_value(active_group, "CODEX_AUTO_COMPACT_TOKEN_LIMIT"))
+    if token_limit:
+        overrides.extend(["-c", f"model_auto_compact_token_limit={token_limit}"])
     provider = _provider_override(codex_config)
     base_url = str(provider.get("base_url") or "").strip()
     if not base_url:

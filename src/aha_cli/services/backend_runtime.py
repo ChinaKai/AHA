@@ -838,7 +838,7 @@ def backend_status(root: Path, run_id: str, target: str = "main", task_id: str |
             runtime_context_window=runtime_context_window,
             runtime_token_usage=pressure_runtime_usage,
             cfg=cfg,
-            prefer_runtime_context_window=normalized_backend_name == "claude" and runtime_context_window is not None,
+            prefer_runtime_context_window=normalized_backend_name in {"claude", "codex"} and runtime_context_window is not None,
             provider_id=provider_id,
         ),
         **activity,
