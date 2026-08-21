@@ -26,6 +26,7 @@ from pathlib import Path
 from aha_cli.domain.models import utc_now
 from aha_cli.services.knowledge_git import sync as knowledge_sync
 from aha_cli.services.knowledge_maintenance import (
+    clear_finished_maintenance,
     dispatch_maintenance_job,
     maintenance_record,
     read_sync_state,
@@ -110,6 +111,8 @@ def _run_scheduled_sync(root: Path) -> None:
             do_push=True,
         )
         _record_loop_state(root, result, interval_minutes=float(sync_cfg.get("interval_minutes", 60)))
+        if result.get("ok"):
+            clear_finished_maintenance(root)
         if should_dispatch_sync_agent(result):
             parameters = inspect.signature(dispatch_maintenance_job).parameters.values()
             supports_kwargs = any(parameter.kind == inspect.Parameter.VAR_KEYWORD for parameter in parameters)

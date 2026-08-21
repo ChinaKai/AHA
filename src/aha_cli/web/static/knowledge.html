@@ -41,6 +41,11 @@
     .kb-modal-action-row { align-items: center; }
     .kb-modal-action-group { display: flex; gap: 8px; flex-wrap: nowrap; overflow-x: auto; min-width: 0; }
     .kb-modal-action-group:empty { display: none; }
+    .kb-button-link {
+      display: inline-flex; align-items: center; justify-content: center;
+      min-height: var(--control-height-md); padding: 0 12px;
+      color: var(--button-ghost-text); font: inherit; line-height: 1.1; text-decoration: none;
+    }
     .kb-entry-index { display: grid; gap: 12px; margin: 12px 0; min-width: 0; }
     .kb-entry-index-head {
       display: flex; align-items: center; justify-content: space-between;
@@ -4395,12 +4400,14 @@
         ? t("knowledge.capture_distilling", "Distilling…")
         : distillOpen ? t("knowledge.capture_distill_close", "Close distill")
         : hasProducedKnowledge ? t("knowledge.capture_redistill", "Redistill") : t("knowledge.capture_distill", "Distill");
-      const managementTaskHref = note.management_run_id && note.management_task_id
-        ? `/?run_id=${encodeURIComponent(note.management_run_id)}&selected_task_id=${encodeURIComponent(note.management_task_id)}`
+      const hasManagementTask = note.management_run_id && note.management_task_id;
+      const managementTaskHref = hasManagementTask && note.management_task_available
+        ? `/?view=task&run_id=${encodeURIComponent(note.management_run_id)}&selected_task_id=${encodeURIComponent(note.management_task_id)}`
         : "";
       return `
         <button class="kb-approve" type="button" aria-expanded="${distillOpen ? "true" : "false"}" ${note.status === "distilling" ? "disabled" : ""} onclick="toggleDistillPanel('${esc(note.id)}')">${esc(distillLabel)}</button>
-        ${managementTaskHref ? `<a class="button-ghost" href="${esc(managementTaskHref)}">${esc(t("knowledge.open_task", "Open task"))}</a>` : ""}
+        ${managementTaskHref ? `<a class="button-ghost kb-button-link" href="${esc(managementTaskHref)}" target="_top">${esc(t("knowledge.open_task", "Open task"))}</a>` : ""}
+        ${hasManagementTask && !note.management_task_available ? `<span class="kb-muted">${esc(t("knowledge.task_unavailable_on_device", "Task unavailable on this device"))}</span>` : ""}
         <button class="button-ghost" type="button" onclick="editNote('${esc(note.id)}')">${esc(t("knowledge.edit", "Edit"))}</button>
         <button class="kb-reject" type="button" onclick="deleteNote('${esc(note.id)}')">${esc(t("knowledge.delete", "Delete"))}</button>`;
     }
@@ -5136,16 +5143,27 @@
         return [{ text: formatText("knowledge.sync_status_remote_error", { error: status.remote_error }, "Remote check failed: " + status.remote_error) }];
       }
       const maintenance = status.maintenance || {};
+      const managementTask = maintenance.management_task || {};
+      const managementTaskPart = managementTask.run_id && managementTask.task_id
+        ? managementTask.available
+          ? {
+              text: t("knowledge.open_task", "Open task"),
+              action: "open_task",
+              href: `/?view=task&run_id=${encodeURIComponent(managementTask.run_id)}&selected_task_id=${encodeURIComponent(managementTask.task_id)}`,
+            }
+          : { text: t("knowledge.task_unavailable_on_device", "Task unavailable on this device") }
+        : null;
+      const withManagementTask = (parts) => managementTaskPart ? [...parts, managementTaskPart] : parts;
       if (maintenance.status === "running") {
-        return [{ text: t("knowledge.sync_status_resolving", "Resolving conflicts...") }];
+        return withManagementTask([{ text: t("knowledge.sync_status_resolving", "Resolving conflicts...") }]);
       }
       if (status.unmerged?.length || status.state === "conflict") {
         const files = (status.conflict_files || []).slice(0, 3).join(", ");
         const extra = files ? " · " + files : "";
         return [{ text: t("knowledge.sync_status_conflict", "Sync conflict needs resolution") + extra }];
       }
-      if (maintenance.status === "resolved") {
-        return [{ text: maintenance.summary || t("knowledge.sync_status_resolved", "Conflicts resolved") }];
+      if (maintenance.status === "failed") {
+        return withManagementTask([{ text: maintenance.summary || maintenance.error || t("knowledge.sync_failed", "Sync failed") }]);
       }
       const parts = [];
       if (status.changed_count) {
@@ -5189,6 +5207,13 @@
             button.setAttribute("aria-haspopup", "dialog");
             button.addEventListener("click", () => openLocalChangesModal(button));
             el.append(button);
+          } else if (part.action === "open_task" && part.href) {
+            const link = document.createElement("a");
+            link.className = "kb-sync-status-action";
+            link.href = part.href;
+            link.target = "_top";
+            link.textContent = part.text;
+            el.append(link);
           } else {
             el.append(document.createTextNode(part.text));
           }

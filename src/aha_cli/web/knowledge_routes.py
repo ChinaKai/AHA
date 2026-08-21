@@ -161,7 +161,7 @@ def _default_dispatch_distill_job(
                 pass
             finish_knowledge_task(root, task_context, f"Capture 整理任务异常：{exc}", ok=False)
 
-    management_task = public_knowledge_task(task_context)
+    management_task = public_knowledge_task(task_context, root=root)
     capture.update_note(
         root,
         cfg,
@@ -417,7 +417,7 @@ def _default_dispatch_project_nav_job(root: Path, cfg: dict, draft_id: str, **kw
         target=_run,
         daemon=True,
     ).start()
-    return {"management_task": public_knowledge_task(task_context)}
+    return {"management_task": public_knowledge_task(task_context, root=root)}
 
 
 # Module-level seam so tests can substitute synchronous execution.
@@ -431,7 +431,17 @@ def _note_view(note: dict | None, root: Path | None = None, cfg: dict | None = N
         return None
     view = dict(note)
     if root is not None:
+        from aha_cli.services.knowledge_tasks import knowledge_task_available
+
         view["render_text"] = capture.note_text_for_web(root, cfg, note)
+        management_run_id = str(view.get("management_run_id") or "")
+        management_task_id = str(view.get("management_task_id") or "")
+        if management_run_id and management_task_id:
+            view["management_task_available"] = knowledge_task_available(
+                root,
+                management_run_id,
+                management_task_id,
+            )
         raw_path = str(view.get("_path") or "").strip()
         if raw_path:
             try:
@@ -439,6 +449,20 @@ def _note_view(note: dict | None, root: Path | None = None, cfg: dict | None = N
             except (OSError, ValueError):
                 pass
     view.pop("_path", None)
+    return view
+
+
+def _management_task_view(root: Path, task: object) -> dict | None:
+    if not isinstance(task, dict):
+        return None
+    from aha_cli.services.knowledge_tasks import knowledge_task_available
+
+    view = dict(task)
+    view["available"] = knowledge_task_available(
+        root,
+        view.get("run_id"),
+        view.get("task_id"),
+    )
     return view
 
 
@@ -1372,7 +1396,10 @@ def knowledge_route_response(
         # live git state so the web panel can show conflict detail and agent jobs.
         from aha_cli.services.knowledge_maintenance import maintenance_record, read_sync_state
 
-        status["maintenance"] = maintenance_record(root)
+        maintenance = dict(maintenance_record(root))
+        if maintenance.get("management_task"):
+            maintenance["management_task"] = _management_task_view(root, maintenance.get("management_task"))
+        status["maintenance"] = maintenance
         status["sync_loop"] = (read_sync_state(root).get("loop") or {})
         kb_cfg = knowledge_config(cfg)
         sync_cfg = kb_cfg.get("sync") if isinstance(kb_cfg.get("sync"), dict) else {}
@@ -2202,12 +2229,19 @@ def knowledge_route_response(
         result = knowledge_sync(root, cfg, message=message, do_pull=do_pull, do_push=do_push)
         maintenance = None
         management_task = None
-        from aha_cli.services.knowledge_maintenance import dispatch_sync_agent, maintenance_record, should_dispatch_sync_agent
+        from aha_cli.services.knowledge_maintenance import (
+            clear_finished_maintenance,
+            dispatch_sync_agent,
+            maintenance_record,
+            should_dispatch_sync_agent,
+        )
 
-        if should_dispatch_sync_agent(result):
+        if result.get("ok"):
+            clear_finished_maintenance(root)
+        elif should_dispatch_sync_agent(result):
             dispatched = dispatch_sync_agent(root, cfg, result, source="manual")
             maintenance = dispatched.get("maintenance") or maintenance_record(root)
-            management_task = dispatched.get("management_task")
+            management_task = _management_task_view(root, dispatched.get("management_task"))
         return json_response({
             "ok": bool(result.get("ok")),
             "sync": result,

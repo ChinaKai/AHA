@@ -685,8 +685,13 @@ def cmd_kb(args: argparse.Namespace) -> int:
             do_push=True if args.push else None,
         )
         maintenance = None
+        management_task = None
+        if result.get("ok"):
+            from aha_cli.services.knowledge_maintenance import clear_finished_maintenance
+
+            clear_finished_maintenance(root)
         if getattr(args, "resolve", False) and result.get("conflict"):
-            from aha_cli.services.knowledge_maintenance import maintenance_record, run_kb_maintenance_job
+            from aha_cli.services.knowledge_maintenance import run_sync_agent_task
 
             if getattr(args, "json", False):
                 # The maintenance agent streams backend progress to stdout,
@@ -695,13 +700,17 @@ def cmd_kb(args: argparse.Namespace) -> int:
                 import io
 
                 with contextlib.redirect_stdout(io.StringIO()):
-                    maintenance = run_kb_maintenance_job(root, cfg)
+                    dispatched = run_sync_agent_task(root, cfg, result, source="cli")
             else:
-                maintenance = run_kb_maintenance_job(root, cfg)
+                dispatched = run_sync_agent_task(root, cfg, result, source="cli")
+            maintenance = dispatched.get("maintenance")
+            management_task = dispatched.get("management_task")
         if getattr(args, "json", False):
             payload = dict(result)
             if maintenance:
                 payload["maintenance"] = maintenance
+            if management_task:
+                payload["management_task"] = management_task
             print(json.dumps(payload, indent=2, ensure_ascii=False))
         else:
             steps = result.get("steps", {})
@@ -712,6 +721,8 @@ def cmd_kb(args: argparse.Namespace) -> int:
                 print("sync CONFLICT")
                 if maintenance:
                     print(f"maintenance: {maintenance.get('status')} — {maintenance.get('summary') or maintenance.get('error')}")
+                if management_task:
+                    print(f"management task: {management_task.get('run_id')}/{management_task.get('task_id')}")
             else:
                 print(f"sync {'ok' if result['ok'] else 'FAILED'}")
         return 0 if (result.get("ok") or maintenance and maintenance.get("status") == "resolved") else 1

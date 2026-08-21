@@ -354,3 +354,56 @@ def test_pending_identity_keeps_legacy_same_title_without_chinese_slug_collision
         "Wyze 云存上传双路视频排查要点",
     }
     assert next(item for item in pending if item["title"] == existing["title"])["body"] == "new"
+
+
+def test_kb_sync_resolve_returns_management_task(tmp_path: Path, monkeypatch):
+    import aha_cli.cli as cli
+    import aha_cli.services.knowledge_maintenance as maintenance
+
+    home = _home(tmp_path)
+    monkeypatch.setattr(
+        cli,
+        "knowledge_sync",
+        lambda *args, **kwargs: {"ok": False, "conflict": True, "steps": {}},
+    )
+    monkeypatch.setattr(
+        maintenance,
+        "run_sync_agent_task",
+        lambda *args, **kwargs: {
+            "maintenance": {"status": "resolved", "summary": "resolved"},
+            "management_task": {
+                "run_id": "knowledge-run",
+                "task_id": "task-sync",
+                "title": "知识库同步冲突处理",
+                "available": True,
+            },
+        },
+    )
+
+    rc, out = _run(home, "sync", "--resolve", "--json")
+
+    assert rc == 0
+    payload = json.loads(out)
+    assert payload["management_task"]["task_id"] == "task-sync"
+    assert payload["maintenance"]["status"] == "resolved"
+
+
+def test_kb_sync_success_clears_finished_maintenance(tmp_path: Path, monkeypatch):
+    import aha_cli.cli as cli
+    import aha_cli.services.knowledge_maintenance as maintenance
+
+    home = _home(tmp_path)
+    maintenance.write_sync_state(
+        home,
+        {"maintenance": {"status": "resolved", "summary": "old"}, "loop": {}},
+    )
+    monkeypatch.setattr(
+        cli,
+        "knowledge_sync",
+        lambda *args, **kwargs: {"ok": True, "steps": {}},
+    )
+
+    rc, _out = _run(home, "sync", "--json")
+
+    assert rc == 0
+    assert maintenance.maintenance_record(home) == {"status": "idle"}

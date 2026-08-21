@@ -79,6 +79,17 @@ def maintenance_record(root: Path) -> dict:
     return read_sync_state(root).get("maintenance") or {"status": "idle"}
 
 
+def clear_finished_maintenance(root: Path) -> bool:
+    """Clear a completed maintenance banner after a later successful sync."""
+    state = read_sync_state(root)
+    maintenance = state.get("maintenance") if isinstance(state.get("maintenance"), dict) else {}
+    if maintenance.get("status") not in {"resolved", "failed"}:
+        return False
+    state["maintenance"] = {"status": "idle"}
+    write_sync_state(root, state)
+    return True
+
+
 # --------------------------------------------------------------------------- #
 # Agent prompt + plan parsing
 # --------------------------------------------------------------------------- #
@@ -239,7 +250,7 @@ def _fresh_record(root: Path, config: dict | None, *, backend: str | None, task_
         "agent_backend": resolved_backend,
         "fallback_used": False,
     }
-    management_task = public_knowledge_task(task_context)
+    management_task = public_knowledge_task(task_context, root=root)
     if management_task:
         record["management_task"] = management_task
     return record
@@ -549,6 +560,48 @@ def _default_dispatch_maintenance_job(
     (scheduled or manual) sees an in-flight job and skips, avoiding a race where
     a second ``pull`` aborts the rebase mid-resolution.
     """
+    task_context, is_conflict, state = _prepare_sync_maintenance_task(
+        root,
+        config,
+        backend=backend,
+        model=model,
+        sync_result=sync_result,
+        source=source,
+    )
+    resolved_backend = task_context.get("backend")
+    resolved_model = task_context.get("model")
+    resolved_reasoning_effort = task_context.get("reasoning_effort")
+    resolved_proxy_enabled = task_context.get("proxy_enabled")
+
+    def _run() -> None:
+        _execute_sync_maintenance_task(
+            root,
+            config,
+            task_context,
+            is_conflict=is_conflict,
+            sync_result=sync_result,
+            backend=resolved_backend,
+            model=resolved_model,
+            reasoning_effort=resolved_reasoning_effort,
+            proxy_enabled=resolved_proxy_enabled,
+        )
+
+    threading.Thread(target=_run, daemon=True).start()
+    return {
+        "maintenance": state["maintenance"],
+        "management_task": public_knowledge_task(task_context, root=root),
+    }
+
+
+def _prepare_sync_maintenance_task(
+    root: Path,
+    config: dict | None,
+    *,
+    backend=None,
+    model=None,
+    sync_result: dict | None = None,
+    source: str = "sync",
+) -> tuple[dict, bool, dict]:
     is_conflict = bool((sync_result or {}).get("conflict") or unmerged_paths(knowledge_root(root, config)))
     operation = "sync_conflict" if is_conflict else "sync_failure"
     title = "知识库同步冲突处理" if is_conflict else "知识库同步故障处理"
@@ -586,33 +639,83 @@ def _default_dispatch_maintenance_job(
         "pushed": False,
         "agent_backend": resolved_backend,
         "fallback_used": False,
-        "management_task": public_knowledge_task(task_context),
+        "management_task": public_knowledge_task(task_context, root=root),
     }
     write_sync_state(root, state)
+    return task_context, is_conflict, state
 
-    def _run() -> None:
-        try:
-            start_knowledge_task(root, task_context)
-            record = run_kb_sync_recovery_job(
-                root,
-                config,
-                sync_result or {"ok": False, "conflict": is_conflict},
-                backend=resolved_backend,
-                model=resolved_model,
-                reasoning_effort=resolved_reasoning_effort,
-                proxy_enabled=resolved_proxy_enabled,
-                progress_callback=None,
-                task_context=task_context,
-            )
-            diagnosis = str(record.get("diagnosis") or "").strip()
-            summary = str(record.get("summary") or record.get("error") or "同步维护结束。")
-            final = f"{summary}\n\n{diagnosis}".strip()
-            finish_knowledge_task(root, task_context, final, ok=record.get("status") == "resolved")
-        except Exception as exc:  # noqa: BLE001 - background job must not raise
-            finish_knowledge_task(root, task_context, f"同步维护任务异常：{exc}", ok=False)
 
-    threading.Thread(target=_run, daemon=True).start()
-    return {"maintenance": state["maintenance"], "management_task": public_knowledge_task(task_context)}
+def _execute_sync_maintenance_task(
+    root: Path,
+    config: dict | None,
+    task_context: dict,
+    *,
+    is_conflict: bool,
+    sync_result: dict | None,
+    backend,
+    model,
+    reasoning_effort,
+    proxy_enabled,
+) -> dict:
+    try:
+        start_knowledge_task(root, task_context)
+        record = run_kb_sync_recovery_job(
+            root,
+            config,
+            sync_result or {"ok": False, "conflict": is_conflict},
+            backend=backend,
+            model=model,
+            reasoning_effort=reasoning_effort,
+            proxy_enabled=proxy_enabled,
+            progress_callback=None,
+            task_context=task_context,
+        )
+        diagnosis = str(record.get("diagnosis") or "").strip()
+        summary = str(record.get("summary") or record.get("error") or "同步维护结束。")
+        final = f"{summary}\n\n{diagnosis}".strip()
+        finish_knowledge_task(root, task_context, final, ok=record.get("status") == "resolved")
+        return record
+    except Exception as exc:  # noqa: BLE001 - background jobs must always settle their visible task
+        message = f"同步维护任务异常：{exc}"
+        finish_knowledge_task(root, task_context, message, ok=False)
+        record = maintenance_record(root)
+        record.update({"status": "failed", "summary": message, "error": str(exc)})
+        return _finish(root, record)
+
+
+def run_sync_agent_task(
+    root: Path,
+    config: dict | None,
+    sync_result: dict,
+    *,
+    source: str,
+    backend=None,
+    model=None,
+) -> dict:
+    """Run sync recovery synchronously while preserving a visible management task."""
+    task_context, is_conflict, _state = _prepare_sync_maintenance_task(
+        root,
+        config,
+        backend=backend,
+        model=model,
+        sync_result=sync_result,
+        source=source,
+    )
+    record = _execute_sync_maintenance_task(
+        root,
+        config,
+        task_context,
+        is_conflict=is_conflict,
+        sync_result=sync_result,
+        backend=task_context.get("backend"),
+        model=task_context.get("model"),
+        reasoning_effort=task_context.get("reasoning_effort"),
+        proxy_enabled=task_context.get("proxy_enabled"),
+    )
+    return {
+        "maintenance": record,
+        "management_task": public_knowledge_task(task_context, root=root),
+    }
 
 
 dispatch_maintenance_job = _default_dispatch_maintenance_job

@@ -998,6 +998,33 @@ def test_capture_distill_forwards_backend_model_proxy_and_reasoning_effort(tmp_p
     note = _get(home, "/api/kb/capture", {"id": [nid]})
     assert note["management_run_id"] == "knowledge-run"
     assert note["management_task_id"] == "task-distill"
+    assert note["management_task_available"] is False
+
+
+def test_capture_management_task_availability_is_local(tmp_path: Path):
+    from aha_cli.services.knowledge_tasks import create_knowledge_task
+    from aha_cli.store import knowledge_capture as capture
+
+    home = _setup(tmp_path)
+    cfg = load_config(home)
+    note_id = json_response_body(_post(home, "/api/kb/capture", {"text": "raw"}))["note"]["id"]
+    context = create_knowledge_task(
+        home,
+        cfg,
+        operation="capture_distill",
+        title="Capture",
+        description="Distill capture.",
+    )
+    capture.update_note(
+        home,
+        cfg,
+        note_id,
+        management_run_id=context["run_id"],
+        management_task_id=context["task_id"],
+    )
+
+    note = _get(home, "/api/kb/capture", {"id": [note_id]})
+    assert note["management_task_available"] is True
 
 
 def test_capture_distill_missing_note_is_404(tmp_path: Path):
@@ -1937,6 +1964,7 @@ def test_sync_failure_dispatches_visible_kb_management_task(tmp_path: Path, monk
     assert out["ok"] is False
     assert out["agent_dispatched"] is True
     assert out["management_task"]["run_id"] == "kb-run"
+    assert out["management_task"]["available"] is False
     assert out["maintenance"]["status"] == "running"
 
 
@@ -1944,6 +1972,7 @@ def test_sync_endpoint_runs_manual_git_sync(tmp_path: Path, monkeypatch):
     home = _setup(tmp_path)
     calls = []
 
+    import aha_cli.services.knowledge_maintenance as km
     import aha_cli.web.knowledge_routes as kr
 
     def fake_sync(root, cfg, *, message, do_pull, do_push):
@@ -1957,6 +1986,7 @@ def test_sync_endpoint_runs_manual_git_sync(tmp_path: Path, monkeypatch):
         return {"ok": True, "steps": {"ensure": {"ok": True}}}
 
     monkeypatch.setattr(kr, "knowledge_sync", fake_sync)
+    km.write_sync_state(home, {"maintenance": {"status": "resolved", "summary": "old"}, "loop": {}})
 
     out = json_response_body(_post(home, "/api/kb/sync", {}))
 
@@ -1967,6 +1997,7 @@ def test_sync_endpoint_runs_manual_git_sync(tmp_path: Path, monkeypatch):
     assert calls[0]["do_push"] is True
     assert calls[0]["enabled"] is True
     assert calls[0]["message"].startswith("chore(knowledge): manual web sync ")
+    assert km.maintenance_record(home) == {"status": "idle"}
 
 
 def test_sync_status_endpoint_checks_local_by_default_and_remote_on_request(tmp_path: Path, monkeypatch):

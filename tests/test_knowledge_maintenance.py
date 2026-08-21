@@ -10,6 +10,7 @@ from aha_cli.domain.models import default_knowledge_config
 from aha_cli.services import knowledge_git as kg
 from aha_cli.services import knowledge_maintenance as km
 from aha_cli.services import knowledge_sync_loop as ksl
+from aha_cli.store.filesystem import task_snapshot
 from aha_cli.store.io import write_json
 from aha_cli.store.knowledge import knowledge_root, write_entry
 from aha_cli.store.paths import config_path
@@ -278,6 +279,32 @@ def test_maintenance_job_archive_preserves_local_outside_repo(tmp_path: Path):
     assert "AGENT REMOTE VERSION" in local_entry.read_text()
 
 
+def test_run_sync_agent_task_creates_visible_management_task(tmp_path: Path, monkeypatch):
+    root, cfg, _repo, _entry = _diverged_repo(tmp_path)
+    sync_result = kg.sync(root, cfg, message="manual sync")
+
+    def fake_recovery(r, c, result, **kwargs):
+        record = km.maintenance_record(r)
+        record.update({
+            "status": "resolved",
+            "summary": "resolved in visible task",
+            "error": "",
+            "finished_at": "2026-08-21T00:00:00+00:00",
+        })
+        return km._finish(r, record)
+
+    monkeypatch.setattr(km, "run_kb_sync_recovery_job", fake_recovery)
+    dispatched = km.run_sync_agent_task(root, cfg, sync_result, source="cli")
+
+    task = dispatched["management_task"]
+    assert task["available"] is True
+    detail = task_snapshot(root, task["run_id"], task["task_id"])["task"]
+    assert detail["knowledge_operation"] == "sync_conflict"
+    assert detail["knowledge_metadata"]["source"] == "cli"
+    assert detail["status"] == "completed"
+    assert dispatched["maintenance"]["management_task"]["task_id"] == task["task_id"]
+
+
 def test_maintenance_job_noop_when_clean(tmp_path: Path):
     root = tmp_path / ".aha"
     cfg = _config()
@@ -317,6 +344,22 @@ def test_normalize_decisions_maps_legacy_actions(tmp_path: Path):
     assert decisions["b"] == {"action": "remote"}
 
 
+def test_successful_sync_can_clear_finished_maintenance_state(tmp_path: Path):
+    root = tmp_path / ".aha"
+    km.write_sync_state(root, {
+        "maintenance": {
+            "status": "resolved",
+            "summary": "old resolution",
+            "management_task": {"run_id": "run-old", "task_id": "task-old"},
+        },
+        "loop": {},
+    })
+
+    assert km.clear_finished_maintenance(root) is True
+    assert km.maintenance_record(root) == {"status": "idle"}
+    assert km.clear_finished_maintenance(root) is False
+
+
 # --------------------------------------------------------------------------- #
 # Scheduled sync loop
 # --------------------------------------------------------------------------- #
@@ -334,9 +377,11 @@ def test_scheduled_sync_no_remote_is_noop(tmp_path: Path):
     cfg = _config()  # no remote
     repo = knowledge_root(root, cfg)
     kg.commit_all(root, "init", cfg)
+    km.write_sync_state(root, {"maintenance": {"status": "resolved", "summary": "old"}, "loop": {}})
     ksl._run_scheduled_sync(root)
     state = km.read_sync_state(root)
     assert state["loop"]["last_sync_ok"] is True
+    assert state["maintenance"]["status"] == "idle"
 
 
 @pytest.mark.parametrize("mode", ["manual", "off"])

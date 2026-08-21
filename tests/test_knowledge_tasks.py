@@ -15,6 +15,7 @@ from aha_cli.services.knowledge_tasks import (
     ensure_knowledge_run,
     finish_knowledge_task,
     knowledge_agent_execution_context,
+    knowledge_task_available,
     resolve_knowledge_agent_config,
     run_knowledge_agent_turn,
     start_knowledge_task,
@@ -115,6 +116,24 @@ def test_knowledge_task_can_use_operation_workspace(tmp_path: Path) -> None:
     )
 
     assert context["task"]["workspace_path"] == str(workspace)
+
+
+def test_knowledge_task_available_validates_local_task_reference(tmp_path: Path) -> None:
+    root, cfg = _setup(tmp_path)
+    context = create_knowledge_task(
+        root,
+        cfg,
+        operation="capture_distill",
+        title="Capture",
+        description="Distill capture.",
+    )
+
+    assert knowledge_task_available(root, context["run_id"], context["task_id"]) is True
+    assert knowledge_task_available(root, "../outside", context["task_id"]) is False
+    assert knowledge_task_available(root, context["run_id"], "../outside") is False
+
+    (run_dir(root, context["run_id"]) / "tasks" / context["task_id"] / "task.json").unlink()
+    assert knowledge_task_available(root, context["run_id"], context["task_id"]) is False
 
 
 def test_knowledge_operation_task_records_visible_lifecycle_without_redistill(tmp_path: Path, monkeypatch) -> None:

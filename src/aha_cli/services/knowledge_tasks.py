@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import threading
 import time
 from pathlib import Path
@@ -412,11 +413,29 @@ def finish_knowledge_task(root: Path, context: dict, result: str, *, ok: bool) -
     set_task_status(root, run_id, task_id, status, exit_code)
 
 
-def public_knowledge_task(context: dict | None) -> dict | None:
+def knowledge_task_available(root: Path, run_id: object, task_id: object) -> bool:
+    run_value = str(run_id or "").strip()
+    task_value = str(task_id or "").strip()
+    if not re.fullmatch(r"[A-Za-z0-9._-]+", run_value):
+        return False
+    if not re.fullmatch(r"[A-Za-z0-9._-]+", task_value):
+        return False
+    path = run_dir(root, run_value) / "tasks" / task_value / "task.json"
+    try:
+        task = read_json(path)
+    except (OSError, ValueError):
+        return False
+    return isinstance(task, dict) and str(task.get("id") or "") == task_value
+
+
+def public_knowledge_task(context: dict | None, *, root: Path | None = None) -> dict | None:
     if not isinstance(context, dict):
         return None
-    return {
+    task = {
         "run_id": str(context.get("run_id") or ""),
         "task_id": str(context.get("task_id") or ""),
         "title": str((context.get("task") or {}).get("title") or ""),
     }
+    if root is not None:
+        task["available"] = knowledge_task_available(root, task["run_id"], task["task_id"])
+    return task
