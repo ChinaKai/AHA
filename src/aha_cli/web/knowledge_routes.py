@@ -2294,11 +2294,19 @@ def knowledge_route_response(
         try:
             pull_value = _optional_bool(payload.get("pull", True), "pull")
             push_value = _optional_bool(payload.get("push", True), "push")
+            resolve_value = _optional_bool(payload.get("resolve"), "resolve")
         except ValueError as exc:
             return json_response({"error": str(exc)}, "400 Bad Request")
         do_pull = True if pull_value is None else pull_value
         do_push = True if push_value is None else push_value
-        result = knowledge_sync(root, cfg, message=message, do_pull=do_pull, do_push=do_push)
+        result = knowledge_sync(
+            root,
+            cfg,
+            message=message,
+            do_pull=do_pull,
+            do_push=do_push,
+            resolve_conflicts="agent" if resolve_value else None,
+        )
         maintenance = None
         management_task = None
         from aha_cli.services.knowledge_maintenance import (

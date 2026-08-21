@@ -2070,12 +2070,13 @@ def test_sync_endpoint_runs_manual_git_sync(tmp_path: Path, monkeypatch):
     import aha_cli.services.knowledge_maintenance as km
     import aha_cli.web.knowledge_routes as kr
 
-    def fake_sync(root, cfg, *, message, do_pull, do_push):
+    def fake_sync(root, cfg, *, message, do_pull, do_push, resolve_conflicts):
         calls.append({
             "root": root,
             "message": message,
             "do_pull": do_pull,
             "do_push": do_push,
+            "resolve_conflicts": resolve_conflicts,
             "enabled": cfg["knowledge"]["enabled"],
         })
         return {"ok": True, "steps": {"ensure": {"ok": True}}}
@@ -2090,9 +2091,50 @@ def test_sync_endpoint_runs_manual_git_sync(tmp_path: Path, monkeypatch):
     assert calls[0]["root"] == home
     assert calls[0]["do_pull"] is True
     assert calls[0]["do_push"] is True
+    assert calls[0]["resolve_conflicts"] is None
     assert calls[0]["enabled"] is True
     assert calls[0]["message"].startswith("chore(knowledge): manual web sync ")
     assert km.maintenance_record(home) == {"status": "idle"}
+
+
+def test_sync_endpoint_resolve_forces_agent_conflict_mode(tmp_path: Path, monkeypatch):
+    home = _setup(tmp_path)
+    calls: list[dict] = []
+
+    import aha_cli.services.knowledge_maintenance as km
+    import aha_cli.web.knowledge_routes as kr
+
+    def fake_sync(root, cfg, *, message, do_pull, do_push, resolve_conflicts):
+        calls.append({
+            "resolve_conflicts": resolve_conflicts,
+            "do_pull": do_pull,
+            "do_push": do_push,
+        })
+        return {"ok": False, "conflict": True, "steps": {}}
+
+    monkeypatch.setattr(kr, "knowledge_sync", fake_sync)
+    monkeypatch.setattr(
+        km,
+        "dispatch_maintenance_job",
+        lambda *args, **kwargs: {
+            "maintenance": {"status": "running"},
+            "management_task": {
+                "run_id": "kb-run",
+                "task_id": "task-conflict",
+                "title": "知识库同步冲突处理",
+            },
+        },
+    )
+
+    out = json_response_body(_post(home, "/api/kb/sync", {"resolve": True}))
+
+    assert calls == [{
+        "resolve_conflicts": "agent",
+        "do_pull": True,
+        "do_push": True,
+    }]
+    assert out["agent_dispatched"] is True
+    assert out["management_task"]["task_id"] == "task-conflict"
 
 
 def test_sync_status_endpoint_checks_local_by_default_and_remote_on_request(tmp_path: Path, monkeypatch):

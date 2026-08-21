@@ -729,6 +729,7 @@ def cmd_kb(args: argparse.Namespace) -> int:
             message=message,
             do_pull=not args.no_pull,
             do_push=True if args.push else None,
+            resolve_conflicts="agent" if getattr(args, "resolve", False) else None,
         )
         maintenance = None
         management_task = None

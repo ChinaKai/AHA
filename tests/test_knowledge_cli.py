@@ -403,10 +403,16 @@ def test_kb_sync_resolve_returns_management_task(tmp_path: Path, monkeypatch):
     import aha_cli.services.knowledge_maintenance as maintenance
 
     home = _home(tmp_path)
+    sync_calls: list[dict] = []
+
+    def fake_sync(*args, **kwargs):
+        sync_calls.append(kwargs)
+        return {"ok": False, "conflict": True, "steps": {}}
+
     monkeypatch.setattr(
         cli,
         "knowledge_sync",
-        lambda *args, **kwargs: {"ok": False, "conflict": True, "steps": {}},
+        fake_sync,
     )
     monkeypatch.setattr(
         maintenance,
@@ -426,6 +432,7 @@ def test_kb_sync_resolve_returns_management_task(tmp_path: Path, monkeypatch):
 
     assert rc == 0
     payload = json.loads(out)
+    assert sync_calls[0]["resolve_conflicts"] == "agent"
     assert payload["management_task"]["task_id"] == "task-sync"
     assert payload["maintenance"]["status"] == "resolved"
 
