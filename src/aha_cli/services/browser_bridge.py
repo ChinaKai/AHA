@@ -104,6 +104,7 @@ async def browser_bridge_request(
     source: str = "agent",
     agent_id: str = "main",
     timeout: float = 30.0,
+    parent_bound: bool = False,
 ) -> dict:
     return await browser_client.browser_bridge_request(
         root,
@@ -114,6 +115,7 @@ async def browser_bridge_request(
         source=source,
         agent_id=agent_id,
         timeout=timeout,
+        parent_bound=parent_bound,
     )
 
 
@@ -127,6 +129,7 @@ def browser_bridge_request_sync(
     source: str = "agent",
     agent_id: str = "main",
     timeout: float = 30.0,
+    parent_bound: bool = False,
 ) -> dict:
     """Synchronous wrapper for Web handlers running in a worker thread."""
     return asyncio.run(
@@ -139,6 +142,7 @@ def browser_bridge_request_sync(
             source=source,
             agent_id=agent_id,
             timeout=timeout,
+            parent_bound=parent_bound,
         )
     )
 

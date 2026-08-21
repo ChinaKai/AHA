@@ -1,11 +1,10 @@
 """Platform-aware HTTP forwarding to the AHA Web service.
 
-A task agent may run inside WSL while AHA itself is installed on Windows. In
-that case the agent's ``aha browser`` / ``aha hardware-*`` commands must operate
-the *Windows* browser and serial ports (the AHA platform), not a WSL-side
-bridge that has no Chromium and no COM ports. This module detects the AHA
-platform from the shared runtime service.json and forwards such commands over
-HTTP to the Windows Web service, which owns the platform resources.
+A task agent may run inside WSL or as a native Windows backend while AHA itself
+is installed on Windows. In both cases its ``aha browser`` / ``aha hardware-*``
+commands must be owned by the long-lived Windows Web service, not by the
+short-lived backend turn. This module detects the AHA platform from the shared
+runtime service.json and forwards such commands over HTTP to the Web service.
 
 Nothing here is hardcoded: the host, port, and auth token all come from the
 AHA home runtime state, so a different install path, port, or token keeps
@@ -21,7 +20,7 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
-from aha_cli.services.service_runtime import read_service_runtime
+from aha_cli.services.service_runtime import read_service_runtime, service_runtime_path
 from aha_cli.store.paths import aha_home_path
 
 
@@ -43,6 +42,8 @@ def aha_platform_is_windows(root: Path) -> bool:
     An agent in WSL reads the same AHA home (via /mnt/...) and sees
     ``platform: Windows`` when AHA is installed on Windows.
     """
+    if not service_runtime_path(root).is_file():
+        return False
     try:
         runtime = read_service_runtime(root)
     except Exception:  # noqa: BLE001 - discovery must never break a command
@@ -54,10 +55,16 @@ def should_forward_to_windows_web(root: Path) -> bool:
     """True when this agent should forward browser/hardware commands to the
     Windows Web service instead of running them locally.
 
-    Only forwards when the agent runs inside WSL and AHA itself runs on
-    Windows. A Windows-hosted agent or a WSL-hosted AHA keeps local execution.
+    WSL processes forward to the Windows host for platform access. Native
+    Windows task agents also forward so Browser/Hardware lifetimes belong to
+    the Web service rather than the backend turn. Interactive Windows shells
+    without task-agent scope keep local CLI behavior.
     """
-    return running_in_wsl() and aha_platform_is_windows(root)
+    task_agent = (
+        sys.platform == "win32"
+        and all(str(os.environ.get(name) or "").strip() for name in ("AHA_RUN_ID", "AHA_TASK_ID", "AHA_AGENT_ID"))
+    )
+    return aha_platform_is_windows(root) and (running_in_wsl() or task_agent)
 
 
 def _loopback_host(bind_host: object) -> str:

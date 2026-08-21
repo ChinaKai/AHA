@@ -745,8 +745,14 @@ async def browser_bridge_request(
     source: str = "agent",
     agent_id: str = "main",
     timeout: float = 30.0,
+    parent_bound: bool = False,
 ) -> dict:
-    reader, writer, _ready = await open_browser_bridge_ipc(root, run_id, task_id)
+    reader, writer, _ready = await open_browser_bridge_ipc(
+        root,
+        run_id,
+        task_id,
+        parent_bound=parent_bound,
+    )
     request_id = uuid.uuid4().hex
     try:
         await write_browser_frame(

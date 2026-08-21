@@ -150,9 +150,10 @@ Start 不只检查 Bridge PID，还会验证 task-scoped Unix Socket 是否仍�
 Bridge。用户无需刷新 AHA 页面。
 Start/Restart 的 lifecycle API 会继续等待到新 Bridge 同时满足
 `running`、进程存活和 Socket 可连接后才返回，前端不会在 `starting` 阶段提前
-建立 WebSocket。由短命 agent CLI 懒启动的 Bridge 使用 detached 生命周期，
-CLI 退出后继续运行；只有 Web 等长生命周期 owner 显式请求 `parent_bound`
-时，Windows 才把 Bridge 加入父进程的 kill-on-close Job。
+建立 WebSocket。Windows task agent 的 `aha browser` 命令通过运行态
+`service.json` 转发到 AHA Web，由 Web 以 `parent_bound=true` 持有 Bridge；
+backend turn 结束不影响浏览器，Web 退出时仍能清理它。非 task-agent 的本机
+交互式 CLI 保留直接 IPC 和 detached 启动能力。
 
 管理栏的齿轮面板编辑 Runtime、显示方式、下载、上传和代理。运行中
 保存会把全部高级项作为一次原子更新，并冷重启当前任务的 Bridge；已关闭时只
@@ -227,7 +228,9 @@ Browser 内容区可滚动到被键盘遮挡的部分。键盘打开时触摸共
 Windows onebin 不直接以无扩展名 `aha` 文件暴露给 agent shell。AHA 会生成并
 优先加入 PATH 的 `backend-bin\aha.cmd` 和 `python3.cmd`，由当前 AHA 的控制台
 Python 执行同一个 onebin，避免 Windows 弹出“选择打开方式”，也避免 agent
-误用系统 Python 后把 Browser Bridge 判定为缺少 Playwright。
+误用系统 Python 后把 Browser Bridge 判定为缺少 Playwright。Windows task
+agent 的 Browser/Hardware 命令还会转发到长生命周期 Web 服务；WSL agent
+沿用同一转发通道。
 
 ```bash
 aha browser status <run-id> <task-id>

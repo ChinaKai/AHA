@@ -332,6 +332,7 @@ class WebTaskRouteTests(unittest.TestCase):
             source="agent",
             agent_id="main",
             timeout=30.0,
+            parent_bound=True,
         )
 
     def test_hardware_arm_route_writes_bridge_control(self) -> None:

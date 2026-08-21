@@ -61,14 +61,28 @@ class AhaHttpClientTests(unittest.TestCase):
         with mock.patch("sys.platform", "win32"):
             self.assertFalse(running_in_wsl())
 
-    def test_should_forward_only_in_wsl_with_windows_host(self) -> None:
+    def test_should_forward_wsl_and_windows_task_agents_to_windows_web(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / ".aha"
             root.mkdir(parents=True)
             _write_service_runtime(root, platform="Windows")
             with mock.patch("aha_cli.services.aha_http_client.running_in_wsl", return_value=True):
                 self.assertTrue(should_forward_to_windows_web(root))
-            with mock.patch("aha_cli.services.aha_http_client.running_in_wsl", return_value=False):
+            with (
+                mock.patch("aha_cli.services.aha_http_client.running_in_wsl", return_value=False),
+                mock.patch("aha_cli.services.aha_http_client.sys.platform", "win32"),
+                mock.patch.dict(
+                    "os.environ",
+                    {"AHA_RUN_ID": "run-001", "AHA_TASK_ID": "task-001", "AHA_AGENT_ID": "main"},
+                    clear=False,
+                ),
+            ):
+                self.assertTrue(should_forward_to_windows_web(root))
+            with (
+                mock.patch("aha_cli.services.aha_http_client.running_in_wsl", return_value=False),
+                mock.patch("aha_cli.services.aha_http_client.sys.platform", "win32"),
+                mock.patch.dict("os.environ", {}, clear=True),
+            ):
                 self.assertFalse(should_forward_to_windows_web(root))
             # WSL-hosted AHA stays local.
             _write_service_runtime(root, platform="Linux")

@@ -779,6 +779,7 @@ def handle_task_action_route(root: Path, run_id: str, path: str, body: bytes) ->
                     source=str(payload.get("source") or "agent"),
                     agent_id=str(payload.get("agent_id") or "main"),
                     timeout=float(payload.get("timeout") or 30.0),
+                    parent_bound=True,
                 )
             except BrowserBridgeError as exc:
                 return route_result(
