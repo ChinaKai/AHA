@@ -287,6 +287,49 @@
       background: var(--color-surface);
       display: flex; flex-direction: column; gap: 0;
     }
+    .kb-entry-fullscreen { position: relative; }
+    .kb-entry-fullscreen > h3 { padding-right: 72px; }
+    .kb-entry-outline-toggle {
+      position: absolute; top: 12px; right: 16px; z-index: 12;
+      width: 38px; min-width: 38px; height: 38px; min-height: 38px; padding: 0;
+      display: inline-grid; place-items: center;
+      border-color: var(--color-border-subtle); background: color-mix(in srgb, var(--color-surface) 92%, transparent);
+      box-shadow: var(--shadow-sm); backdrop-filter: blur(8px);
+    }
+    .kb-entry-outline-toggle svg { width: 19px; height: 19px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+    .kb-entry-outline-toggle[aria-expanded="true"] {
+      border-color: var(--color-primary); background: var(--color-primary-surface); color: var(--color-primary-strong);
+    }
+    .kb-entry-outline-panel {
+      position: absolute; top: 0; right: 0; bottom: 0; z-index: 20;
+      width: min(320px, 38vw); min-width: 260px;
+      display: grid; grid-template-rows: auto minmax(0, 1fr);
+      border-left: 1px solid var(--color-border); background: var(--color-surface);
+      box-shadow: -12px 0 30px rgba(15, 23, 42, 0.14);
+    }
+    .kb-entry-outline-panel[hidden] { display: none; }
+    .kb-entry-outline-head {
+      display: flex; align-items: center; justify-content: space-between; gap: 10px;
+      min-width: 0; padding: 12px 12px 10px 16px;
+      border-bottom: 1px solid var(--color-border-subtle);
+    }
+    .kb-entry-outline-head strong { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .kb-entry-outline-close { width: 32px; min-width: 32px; height: 32px; min-height: 32px; padding: 0; font-size: 20px; }
+    .kb-entry-outline-list { min-height: 0; overflow: auto; padding: 8px; }
+    .kb-entry-outline-item {
+      display: block; width: 100%; min-height: 32px; padding: 6px 8px;
+      border: 0; border-radius: var(--radius-sm); background: transparent;
+      color: var(--color-text-muted); font-size: 12px; line-height: 1.35;
+      text-align: left; white-space: normal; overflow-wrap: anywhere;
+    }
+    .kb-entry-outline-item:hover { background: var(--color-surface-muted); color: var(--color-text); }
+    .kb-entry-outline-item.active {
+      background: var(--color-primary-surface); color: var(--color-primary-strong); font-weight: 650;
+    }
+    .kb-entry-outline-level-2 { padding-left: 20px; }
+    .kb-entry-outline-level-3 { padding-left: 32px; }
+    .kb-entry-outline-level-4 { padding-left: 44px; }
+    .kb-entry-body :is(h1, h2, h3, h4) { scroll-margin-top: 18px; }
     .kb-workspace-detail-card > h3 {
       flex: 0 0 auto;
       padding: 16px 20px 8px; font-size: 18px; line-height: 1.35;
@@ -547,6 +590,9 @@
         display: grid; grid-template-columns: 1fr; width: 100%;
       }
       .kb-workspace-detail-card > h3 { padding: 12px 12px 6px; font-size: 16px; }
+      .kb-entry-fullscreen > h3 { padding-right: 62px; }
+      .kb-entry-outline-toggle { top: 8px; right: 10px; }
+      .kb-entry-outline-panel { width: min(88vw, 340px); min-width: 0; }
       .kb-workspace-detail-card > .kb-muted { padding: 0 12px 10px; }
       .kb-workspace-detail-card .kb-modal-action-row {
         display: flex; padding: 8px 12px; overflow-x: auto;
@@ -1003,6 +1049,16 @@
 
       <section id="entry-ref-modal" class="kb-workspace-detail" hidden>
         <div class="kb-workspace-detail-card kb-entry-fullscreen" role="region" aria-labelledby="entry-ref-title">
+          <button class="button-ghost kb-entry-outline-toggle" id="entry-outline-toggle" type="button" aria-controls="entry-outline-panel" aria-expanded="false" aria-label="Open outline" title="Open outline" data-i18n-aria-label="knowledge.outline_open" data-i18n-title="knowledge.outline_open" hidden>
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 6h12M8 12h12M8 18h12"></path><circle cx="4" cy="6" r="1"></circle><circle cx="4" cy="12" r="1"></circle><circle cx="4" cy="18" r="1"></circle></svg>
+          </button>
+          <aside class="kb-entry-outline-panel" id="entry-outline-panel" aria-label="Outline" data-i18n-aria-label="knowledge.outline" hidden>
+            <div class="kb-entry-outline-head">
+              <strong data-i18n="knowledge.outline">Outline</strong>
+              <button class="button-ghost kb-entry-outline-close" id="entry-outline-close" type="button" aria-label="Close outline" title="Close outline" data-i18n-aria-label="knowledge.outline_close" data-i18n-title="knowledge.outline_close">×</button>
+            </div>
+            <nav class="kb-entry-outline-list" id="entry-outline-list" aria-label="Outline" data-i18n-aria-label="knowledge.outline"></nav>
+          </aside>
           <h3 id="entry-ref-title">Reference</h3>
           <div id="entry-ref-meta" class="kb-muted"></div>
           <div class="kb-card-actions kb-entry-actions kb-inline-actions kb-modal-action-row">
@@ -3324,10 +3380,106 @@
       return true;
     }
 
+    let entryOutlineObserver = null;
+
+    function disconnectEntryOutlineObserver() {
+      entryOutlineObserver?.disconnect?.();
+      entryOutlineObserver = null;
+    }
+
+    function setEntryOutlineActive(targetId) {
+      for (const button of document.querySelectorAll("#entry-outline-list [data-outline-target]")) {
+        const active = button.dataset.outlineTarget === targetId;
+        button.classList.toggle("active", active);
+        if (active) button.setAttribute("aria-current", "location");
+        else button.removeAttribute("aria-current");
+      }
+    }
+
+    function setEntryOutlineOpen(open, restoreFocus = false) {
+      const panel = $("#entry-outline-panel");
+      const toggle = $("#entry-outline-toggle");
+      if (!panel || !toggle || toggle.hidden) return;
+      panel.hidden = !open;
+      toggle.setAttribute("aria-expanded", String(open));
+      if (open) window.setTimeout(() => $("#entry-outline-close")?.focus(), 0);
+      else if (restoreFocus) toggle.focus();
+    }
+
+    function resetEntryOutline() {
+      disconnectEntryOutlineObserver();
+      const panel = $("#entry-outline-panel");
+      const toggle = $("#entry-outline-toggle");
+      const list = $("#entry-outline-list");
+      if (panel) panel.hidden = true;
+      if (toggle) {
+        toggle.hidden = true;
+        toggle.setAttribute("aria-expanded", "false");
+      }
+      list?.replaceChildren();
+    }
+
+    function entryOutlineHeadingId(text, index, seen) {
+      const raw = String(text || "").trim();
+      const normalized = typeof raw.normalize === "function" ? raw.normalize("NFKC") : raw;
+      const base = normalized
+        .toLowerCase()
+        .replace(/\s+/g, "-")
+        .replace(/[^\p{L}\p{N}_-]+/gu, "")
+        .replace(/^-+|-+$/g, "")
+        .slice(0, 72) || `section-${index + 1}`;
+      const count = (seen.get(base) || 0) + 1;
+      seen.set(base, count);
+      return `kb-outline-${base}${count > 1 ? `-${count}` : ""}`;
+    }
+
+    function buildEntryOutline(body) {
+      resetEntryOutline();
+      if (!body || state.editingReference) return;
+      const headings = [...body.querySelectorAll("h1, h2, h3, h4")]
+        .filter(heading => String(heading.textContent || "").trim());
+      if (headings.length < 2) return;
+      const toggle = $("#entry-outline-toggle");
+      const list = $("#entry-outline-list");
+      if (!toggle || !list) return;
+      const seen = new Map();
+      headings.forEach((heading, index) => {
+        const level = Number(heading.tagName.slice(1)) || 1;
+        const targetId = entryOutlineHeadingId(heading.textContent, index, seen);
+        heading.id = targetId;
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = `kb-entry-outline-item kb-entry-outline-level-${Math.min(4, Math.max(1, level))}`;
+        button.dataset.outlineTarget = targetId;
+        button.textContent = String(heading.textContent || "").trim();
+        button.addEventListener("click", () => {
+          heading.scrollIntoView({ behavior: "smooth", block: "start" });
+          setEntryOutlineActive(targetId);
+        });
+        list.appendChild(button);
+      });
+      toggle.hidden = false;
+      setEntryOutlineActive(headings[0].id);
+      if (typeof window.IntersectionObserver === "function") {
+        entryOutlineObserver = new IntersectionObserver((entries) => {
+          const visible = entries
+            .filter(entry => entry.isIntersecting)
+            .sort((left, right) => left.boundingClientRect.top - right.boundingClientRect.top);
+          if (visible[0]?.target?.id) setEntryOutlineActive(visible[0].target.id);
+        }, {
+          root: body,
+          rootMargin: "-8% 0px -78% 0px",
+          threshold: [0, 1],
+        });
+        headings.forEach(heading => entryOutlineObserver.observe(heading));
+      }
+    }
+
     function renderEntryReferenceModal() {
       const modal = $("#entry-ref-modal");
       const ref = state.referenceEntry;
       if (!ref) {
+        resetEntryOutline();
         modal.hidden = true;
         $("#entry-ref-actions").innerHTML = "";
         $("#entry-ref-body").classList.remove("kb-detail-editing");
@@ -3344,6 +3496,7 @@
         dirtyLabel(ref),
       ].filter(Boolean).join(" · ");
       const body = $("#entry-ref-body");
+      resetEntryOutline();
       body.classList.toggle("kb-detail-editing", Boolean(state.editingReference));
       body.innerHTML = "";
       $("#entry-ref-actions").innerHTML = state.editingReference ? "" : renderEntryModalActions(ref);
@@ -3365,6 +3518,7 @@
       modal.hidden = false;
       renderEntryEditMarkdown();
       loadAttachmentTexts(body);
+      buildEntryOutline(body);
       setTimeout(() => focusPageSearchMatch($("#entry-ref-title"), body), 0);
     }
 
@@ -3453,6 +3607,7 @@
     }
 
     function closeEntryReferenceModal() {
+      resetEntryOutline();
       if (state.referenceEntryStack.length) {
         const previous = state.referenceEntryStack.pop();
         state.referenceEntry = previous?.entry || null;
@@ -4136,6 +4291,11 @@
     };
 
     $("#entry-ref-close").addEventListener("click", closeEntryReferenceModal);
+    $("#entry-outline-toggle").addEventListener("click", () => {
+      const panel = $("#entry-outline-panel");
+      setEntryOutlineOpen(Boolean(panel?.hidden));
+    });
+    $("#entry-outline-close").addEventListener("click", () => setEntryOutlineOpen(false, true));
 
     document.addEventListener("click", (ev) => {
       const link = ev.target.closest?.('a[href^="#kb-entry:"]');
@@ -5596,6 +5756,10 @@
       }
       if (knowledgeModalOpen("#nav-draft-modal")) {
         closeProjectNavDraftModal();
+        return true;
+      }
+      if (!$("#entry-outline-panel")?.hidden) {
+        setEntryOutlineOpen(false, true);
         return true;
       }
       if (knowledgeModalOpen("#entry-ref-modal")) {
