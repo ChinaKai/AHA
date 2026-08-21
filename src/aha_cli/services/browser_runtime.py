@@ -417,8 +417,6 @@ def browser_proxy_launch_options(
     if mode == "direct":
         return None
     if mode == "inherit":
-        if not bool(task.get("preferred_proxy_enabled")):
-            return None
         plan = require_plan(root, run_id)
         inherited = backend_proxy_config(
             load_config(root),

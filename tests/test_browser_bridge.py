@@ -718,7 +718,7 @@ class BrowserPolicyTests(unittest.TestCase):
 
         self.assertTrue(daemon.stop_event.is_set())
 
-    def test_inherited_browser_proxy_respects_task_toggle(self) -> None:
+    def test_inherited_browser_proxy_uses_config_independent_of_task_toggle(self) -> None:
         config = {"proxy_mode": "inherit"}
         with (
             mock.patch("aha_cli.services.browser_runtime.require_plan", return_value={"id": "run-001"}),
@@ -737,21 +737,22 @@ class BrowserPolicyTests(unittest.TestCase):
                 },
             ),
         ):
-            disabled = browser_proxy_launch_options(
+            task_proxy_off = browser_proxy_launch_options(
                 Path("/tmp/aha-browser-test"),
                 "run-001",
                 {"preferred_backend": "codex", "preferred_proxy_enabled": False},
                 config,
             )
-            enabled = browser_proxy_launch_options(
+            task_proxy_on = browser_proxy_launch_options(
                 Path("/tmp/aha-browser-test"),
                 "run-001",
                 {"preferred_backend": "codex", "preferred_proxy_enabled": True},
                 config,
             )
 
-        self.assertIsNone(disabled)
-        self.assertEqual(enabled, {"server": "http://proxy.example:7890", "bypass": "localhost"})
+        expected = {"server": "http://proxy.example:7890", "bypass": "localhost"}
+        self.assertEqual(task_proxy_off, expected)
+        self.assertEqual(task_proxy_on, expected)
 
     def test_closing_last_tab_opens_configured_start_url(self) -> None:
         daemon = BrowserBridgeDaemon(Path("/tmp/aha-browser-test"), "run-001", "task-001")

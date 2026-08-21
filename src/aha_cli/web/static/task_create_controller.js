@@ -308,7 +308,7 @@
 
     function syncCreateBrowserControlFields() {
       const form = elements.taskFormEl;
-      const enabled = String(form?.querySelector("[data-browser-mode]")?.value || "off") === "managed";
+      const enabled = String(form?.querySelector("[data-browser-mode]")?.value || "off") !== "off";
       const settings = form?.querySelector("[data-browser-settings]");
       if (settings) settings.hidden = !enabled;
       form?.querySelectorAll("[data-browser-field]").forEach(input => { input.disabled = !enabled; });
@@ -335,7 +335,7 @@
       const policy = value && typeof value === "object" ? value : {};
       const form = elements.taskFormEl;
       const mode = form?.querySelector("[data-browser-mode]");
-      if (mode) mode.value = policy.mode || "off";
+      if (mode) mode.value = policy.mode === "managed" ? (policy.channel || "chromium") : "off";
       const set = (key, fieldValue) => {
         const input = form?.querySelector(`[data-browser-field="${key}"]`);
         if (input) input.value = fieldValue ?? input.defaultValue ?? "";

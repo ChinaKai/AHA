@@ -27,6 +27,11 @@ Profile。Runtime、显示方式、设备模式、下载、上传和代理放在
 状态栏；Desktop/Mobile 直接切换，其余项目通过齿轮设置面板编辑。
 两处入口都调用同一个增量更新接口，修改常用项不会覆盖状态栏中的高级设置。
 
+New Task 的 Browser 下拉使用 `off|chrome|msedge|chromium`。选择任一非
+`off` 浏览器后，必须立即展开并启用 Start URL、Privacy/Daily 和
+Direct/Inherit proxy 参数；草稿恢复时使用保存的 `channel`，不能把内部
+`mode=managed` 写入浏览器渠道下拉。
+
 完整配置结构如下：
 
 ```json
@@ -89,10 +94,12 @@ Profile。Runtime、显示方式、设备模式、下载、上传和代理放在
 - `downloads`、`uploads`: 默认拒绝。下载由 bridge 级策略阻断；上传仅在
   `uploads=allow`、agent 具有 `read_write` 权限且使用最新 snapshot 的文件输入
   ref 时，才允许通过 `aha browser upload` 选择一个本地文件。
-- `proxy_mode`: `direct|inherit|custom`。`inherit` 由 task 的
-  `preferred_proxy_enabled` 开关控制，从 Core Settings 顶层 `proxy` 读取共享
-  地址；`codex.proxy.enabled` / `claude.proxy.enabled` 只决定新 task/agent 的默认开关，旧 backend/task/run proxy 仅作
-  兼容回退。Chromium 要求继承的 HTTP 与 HTTPS 地址一致。`custom` 支持
+- `proxy_mode`: `direct|inherit|custom`。`direct` 明确关闭浏览器代理；
+  `inherit` 本身就是浏览器的启用选择，直接使用 task backend 对应的 Core
+  Settings 代理地址，不受 task 的 `preferred_proxy_enabled` 或
+  `codex.proxy.enabled` / `claude.proxy.enabled` 开关影响；这些开关只控制
+  backend agent。旧 backend/task/run proxy 仅作兼容回退。Chromium 要求继承的
+  HTTP 与 HTTPS 地址一致。`custom` 支持
   HTTP(S)、SOCKS4、SOCKS5 server，以及 bypass、用户名和密码。
   `user_chrome` 的启动参数不能安全携带代理认证信息，因此该 runtime 只支持
   无用户名/密码的代理；否则返回 `user_browser_proxy_auth_unsupported`。

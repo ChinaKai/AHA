@@ -3337,6 +3337,19 @@ if (!html.includes('value="__manual__"')) process.exit(1);
         self.assertIn('const DEFAULT_BROWSER_START_URL = "https://www.bing.com/";', config_controller)
         self.assertNotIn("proxy_password", create_controller + config_controller)
         self.assertIn("browserProfileOptions", create_controller + config_controller)
+        self.assertIn(
+            'const enabled = String(form?.querySelector("[data-browser-mode]")?.value || "off") !== "off";',
+            create_controller,
+        )
+        self.assertIn(
+            'mode.value = policy.mode === "managed" ? (policy.channel || "chromium") : "off";',
+            create_controller,
+        )
+        self.assertIn('/static/task_create_controller.js?v=browser-create-v3', html)
+        self.assertNotIn(
+            'querySelector("[data-browser-mode]")?.value || "off") === "managed"',
+            create_controller,
+        )
         self.assertEqual((create_controller + config_controller).count('const NEW_BROWSER_PROFILE_VALUE = "__new__";'), 2)
         self.assertEqual((create_controller + config_controller).count("function selectedBrowserProfileName(form)"), 2)
         self.assertEqual((create_controller + config_controller).count("function renderBrowserProfileOptions(form, selectedName = \"\")"), 2)
@@ -6568,7 +6581,7 @@ if (resetCount !== 1 || emptyWorkspaceCount !== 1) {
         self.assertIn('<script src="/static/status_store.js"></script>', html)
         self.assertIn('<script src="/static/status_controller.js"></script>', html)
         self.assertIn('<script src="/static/run_actions.js?v=web-upgrade-v12"></script>', html)
-        self.assertIn('<script src="/static/task_create_controller.js?v=hardware-groups-v2"></script>', html)
+        self.assertIn('<script src="/static/task_create_controller.js?v=browser-create-v3"></script>', html)
         self.assertIn('<script src="/static/app_actions.js"></script>', html)
         self.assertIn('<script src="/static/settings_controller.js?v=provider-models-v11"></script>', html)
         self.assertIn('<script src="/static/run_controller.js?v=permissions-v1"></script>', html)
