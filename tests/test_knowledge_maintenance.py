@@ -10,10 +10,12 @@ from aha_cli.domain.models import default_knowledge_config
 from aha_cli.services import knowledge_git as kg
 from aha_cli.services import knowledge_maintenance as km
 from aha_cli.services import knowledge_sync_loop as ksl
+from aha_cli.services.knowledge_tasks import create_knowledge_task
 from aha_cli.store.filesystem import task_snapshot
 from aha_cli.store.io import write_json
 from aha_cli.store.knowledge import knowledge_root, write_entry
 from aha_cli.store.paths import config_path
+from aha_cli.store.runs import require_plan
 
 pytestmark = pytest.mark.skipif(not kg.git_available(), reason="git not available")
 
@@ -211,6 +213,74 @@ def test_maintenance_job_resolves_via_agent_plan(tmp_path: Path):
     assert km.maintenance_record(root)["status"] == "resolved"
 
 
+def test_visible_maintenance_task_agent_resolves_repository_directly(tmp_path: Path):
+    root, cfg, repo, local_entry = _diverged_repo(tmp_path)
+    kg.sync(root, cfg, message="manual sync")
+    context = create_knowledge_task(
+        root,
+        cfg,
+        operation="sync_conflict",
+        title="Resolve conflict",
+        description="Resolve directly.",
+        reuse_operation=True,
+    )
+    seen: dict = {}
+
+    def agent(agent_context: dict) -> str:
+        seen.update(agent_context)
+        prompt = str(agent_context.get("prompt") or "")
+        assert "USER LOCAL VERSION" not in prompt
+        assert "AGENT REMOTE VERSION" not in prompt
+        assert "general/wiki/concept.md" in prompt
+        kg.resolve_unmerged(root, cfg, decisions={"general/wiki/concept.md": {"action": "local"}})
+        continued = kg.rebase_continue(root, cfg)
+        assert continued["ok"] is True
+        return "Resolved `general/wiki/concept.md`; working tree is clean."
+
+    record = km.run_kb_maintenance_job(
+        root,
+        cfg,
+        agent=agent,
+        task_context=context,
+        do_push=False,
+    )
+
+    assert record["status"] == "resolved"
+    assert record["fallback_used"] is False
+    assert record["resolutions"] == {"general/wiki/concept.md": "agent"}
+    assert "Resolved `general/wiki/concept.md`" in record["diagnosis"]
+    assert seen["sandbox"] == "danger-full-access"
+    assert "USER LOCAL VERSION" in local_entry.read_text(encoding="utf-8")
+    assert kg.rebase_in_progress(repo) is False
+
+
+def test_visible_maintenance_task_fails_when_agent_leaves_rebase_incomplete(tmp_path: Path):
+    root, cfg, repo, _local_entry = _diverged_repo(tmp_path)
+    local_head = _git(repo, "rev-parse", "HEAD")
+    kg.sync(root, cfg, message="manual sync")
+    context = create_knowledge_task(
+        root,
+        cfg,
+        operation="sync_conflict",
+        title="Resolve conflict",
+        description="Resolve directly.",
+        reuse_operation=True,
+    )
+
+    record = km.run_kb_maintenance_job(
+        root,
+        cfg,
+        agent=lambda _context: "I did not resolve the conflict.",
+        task_context=context,
+        do_push=False,
+    )
+
+    assert record["status"] == "failed"
+    assert "rebase is still in progress" in record["error"]
+    assert kg.rebase_in_progress(repo) is False
+    assert _git(repo, "rev-parse", "HEAD") == local_head
+
+
 def test_maintenance_job_passes_saved_agent_profile_to_agent(tmp_path: Path):
     root, cfg, repo, local_entry = _diverged_repo(tmp_path)
     cfg["knowledge"]["agent"] = {
@@ -301,8 +371,54 @@ def test_run_sync_agent_task_creates_visible_management_task(tmp_path: Path, mon
     detail = task_snapshot(root, task["run_id"], task["task_id"])["task"]
     assert detail["knowledge_operation"] == "sync_conflict"
     assert detail["knowledge_metadata"]["source"] == "cli"
-    assert detail["status"] == "completed"
+    assert detail["status"] == "awaiting_user"
+    assert next(agent for agent in detail["agents"] if agent["id"] == "main")["status"] == "waiting"
     assert dispatched["maintenance"]["management_task"]["task_id"] == task["task_id"]
+
+    repeated = km.run_sync_agent_task(root, cfg, sync_result, source="cli")
+    assert repeated["management_task"]["task_id"] == task["task_id"]
+    repeated_detail = task_snapshot(root, task["run_id"], task["task_id"])["task"]
+    assert repeated_detail["status"] == "awaiting_user"
+    assert repeated_detail["round_sequence"] == 1
+    assert repeated_detail["current_round_id"] == "round-001"
+    assert len([
+        item
+        for item in require_plan(root, task["run_id"])["tasks"]
+        if item.get("knowledge_operation") == "sync_conflict"
+    ]) == 1
+
+
+def test_sync_recovery_recreates_aborted_conflict_before_direct_agent(tmp_path: Path):
+    root, cfg, repo, local_entry = _diverged_repo(tmp_path)
+    aborted = kg.pull(root, cfg)
+    assert aborted["conflict"] is True
+    assert kg.rebase_in_progress(repo) is False
+    context = create_knowledge_task(
+        root,
+        cfg,
+        operation="sync_conflict",
+        title="Resolve conflict",
+        description="Resolve directly.",
+        reuse_operation=True,
+    )
+
+    def agent(_context: dict) -> str:
+        assert kg.rebase_in_progress(repo) is True
+        kg.resolve_unmerged(root, cfg, decisions={"general/wiki/concept.md": {"action": "local"}})
+        assert kg.rebase_continue(root, cfg)["ok"] is True
+        return "Resolved the recreated conflict."
+
+    record = km.run_kb_sync_recovery_job(
+        root,
+        cfg,
+        aborted,
+        agent=agent,
+        task_context=context,
+    )
+
+    assert record["status"] == "resolved"
+    assert record["pushed"] is True
+    assert "USER LOCAL VERSION" in local_entry.read_text(encoding="utf-8")
 
 
 def test_maintenance_job_noop_when_clean(tmp_path: Path):

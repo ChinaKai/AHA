@@ -360,6 +360,13 @@ or from the Hardware Terminal group selector; omitting the ID selects the first
 group for compatibility. Future network transports can be added without changing
 the group's board IP.
 
+The Hardware Terminal group buttons route through
+`event_bindings.js -> controller_registry.js -> hardwareSelectGroup`. Selecting
+a different group unmounts the existing xterm/WebSocket, reloads
+`hardware-io?hardware=<id>`, and mounts a new WebSocket whose key includes the
+hardware ID and transport. Controller wiring must forward
+`hardwareSelectGroup`; otherwise the buttons render but clicks are no-ops.
+
 The Web form does not expose group IDs as user-managed fields. Existing IDs are
 preserved internally across edits, and missing IDs from API clients are generated
 or matched by group position. In `both` mode, `network.device_ip` may be empty so

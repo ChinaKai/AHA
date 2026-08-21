@@ -351,6 +351,7 @@
       hardwareBridgeControl: deps.hardwareBridgeControl,
       hardwareTakeover: deps.hardwareTakeover,
       hardwareSelectTransport: deps.hardwareSelectTransport,
+      hardwareSelectGroup: deps.hardwareSelectGroup,
       hardwareSendKey: deps.hardwareSendKey,
       hardwareToggleRawMode: deps.hardwareToggleRawMode,
       addBootstrapConfigRow: deps.addBootstrapConfigRow,

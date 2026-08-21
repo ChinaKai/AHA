@@ -11,6 +11,7 @@ from unittest import mock
 
 from aha_cli.domain.models import make_task
 from aha_cli.services.run_archive import _should_skip
+from aha_cli.store import io as store_io
 from aha_cli.store.events import append_event
 from aha_cli.store.io import exclusive_sidecar_lock, json_backup_path, read_json, write_json
 from aha_cli.store.runs import list_run_summaries, save_plan
@@ -36,6 +37,16 @@ def plan_data(run_id: str, *, goal: str = "Recoverable run", counter: int = 0) -
 
 
 class PlanRecoveryTests(unittest.TestCase):
+    def test_atomic_replace_retries_transient_missing_temp_file(self) -> None:
+        with (
+            mock.patch.object(Path, "replace", side_effect=[FileNotFoundError("transient"), None]) as replace,
+            mock.patch("aha_cli.store.io.time.sleep") as sleep,
+        ):
+            store_io._replace_with_retry(Path("plan.tmp"), Path("plan.json"))
+
+        self.assertEqual(replace.call_count, 2)
+        sleep.assert_called_once()
+
     def test_verified_json_write_retries_transient_missing_path_after_replace(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "plan.json"

@@ -13,6 +13,7 @@ from unittest import mock
 from aha_cli.cli import append_message, main
 from aha_cli.services.context_evidence import append_task_context_evidence
 from aha_cli.services import headroom_integration
+from aha_cli.services.backend_runtime import backend_state_path, backend_status
 from aha_cli.services.chat import (
     CHANNEL_NOTIFICATION_FLUSH_TIMEOUT_SECONDS,
     _flush_channel_notifications,
@@ -162,6 +163,18 @@ class ChatPromptTests(unittest.TestCase):
                 append_message(root, run_id, "main", "single request", sender="browser", task_id="task-001", role="main")
                 item_offset = inbox.stat().st_size
                 checkpoint_file = chat_turn_checkpoint_path(run_dir(root, run_id), "main", "task-001")
+                backend_file = backend_state_path(root, run_id, "main", "task-001")
+                write_json(
+                    backend_file,
+                    {
+                        "target": "main",
+                        "task_id": "task-001",
+                        "backend": "codex-chat",
+                        "status": "running",
+                        "pid": os.getpid(),
+                        "managed": True,
+                    },
+                )
 
                 def terminate_backend(*_args, **_kwargs):
                     checkpoint = read_json(checkpoint_file)
@@ -180,6 +193,8 @@ class ChatPromptTests(unittest.TestCase):
                 self.assertEqual(checkpoint["phase"], "prepared")
                 self.assertEqual(read_json(offset_file)["offset"], source_offset)
                 self.assertTrue(chat_inbox_has_inflight_turn(root, run_id, "main", "task-001"))
+                self.assertEqual(backend_status(root, run_id, "main", task_id="task-001")["status"], "stopped")
+                self.assertEqual(read_json(backend_file)["status"], "stopped")
 
     def test_chat_turn_reuses_agent_result_after_crash_before_reply(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

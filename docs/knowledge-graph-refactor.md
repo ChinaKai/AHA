@@ -340,21 +340,27 @@ clean ──► dirty/ahead/behind ──► 自动 pull+push ──► clean
 
 ### 1.8.3 agent KB 维护任务（冲突解决核心）
 
-当同步进入 `diverged`/冲突状态，**调度一个真实 agent 子任务**（类似 sub-agent，但 scope 是 KB 维护）：
+当同步进入 `diverged`/冲突状态，复用 `AHA Knowledge Manager` 中唯一的非终态
+`sync_conflict` Task。首次创建走普通 Web Task 的统一服务，后续只向同一 Task
+追加请求并续用 `main` Agent 的 sticky backend session：
 
 ```
-[冲突检测] ──► [spawn KB 维护 agent] ──► agent 分析冲突 ──► 语义解决 ──► 提交
+[冲突检测] ──► [复用 KB 冲突 Task/session] ──► agent 分析并直接解决 ──► AHA 验证并 push
 ```
 
 **agent 的维护任务内容**：
-1. **分析冲突**：读 `git status` + 冲突文件（两版本 + 共同祖先）
+1. **分析冲突**：在 Knowledge workspace 中读取 `git status`、index stages 和冲突文件
 2. **语义解决**（agent 能力核心）：
    - 同主题两版更新 → **合并**（保留双方有价值内容，frontmatter 去重）
    - 一方删除/移动 → 判断是删除还是重命名
    - 用户手动改 vs agent 沉淀冲突 → **用户优先**（用户是 KB 所有者）
    - 无法判断 → 保留两版进 `conflicts/` 待人工，KB 主体用可合并部分
-3. **提交解决结果**：`git add + commit "chore(knowledge): resolve sync conflict (agent)"`
-4. **汇报**：给用户一条消息，说明冲突内容 + 解决策略 + 被保留/合并/待人工的部分
+3. **完成 rebase**：直接编辑、`git add`、`git rebase --continue`，处理所有后续冲突；Agent 不 push
+4. **汇报**：返回解决文件和最终 `git status`；AHA 只验证 rebase/unmerged/dirty/behind 状态并 push
+
+AHA 提示词只包含 workspace、初始冲突路径和操作边界，不嵌入 base/local/remote
+文件正文。每轮结果追加到同一 Task 对话，Task 回到 `awaiting_user`，Agent 回到
+`waiting`；不写 Final、不进入 completed/failed、不新建 round、不清 backend session。
 
 **关键设计：用户优先原则**
 - 冲突双方：用户手写内容 > agent 自动沉淀内容（用户是 KB 所有者）
@@ -654,7 +660,7 @@ AHA 声明零第三方依赖（`pyproject.toml dependencies=[]`），不能引 d
 
 ### Phase 2e：智能同步 + agent KB 维护
 - [x] **升级** `sync_status`/`pull`：冲突检测（`unmerged`/`rebase_in_progress`/`conflict` 状态）；agent 模式下 `pull` 保留 rebase 供维护任务处理（`knowledge_git.py`）
-- [x] **新建** KB 维护 agent 任务（`knowledge_maintenance.py`）：真实 backend 分析 base/local/remote → JSON 计划 → 确定性应用（local/remote/merge/archive）+ 用户优先兜底 + rebase --continue + push + 状态落盘）
+- [x] **新建** KB 维护 agent 任务（`knowledge_maintenance.py`）：复用唯一非终态 `sync_conflict` Task 与 sticky session；Agent 在 Knowledge workspace 直接解决全部 rebase 冲突，AHA 验证最终 Git 状态后 push 并落盘）
 - [x] **新建** 定时同步调度器（`knowledge_sync_loop.py`：`knowledge.sync.interval_minutes`，服务内 asyncio 定时器 + 单飞锁 + 冲突派发维护）
 - [x] **升级** Web 同步面板：冲突状态展示 + 「Resolve conflicts」按钮 + 轮询维护结果 + CLI `aha kb sync --resolve` / `aha kb sync-status`
 - [x] **新建** `conflicts/` 保留无法判断的两版（archive action 把本地版存档到 AHA home 的 `conflicts/`，待人工）

@@ -13,15 +13,25 @@ from aha_cli.domain.models import (
     utc_now,
 )
 from aha_cli.services.tasks import create_task_and_dispatch
-from aha_cli.store.filesystem import append_event, append_message, create_plan, set_agent_status, set_task_status, write_task_result
+from aha_cli.store.filesystem import (
+    append_event,
+    append_message,
+    create_plan,
+    reopen_task,
+    set_agent_status,
+    set_task_status,
+    write_task_result,
+)
 from aha_cli.store.io import read_json, write_json
 from aha_cli.store.knowledge import knowledge_root
-from aha_cli.store.paths import event_path, run_dir
+from aha_cli.store.paths import event_path, inbox_path, run_dir
 from aha_cli.store.runs import list_run_summaries, locked_plan, require_plan, save_plan
 
 KNOWLEDGE_RUN_TITLE = "AHA Knowledge Manager"
 
 _run_lock = threading.RLock()
+_REUSABLE_KNOWLEDGE_OPERATIONS = {"sync_conflict", "sync_failure"}
+_PERSISTENT_KNOWLEDGE_OPERATIONS = {"sync_conflict"}
 
 
 class KnowledgeAgentTurnError(RuntimeError):
@@ -170,6 +180,7 @@ def create_knowledge_task(
     proxy_enabled=None,
     workspace_path: str | None = None,
     metadata: dict | None = None,
+    reuse_operation: bool = False,
 ) -> dict:
     defaults = _backend_defaults(
         config,
@@ -180,26 +191,117 @@ def create_knowledge_task(
     )
     run_id = ensure_knowledge_run(root, config, **defaults)
     task_workspace = str(workspace_path or knowledge_root(root, config).resolve())
-    task = create_task_and_dispatch(
-        root,
-        run_id,
-        title,
-        backend=defaults["backend"],
-        model=defaults["model"],
-        reasoning_effort=defaults["reasoning_effort"],
-        proxy_enabled=defaults["proxy_enabled"],
-        workspace_path=task_workspace,
-        sandbox="read-only",
-        approval="never",
-        collaboration_mode="solo",
-        workflow_template="auto",
-        delegation_policy="disabled",
-        max_sub_agents=0,
-        description=description,
-        context_management={"auto_compact_enabled": True},
-        token_saving={"enabled": False, "provider": "nav"},
-        dispatch=False,
-    )
+    task_sandbox = "danger-full-access" if operation == "sync_conflict" else "read-only"
+    reusable_task_id = ""
+    if reuse_operation and operation in _REUSABLE_KNOWLEDGE_OPERATIONS:
+        plan = require_plan(root, run_id)
+        reusable = next(
+            (
+                item
+                for item in reversed(plan.get("tasks") or [])
+                if isinstance(item, dict)
+                and str(item.get("knowledge_operation") or "") == operation
+                and item.get("system_managed")
+                and not item.get("deleted_at")
+            ),
+            None,
+        )
+        reusable_task_id = str((reusable or {}).get("id") or "")
+    if reusable_task_id:
+        current_plan = require_plan(root, run_id)
+        current_task = next(item for item in current_plan.get("tasks", []) if str(item.get("id") or "") == reusable_task_id)
+        if str(current_task.get("status") or "") in {"completed", "failed", "blocked"}:
+            if operation in _PERSISTENT_KNOWLEDGE_OPERATIONS:
+                set_task_status(
+                    root,
+                    run_id,
+                    reusable_task_id,
+                    "awaiting_user",
+                    allow_terminal_transition=True,
+                )
+                set_agent_status(
+                    root,
+                    run_id,
+                    reusable_task_id,
+                    "main",
+                    "waiting",
+                    waiting_reason="host",
+                )
+            else:
+                reopen_task(root, run_id, reusable_task_id)
+        with locked_plan(root, run_id):
+            plan = require_plan(root, run_id)
+            stored = next(item for item in plan.get("tasks", []) if str(item.get("id") or "") == reusable_task_id)
+            stored.update(
+                {
+                    "title": title,
+                    "description": description,
+                    "workspace_path": task_workspace,
+                    "preferred_backend": defaults["backend"],
+                    "preferred_model": defaults["model"],
+                    "preferred_reasoning_effort": defaults["reasoning_effort"],
+                    "preferred_sandbox": task_sandbox,
+                    "preferred_approval": "never",
+                    "preferred_proxy_enabled": defaults["proxy_enabled"],
+                    "preferred_sub_backend": defaults["backend"],
+                    "preferred_sub_model": defaults["model"],
+                    "knowledge_metadata": dict(metadata or {}),
+                    "backend": defaults["backend"],
+                    "model": defaults["model"],
+                    "reasoning_effort": defaults["reasoning_effort"],
+                    "proxy_enabled": defaults["proxy_enabled"],
+                }
+            )
+            main_agent = next(
+                (agent for agent in stored.get("agents", []) if str(agent.get("id") or "") == "main"),
+                None,
+            )
+            if isinstance(main_agent, dict):
+                main_agent.update(
+                    {
+                        "backend": defaults["backend"],
+                        "model": defaults["model"],
+                        "reasoning_effort": defaults["reasoning_effort"],
+                        "sandbox": task_sandbox,
+                        "approval": "never",
+                        "proxy_enabled": defaults["proxy_enabled"],
+                        "workspace_path": task_workspace,
+                    }
+                )
+            if operation in _PERSISTENT_KNOWLEDGE_OPERATIONS:
+                stored["last_final_round_id"] = None
+                stored["last_final_at"] = None
+            plan["updated_at"] = utc_now()
+            save_plan(root, plan)
+            write_json(run_dir(root, run_id) / "tasks" / reusable_task_id / "task.json", stored)
+            task = dict(stored)
+        append_event(
+            root,
+            run_id,
+            "knowledge_task_reused",
+            {"task_id": reusable_task_id, "knowledge_operation": operation, "round_id": task.get("current_round_id")},
+        )
+    else:
+        task = create_task_and_dispatch(
+            root,
+            run_id,
+            title,
+            backend=defaults["backend"],
+            model=defaults["model"],
+            reasoning_effort=defaults["reasoning_effort"],
+            proxy_enabled=defaults["proxy_enabled"],
+            workspace_path=task_workspace,
+            sandbox=task_sandbox,
+            approval="never",
+            collaboration_mode="solo",
+            workflow_template="auto",
+            delegation_policy="disabled",
+            max_sub_agents=0,
+            description=description,
+            context_management={"auto_compact_enabled": True},
+            token_saving={"enabled": False, "provider": "nav"},
+            dispatch=False,
+        )
     task_id = str(task.get("id") or "")
     with locked_plan(root, run_id):
         plan = require_plan(root, run_id)
@@ -222,20 +324,29 @@ def create_knowledge_task(
         save_plan(root, plan)
         write_json(run_dir(root, run_id) / "tasks" / task_id / "task.json", stored)
         task = dict(stored)
-    append_message(
-        root,
-        run_id,
-        "main",
-        description,
-        sender="browser",
-        task_id=task_id,
-        role="main",
-        from_agent="browser",
-        to_agent="main",
-        display_sender="browser",
-        display_target="main",
-    )
-    return {"run_id": run_id, "task_id": task_id, "task": task, **defaults}
+    if not reusable_task_id:
+        append_message(
+            root,
+            run_id,
+            "main",
+            description,
+            sender="browser",
+            task_id=task_id,
+            role="main",
+            from_agent="browser",
+            to_agent="main",
+            display_sender="browser",
+            display_target="main",
+        )
+    return {
+        "run_id": run_id,
+        "task_id": task_id,
+        "task": task,
+        "operation": operation,
+        "sandbox": task_sandbox,
+        "reused": bool(reusable_task_id),
+        **defaults,
+    }
 
 
 def start_knowledge_task(root: Path, context: dict) -> None:
@@ -304,7 +415,12 @@ def run_knowledge_agent_turn(root: Path, task_context: dict, context: dict) -> s
     session, runtime, log, usage, and command-event path as an ordinary Task.
     """
     from aha_cli.services.backend_runtime import backend_status, start_backend, stop_backend
-    from aha_cli.services.chat_offsets import advance_chat_offset_to_inbox_end, chat_offset_path, chat_turn_checkpoint_path
+    from aha_cli.services.chat_offsets import (
+        advance_chat_offset_to_inbox_end,
+        chat_offset_path,
+        chat_turn_checkpoint_path,
+        load_chat_turn_checkpoint,
+    )
 
     run_id = str(task_context.get("run_id") or "").strip()
     task_id = str(task_context.get("task_id") or "").strip()
@@ -318,12 +434,19 @@ def run_knowledge_agent_turn(root: Path, task_context: dict, context: dict) -> s
     backend = str(context.get("backend") or task_context.get("backend") or "codex").strip().lower()
     model = context.get("model") or task_context.get("model")
     reasoning_effort = context.get("reasoning_effort") or task_context.get("reasoning_effort")
+    task_payload = task_context.get("task") if isinstance(task_context.get("task"), dict) else {}
+    sandbox = (
+        context.get("sandbox")
+        or task_context.get("sandbox")
+        or task_payload.get("preferred_sandbox")
+        or "read-only"
+    )
     task_dir = run_dir(root, run_id)
     offset_file = chat_offset_path(task_dir, target, task_id)
     if not offset_file.exists():
         advance_chat_offset_to_inbox_end(root, run_id, target, task_id)
 
-    append_message(
+    prompt_message = append_message(
         root,
         run_id,
         target,
@@ -337,6 +460,8 @@ def run_knowledge_agent_turn(root: Path, task_context: dict, context: dict) -> s
         display_sender="Knowledge",
         display_target=target,
     )
+    inbox = inbox_path(root, run_id, target, task_id)
+    expected_item_offset = inbox.stat().st_size
     checkpoint_path = chat_turn_checkpoint_path(task_dir, target, task_id)
     try:
         start_backend(
@@ -346,7 +471,7 @@ def run_knowledge_agent_turn(root: Path, task_context: dict, context: dict) -> s
             backend=backend,
             model=model,
             reasoning_effort=reasoning_effort,
-            sandbox="read-only",
+            sandbox=str(sandbox),
             approval="never",
             from_start=False,
             task_id=task_id,
@@ -359,11 +484,12 @@ def run_knowledge_agent_turn(root: Path, task_context: dict, context: dict) -> s
     last_status: dict = {}
     while time.monotonic() < deadline:
         if checkpoint_path.exists():
-            try:
-                checkpoint = read_json(checkpoint_path)
-            except (OSError, ValueError):
-                checkpoint = {}
-            if checkpoint.get("phase") == "finished":
+            checkpoint = load_chat_turn_checkpoint(
+                checkpoint_path,
+                expected_item_offset,
+                prompt_message,
+            )
+            if checkpoint and checkpoint.get("phase") == "finished":
                 reply = str(checkpoint.get("reply") or "")
                 exit_code = int(checkpoint.get("exit_code") or 0)
                 if exit_code != 0 or not reply.strip():
@@ -373,11 +499,12 @@ def run_knowledge_agent_turn(root: Path, task_context: dict, context: dict) -> s
                 return reply
         last_status = backend_status(root, run_id, target, task_id)
         if last_status.get("status") == "stopped" and checkpoint_path.exists():
-            try:
-                checkpoint = read_json(checkpoint_path)
-            except (OSError, ValueError):
-                checkpoint = {}
-            if checkpoint.get("phase") == "finished":
+            checkpoint = load_chat_turn_checkpoint(
+                checkpoint_path,
+                expected_item_offset,
+                prompt_message,
+            )
+            if checkpoint and checkpoint.get("phase") == "finished":
                 reply = str(checkpoint.get("reply") or "")
                 exit_code = int(checkpoint.get("exit_code") or 0)
                 if exit_code == 0 and reply.strip():
@@ -400,6 +527,34 @@ def finish_knowledge_task(root: Path, context: dict, result: str, *, ok: bool) -
     task_id = str(context["task_id"])
     text = str(result or ("处理完成。" if ok else "处理失败。"))
     append_knowledge_task_message(root, context, text)
+    operation = str(context.get("operation") or (context.get("task") or {}).get("knowledge_operation") or "")
+    if operation in _PERSISTENT_KNOWLEDGE_OPERATIONS:
+        set_agent_status(
+            root,
+            run_id,
+            task_id,
+            "main",
+            "waiting",
+            waiting_reason="host",
+        )
+        set_task_status(
+            root,
+            run_id,
+            task_id,
+            "awaiting_user",
+            allow_terminal_transition=True,
+        )
+        append_event(
+            root,
+            run_id,
+            "knowledge_task_cycle_finished",
+            {
+                "task_id": task_id,
+                "knowledge_operation": operation,
+                "ok": bool(ok),
+            },
+        )
+        return
     write_task_result(
         root,
         run_id,

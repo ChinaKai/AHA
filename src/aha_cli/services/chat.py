@@ -14,6 +14,7 @@ from aha_cli.backends.registry import CODEX_DEFAULT_MODEL, normalize_reasoning_e
 from aha_cli.domain.models import is_feishu_group_task, is_service_assistant_task, utc_now
 from aha_cli.services.auto_context_compact import auto_compact_agent_context_after_turn
 from aha_cli.services.backend_runtime import (
+    backend_status,
     detect_runtime_context_compaction,
     ensure_backend_wsl_state,
     mark_backend_stopped,
@@ -1995,4 +1996,22 @@ def agent_chat(root: Path, run_id: str, args, *, backend_name: str) -> int:
         return 130
     finally:
         release_chat_consumer(consumer_handle)
+        if worker_task_id:
+            try:
+                already_stopped = backend_status(
+                    root,
+                    run_id,
+                    args.target,
+                    task_id=worker_task_id,
+                ).get("status") == "stopped"
+            except Exception:
+                already_stopped = False
+            if not already_stopped:
+                mark_backend_stopped(
+                    root,
+                    run_id,
+                    args.target,
+                    task_id=worker_task_id,
+                    pid=os.getpid(),
+                )
         _flush_channel_notifications(root, run_id)

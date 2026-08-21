@@ -173,13 +173,19 @@ def load_prepared_chat_turn(path: Path, source_offset: int) -> dict | None:
         prepared_source_offset = int(checkpoint.get("source_offset"))
     except (TypeError, ValueError):
         return None
-    if item is None or prepared_source_offset != max(0, int(source_offset)):
+    if item is None:
         return None
     try:
         item_offset = max(0, int(checkpoint.get("item_offset") or 0))
     except (TypeError, ValueError):
         return None
-    if checkpoint.get("phase") not in {"prepared", "executed", "finished"}:
+    phase = checkpoint.get("phase")
+    if phase not in {"prepared", "executed", "finished"}:
+        return None
+    current_offset = max(0, int(source_offset))
+    if prepared_source_offset != current_offset and not (
+        phase in {"prepared", "executed"} and current_offset == item_offset
+    ):
         return None
     if checkpoint.get("identity") != chat_turn_identity(item_offset, item):
         return None
@@ -350,7 +356,9 @@ def chat_inbox_has_pending(root: Path, run_id: str, target: str, task_id: str | 
         return False
     offset_file = chat_offset_path(run_dir(root, run_id), target, task_id)
     offset = load_chat_offset(inbox, offset_file, from_start=False)
-    return inbox.stat().st_size > offset
+    if inbox.stat().st_size > offset:
+        return True
+    return chat_inbox_has_inflight_turn(root, run_id, target, task_id)
 
 
 def chat_inbox_has_inflight_turn(root: Path, run_id: str, target: str, task_id: str | None = None) -> bool:
@@ -358,8 +366,7 @@ def chat_inbox_has_inflight_turn(root: Path, run_id: str, target: str, task_id: 
     if not inbox.exists():
         return False
     offset = load_chat_offset(inbox, chat_offset_path(run_dir(root, run_id), target, task_id), from_start=False)
-    if inbox.stat().st_size <= offset:
-        return False
+    inbox_size = inbox.stat().st_size
     checkpoint_path = chat_turn_checkpoint_path(run_dir(root, run_id), target, task_id)
     try:
         checkpoint = read_json(checkpoint_path)
@@ -367,10 +374,14 @@ def chat_inbox_has_inflight_turn(root: Path, run_id: str, target: str, task_id: 
         item_offset = int(checkpoint.get("item_offset"))
     except (OSError, TypeError, ValueError):
         return False
+    if checkpoint.get("phase") not in {"prepared", "executed"}:
+        return False
     return (
-        checkpoint.get("phase") in {"prepared", "executed"}
-        and source_offset == offset
-        and offset < item_offset <= inbox.stat().st_size
+        source_offset == offset
+        and offset < item_offset <= inbox_size
+    ) or (
+        offset == item_offset
+        and source_offset <= item_offset <= inbox_size
     )
 
 

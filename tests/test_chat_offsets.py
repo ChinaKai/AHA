@@ -12,6 +12,8 @@ from aha_cli.services.chat_offsets import (
     chat_offset_path,
     chat_turn_checkpoint_path,
     chat_turn_result_recoverable,
+    chat_inbox_has_inflight_turn,
+    chat_inbox_has_pending,
     finish_chat_turn,
     load_chat_offset,
     load_prepared_chat_turn,
@@ -35,6 +37,31 @@ from aha_cli.store.filesystem import (
 
 
 class ChatOffsetTests(unittest.TestCase):
+    def test_prepared_turn_remains_pending_when_cursor_already_reached_item_end(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            run_id = "run-001"
+            task_id = "task-001"
+            target = "sub-001"
+            inbox = inbox_path(root, run_id, target, task_id)
+            item = {
+                "task_id": task_id,
+                "target": target,
+                "sender": "main",
+                "message": "assignment",
+            }
+            item_offset = append_jsonl(inbox, item)
+            checkpoint = chat_turn_checkpoint_path(run_dir(root, run_id), target, task_id)
+            save_chat_turn_preparation(checkpoint, 0, item_offset, item)
+            offset_file = chat_offset_path(run_dir(root, run_id), target, task_id)
+            save_chat_offset(offset_file, item_offset)
+
+            prepared = load_prepared_chat_turn(checkpoint, item_offset)
+
+            self.assertIsNotNone(prepared)
+            self.assertTrue(chat_inbox_has_inflight_turn(root, run_id, target, task_id))
+            self.assertTrue(chat_inbox_has_pending(root, run_id, target, task_id))
+
     def run_cli(self, *args: str) -> tuple[int, str]:
         out = io.StringIO()
         with mock.patch("sys.stdout", out):

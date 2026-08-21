@@ -89,6 +89,13 @@ Runtime files contain child process pid, command, sandbox, approval, log path, a
 
 Chat workers use a task/agent consumer lock so only one process can consume that inbox scope. The cursor is monotonic. Consecutive pending Feishu group mentions from the same task, group, and sender are coalesced into one turn. The selected synthetic input and its source cursor are checkpointed in a `prepared` phase before the backend starts, so a replacement worker reuses the exact batch and does not absorb messages that arrived later. After a backend returns, the latest turn result is checkpointed in the `executed` phase before reply/action finalization; if the worker stops during finalization, its replacement reuses the checkpoint instead of sending the same user message to the backend again. Completed visible replies carry a turn identity for recovery-time deduplication.
 
+A `prepared` or `executed` checkpoint remains inflight even if a crash left the
+stored cursor at that checkpoint's `item_offset`. The watchdog treats that state
+as pending work and restarts a stopped worker; the replacement reloads the
+checkpoint instead of waiting forever on an apparently empty inbox.
+Task-scoped workers also mark their backend runtime stopped from `finally`, so
+an exception before normal turn completion cannot leave stale `running` state.
+
 ## Managed Backend Launch
 
 For source checkouts, managed chat backends are launched with backend-specific commands:

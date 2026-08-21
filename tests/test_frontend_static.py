@@ -4417,6 +4417,7 @@ const tick = () => new Promise(resolve => setImmediate(resolve));
         conversation_controller = (root / "conversation_controller.js").read_text(encoding="utf-8")
         panel_controller = (root / "panel_controller.js").read_text(encoding="utf-8")
         event_bindings = (root / "event_bindings.js").read_text(encoding="utf-8")
+        controller_registry = (root / "controller_registry.js").read_text(encoding="utf-8")
         styles = (root / "styles.css").read_text(encoding="utf-8")
 
         self.assertIn('data-mobile-action="hardware"', html)
@@ -4453,6 +4454,10 @@ const tick = () => new Promise(resolve => setImmediate(resolve));
         self.assertIn("data-hardware-transport", conversation_panel)
         self.assertIn("data-hardware-transport", event_bindings)
         self.assertIn("hardwareSelectTransport", wiring)
+        self.assertIn("data-hardware-group-select", conversation_panel)
+        self.assertIn("hardwareSelectGroup", event_bindings)
+        self.assertIn("hardwareSelectGroup: deps.hardwareSelectGroup", controller_registry)
+        self.assertIn("hardwareSelectGroup", wiring)
         # Bridge status renders as a task-style status pill.
         self.assertIn('class="status hardware-bridge-status', conversation_panel)
         # Hardware output is a persistent xterm mount; status controls remain outside it.
@@ -6588,7 +6593,7 @@ if (resetCount !== 1 || emptyWorkspaceCount !== 1) {
         self.assertIn('<script src="/static/message_flow.js?v=hardware-terminal-v1"></script>', html)
         self.assertIn('<script src="/static/render_scheduler.js"></script>', html)
         self.assertIn('<script src="/static/confirm_dialog.js"></script>', html)
-        self.assertIn('<script src="/static/controller_registry.js?v=chat-scroll-v1"></script>', html)
+        self.assertIn('<script src="/static/controller_registry.js?v=hardware-group-switch-v2"></script>', html)
         self.assertIn('<script src="/static/app_bridge.js?v=permissions-v1"></script>', html)
         self.assertIn('<script src="/static/app_controller_factory.js?v=chat-scroll-v1"></script>', html)
         self.assertIn('<script src="/static/app_runtime_setup.js?v=permissions-v1"></script>', html)

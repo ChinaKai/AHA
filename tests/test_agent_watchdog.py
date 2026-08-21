@@ -258,6 +258,37 @@ class AgentWatchdogTests(unittest.TestCase):
             self.assertEqual(load_chat_offset(inbox, offset_file, from_start=False), 0)
             self.assertFalse(start_mock.call_args.kwargs["from_start"])
 
+    def test_scan_run_recovers_prepared_turn_after_cursor_reached_item_end(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root, run_id = self._init_run(tmp)
+            inbox = self._prepare_pending(root, run_id)
+            item = {"sender": "browser", "message": "pending", "task_id": "task-001"}
+            item_offset = inbox.stat().st_size
+            save_chat_turn_preparation(
+                chat_turn_checkpoint_path(run_dir(root, run_id), "main", "task-001"),
+                0,
+                item_offset,
+                item,
+            )
+            offset_file = chat_offset_path(run_dir(root, run_id), "main", "task-001")
+            save_chat_offset(offset_file, item_offset)
+            set_agent_status(root, run_id, "task-001", "main", "pending")
+            old = self._now() - timedelta(seconds=300)
+            os.utime(inbox, (old.timestamp(), old.timestamp()))
+            state = self._stuck_state(status="stopped", last_started_at=old.isoformat())
+
+            with (
+                mock.patch("aha_cli.services.agent_watchdog.backend_status", return_value=state),
+                mock.patch("aha_cli.services.agent_watchdog.stop_backend", return_value={"status": "stopped"}),
+                mock.patch("aha_cli.services.agent_watchdog.start_backend", return_value={"status": "running"}) as start_mock,
+            ):
+                result = scan_run(root, run_id, now=self._now())
+
+            self.assertEqual(result["checked"], 1)
+            self.assertEqual(result["recovered"][0]["reason"], "backend_stopped_with_pending_inbox")
+            self.assertEqual(load_chat_offset(inbox, offset_file, from_start=False), item_offset)
+            self.assertFalse(start_mock.call_args.kwargs["from_start"])
+
     def test_scan_run_respects_min_restart_interval(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root, run_id = self._init_run(tmp)

@@ -82,6 +82,13 @@ def _replace_with_retry(tmp: Path, path: Path) -> None:
         try:
             tmp.replace(path)
             return
+        except FileNotFoundError:
+            # WSL DrvFS/9p can transiently report ENOENT for a temp file that
+            # was just fsynced on the shared Windows mount. Retry the same
+            # atomic rename before treating it as a real missing-file error.
+            if attempt >= len(_REPLACE_RETRY_DELAYS):
+                raise
+            time.sleep(_REPLACE_RETRY_DELAYS[attempt])
         except PermissionError:
             if not _WINDOWS or attempt >= len(_REPLACE_RETRY_DELAYS):
                 raise

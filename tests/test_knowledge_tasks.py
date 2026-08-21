@@ -26,8 +26,15 @@ from aha_cli.services.run_retention import RunRetentionError, apply_run_retentio
 from aha_cli.store.config import load_config
 from aha_cli.store import knowledge_capture as capture
 from aha_cli.store import knowledge_nav_drafts as nav_drafts
-from aha_cli.store.filesystem import append_event, conversation_events_page, task_snapshot
-from aha_cli.store.io import write_json
+from aha_cli.store.filesystem import (
+    append_event,
+    conversation_events_page,
+    set_agent_status,
+    set_task_status,
+    task_snapshot,
+    write_task_result,
+)
+from aha_cli.store.io import read_json, write_json
 from aha_cli.store.knowledge import init_knowledge_base
 from aha_cli.store.paths import config_path, event_path, run_dir, session_path
 from aha_cli.store.runs import list_run_summaries, locked_plan, require_plan, save_plan
@@ -211,6 +218,7 @@ def test_knowledge_agent_turn_uses_standard_task_chat_artifacts(tmp_path: Path, 
     def run_codex(prompt, **kwargs):
         seen["prompt"] = prompt
         seen["session"] = dict(kwargs["session"])
+        seen.setdefault("sessions", []).append(dict(kwargs["session"]))
         session = dict(kwargs["session"])
         session["backend_session_id"] = "kb-codex-session"
         append_event(
@@ -223,9 +231,11 @@ def test_knowledge_agent_turn_uses_standard_task_chat_artifacts(tmp_path: Path, 
                 "usage": {"input_tokens": 1_000, "model_context_window": 10_000},
             },
         )
-        return 0, "distilled reply", session
+        reply = "distilled reply" if len(seen["sessions"]) == 1 else "second reply"
+        return 0, reply, session
 
     def start_backend(_root, run_id, target, **kwargs):
+        seen["sandbox"] = kwargs.get("sandbox")
         write_json(
             backend_state_path(root, run_id, target, context["task_id"]),
             {
@@ -285,6 +295,20 @@ def test_knowledge_agent_turn_uses_standard_task_chat_artifacts(tmp_path: Path, 
     assert "distill this exact note" in prompt_path.read_text(encoding="utf-8")
     status = backend_status(root, context["run_id"], "main", context["task_id"])
     assert status["context_pressure"]["percent"] == 10.0
+    assert seen["sandbox"] == "read-only"
+
+    second_reply = run_knowledge_agent_turn(
+        root,
+        context,
+        {
+            "prompt": "continue in the same session",
+            "backend": "codex",
+            "model": "gpt-5.5",
+            "reasoning_effort": "high",
+        },
+    )
+    assert second_reply == "second reply"
+    assert seen["sessions"][1]["backend_session_id"] == "kb-codex-session"
 
 
 def test_knowledge_backend_events_use_standard_chat_and_command_views(tmp_path: Path) -> None:
@@ -365,11 +389,13 @@ def test_knowledge_tasks_use_saved_agent_profile_and_allow_explicit_override(tmp
     assert inherited["model"] == "claude-sonnet-4-6"
     assert inherited["reasoning_effort"] == "high"
     assert inherited["proxy_enabled"] is True
+    assert inherited["sandbox"] == "danger-full-access"
     inherited_detail = task_snapshot(root, inherited["run_id"], inherited["task_id"])["task"]
     assert inherited_detail["backend"] == "claude"
     assert inherited_detail["model"] == "claude-sonnet-4-6"
     assert inherited_detail["reasoning_effort"] == "high"
     assert inherited_detail["proxy_enabled"] is True
+    assert inherited_detail["preferred_sandbox"] == "danger-full-access"
 
     overridden = create_knowledge_task(
         root,
@@ -386,12 +412,100 @@ def test_knowledge_tasks_use_saved_agent_profile_and_allow_explicit_override(tmp
     assert overridden["model"] == "gpt-5.5"
     assert overridden["reasoning_effort"] == "xhigh"
     assert overridden["proxy_enabled"] is False
+    assert overridden["sandbox"] == "read-only"
 
     backend_only = resolve_knowledge_agent_config(cfg, backend="codex")
     assert backend_only["backend"] == "codex"
     assert backend_only["model"] is None
     assert backend_only["reasoning_effort"] is None
     assert backend_only["proxy_enabled"] is False
+
+
+def test_sync_conflict_task_stays_non_terminal_and_reuses_session(tmp_path: Path) -> None:
+    root, cfg = _setup(tmp_path)
+    first = create_knowledge_task(
+        root,
+        cfg,
+        operation="sync_conflict",
+        title="Resolve conflict",
+        description="First conflict.",
+        metadata={"attempt": 1},
+        reuse_operation=True,
+    )
+    saved_session_path = session_path(root, first["run_id"], first["task_id"], "main")
+    saved_session = read_json(saved_session_path)
+    saved_session["backend_session_id"] = "sticky-conflict-session"
+    write_json(saved_session_path, saved_session)
+    start_knowledge_task(root, first)
+    finish_knowledge_task(root, first, "first failed", ok=False)
+
+    after_first = task_snapshot(root, first["run_id"], first["task_id"])["task"]
+    first_main = next(agent for agent in after_first["agents"] if agent["id"] == "main")
+    assert after_first["status"] == "awaiting_user"
+    assert after_first["round_sequence"] == 1
+    assert after_first["current_round_id"] == "round-001"
+    assert first_main["status"] == "waiting"
+    assert first_main["waiting_reason"] == "host"
+    assert not (run_dir(root, first["run_id"]) / after_first["output_file"]).exists()
+
+    second = create_knowledge_task(
+        root,
+        cfg,
+        operation="sync_conflict",
+        title="Resolve conflict",
+        description="Second conflict.",
+        metadata={"attempt": 2},
+        reuse_operation=True,
+    )
+
+    assert second["task_id"] == first["task_id"]
+    assert second["reused"] is True
+    plan = require_plan(root, first["run_id"])
+    matching = [task for task in plan["tasks"] if task.get("knowledge_operation") == "sync_conflict"]
+    assert len(matching) == 1
+    detail = task_snapshot(root, first["run_id"], first["task_id"])["task"]
+    assert detail["round_sequence"] == 1
+    assert detail["current_round_id"] == "round-001"
+    assert detail["status"] == "awaiting_user"
+    assert detail["knowledge_metadata"] == {"attempt": 2}
+    assert detail["description"] == "Second conflict."
+    assert read_json(saved_session_path)["backend_session_id"] == "sticky-conflict-session"
+
+
+def test_sync_conflict_reuses_legacy_terminal_task_without_new_round(tmp_path: Path) -> None:
+    root, cfg = _setup(tmp_path)
+    first = create_knowledge_task(
+        root,
+        cfg,
+        operation="sync_conflict",
+        title="Resolve conflict",
+        description="Legacy conflict.",
+        reuse_operation=True,
+    )
+    old_final = write_task_result(root, first["run_id"], first["task_id"], "legacy final")
+    assert old_final.exists()
+    set_agent_status(root, first["run_id"], first["task_id"], "main", "failed", 1)
+    set_task_status(root, first["run_id"], first["task_id"], "failed", 1)
+
+    reused = create_knowledge_task(
+        root,
+        cfg,
+        operation="sync_conflict",
+        title="Resolve conflict",
+        description="Retry conflict.",
+        reuse_operation=True,
+    )
+
+    detail = task_snapshot(root, reused["run_id"], reused["task_id"])["task"]
+    assert reused["task_id"] == first["task_id"]
+    assert detail["status"] == "awaiting_user"
+    assert detail["round_sequence"] == 1
+    assert detail["current_round_id"] == "round-001"
+    assert detail["last_final_round_id"] is None
+    assert detail["last_final_at"] is None
+    assert old_final.exists()
+    main = next(agent for agent in detail["agents"] if agent["id"] == "main")
+    assert main["status"] == "waiting"
 
 
 def test_knowledge_system_run_rejects_destructive_run_operations(tmp_path: Path) -> None:

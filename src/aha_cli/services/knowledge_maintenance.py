@@ -1,19 +1,11 @@
 """KB maintenance agent: resolve sync conflicts with user-priority semantics.
 
 When a knowledge sync pull hits a rebase conflict (``diverged`` local and
-remote history) and ``knowledge.sync.resolve_conflicts == "agent"``, the rebase
-is left in progress and a maintenance job is dispatched. This module:
-
-- reads the per-file base/ours/theirs conflict detail,
-- asks a real backend agent (claude/codex) for a resolution plan,
-- applies the plan deterministically (ours/theirs/merge/archive),
-- finishes the rebase and pushes, honoring ``user_priority`` when the agent
-  produced no usable plan.
-
-The resolution is applied by :mod:`aha_cli.services.knowledge_git`, not by the
-agent itself: the agent runs read-only and returns a JSON plan, so a partial or
-hostile backend reply can never corrupt the repo. State is persisted to
-``<aha_home>/knowledge_sync_state.json`` so the Web UI and CLI can surface it.
+remote history), AHA leaves the rebase in progress and dispatches a visible
+maintenance Task rooted at the Knowledge Git workspace. The task Agent inspects
+and resolves the repository directly, including subsequent rebase conflict
+passes, then returns a concise result. AHA verifies the final Git state, pushes,
+and persists status to ``<aha_home>/knowledge_sync_state.json``.
 """
 
 from __future__ import annotations
@@ -30,6 +22,7 @@ from aha_cli.store.paths import aha_home_path
 from aha_cli.services.knowledge_git import (
     conflict_detail,
     default_resolutions,
+    pull,
     push,
     rebase_abort,
     rebase_continue,
@@ -46,9 +39,6 @@ from aha_cli.services.knowledge_tasks import (
     start_knowledge_task,
 )
 
-# Cap each conflict side in the agent prompt so a large entry cannot blow the
-# context window; longer sides are truncated with a note.
-_PROMPT_SIDE_LIMIT = 6000
 _MAX_RESOLVE_PASSES = 12
 _ARCHIVE_DIR = "conflicts"
 
@@ -98,49 +88,31 @@ def build_maintenance_prompt(root: Path, config: dict | None, detail: dict) -> s
     sync = sync if isinstance(sync, dict) else {}
     user_priority = bool(sync.get("user_priority", True))
     repo = detail.get("repo") or str(knowledge_root(root, config))
-    lines: list[str] = [
-        "You are maintaining the AHA knowledge base git repository at:",
-        repo,
-        "",
-        "A sync between the local branch and the remote has hit merge conflicts.",
-        "Your job is to produce a resolution plan for each conflicted file.",
-        "",
-        "RULE — user priority: a human user is the knowledge base owner. When a",
-        "conflict is between a user-edited version and an agent-distilled version",
-        "(frontmatter markers like `distilled_by`, `created_by`, or `source` set to",
-        "agent/aha/auto), keep the USER version and discard the agent version",
-        "unless the user version is clearly a broken partial edit. When both sides",
-        "are agent-authored or both are user-authored, merge the valuable content",
-        "from both sides. When you cannot decide, keep the local (ours) version.",
-        "",
-        "For each conflicted file, output ONE JSON object with fields:",
-        '  {"path": "<repo-relative path>", "action": "local" | "remote" | "merge" | "archive", "content": "<full new content, only for merge/archive>"}',
-        "",
-        '- "local": keep this device\'s version',
-        '- "remote": keep the remote version',
-        '- "merge": write the merged `content` to the file',
-        '- "archive": keep the remote version and save the local version for human review',
-        "",
-        "Reply with a single JSON array of these objects and nothing else (no prose).",
-        "",
+    conflict_paths = [
+        str(item.get("path") or "")
+        for item in (detail.get("conflicts") or [])
+        if item.get("path")
     ]
-    conflicts = detail.get("conflicts") or []
-    if not conflicts:
-        lines.append("No conflicted files are currently unmerged.")
-        return "\n".join(lines)
-    lines.append(f"There are {len(conflicts)} conflicted file(s). For each, the base/local/remote versions follow:")
-    lines.append("")
-    for i, conflict in enumerate(conflicts, 1):
-        path = conflict.get("path", "")
-        lines.append(f"--- Conflict {i}: {path} ---")
-        lines.append(f"agent-authored flags: local={bool(conflict.get('local_agent'))} remote={bool(conflict.get('remote_agent'))}")
-        for label in ("base", "local", "remote"):
-            content = str(conflict.get(label) or "")
-            if len(content) > _PROMPT_SIDE_LIMIT:
-                content = content[:_PROMPT_SIDE_LIMIT] + "\n...[truncated]"
-            lines.append(f"[{label} ({len(str(conflict.get(label) or ''))} chars)]")
-            lines.append(content)
-            lines.append("")
+    lines: list[str] = [
+        f"Knowledge Git workspace: {repo}",
+        "",
+        "A rebase is already in progress and has conflicts.",
+        "Resolve the conflicts directly in the current workspace.",
+        "",
+        "Required workflow:",
+        "- Inspect `git status`, `git diff --cc`, and Git index stages as needed.",
+        "- Preserve valuable content from both sides. Human-authored content has priority over generated content.",
+        "- Edit conflicted files, run `git add`, then continue the rebase.",
+        "- Continue through every subsequent conflict until no rebase is in progress.",
+        "- Use `git -c maintenance.auto=false -c gc.auto=0 rebase --continue` to avoid auto-maintenance interference.",
+        "- Do not push, force-push, reset --hard, delete unrelated changes, or abort the rebase.",
+        "- Return a concise Markdown summary of files resolved and the final `git status`.",
+        "",
+        "Initially conflicted paths:",
+        *(f"- {path}" for path in conflict_paths),
+    ]
+    if user_priority:
+        lines.extend(["", "User-priority policy is enabled."])
     return "\n".join(lines)
 
 
@@ -275,6 +247,85 @@ def _resolution_summary(detail: dict, resolutions: dict, fallback_used: bool) ->
     return prefix + ", ".join(parts) + "."
 
 
+def _run_direct_agent_resolution(
+    root: Path,
+    config: dict | None,
+    record: dict,
+    detail: dict,
+    *,
+    agent,
+    task_context: dict,
+    backend: str,
+    model: str | None,
+    reasoning_effort: str | None,
+    proxy_enabled: bool,
+    progress_callback,
+    do_push: bool,
+) -> dict:
+    """Let the visible Knowledge Task Agent resolve the repository directly."""
+
+    repo = knowledge_root(root, config)
+    conflict_paths = [str(path) for path in (detail.get("unmerged") or [])]
+    try:
+        reply = agent(
+            knowledge_agent_execution_context(
+                root,
+                task_context,
+                {
+                    "config": config,
+                    "prompt": build_maintenance_prompt(root, config, detail),
+                    "cwd": str(repo),
+                    "backend": backend,
+                    "model": model,
+                    "reasoning_effort": reasoning_effort,
+                    "proxy_enabled": proxy_enabled,
+                    "sandbox": task_context.get("sandbox") or "danger-full-access",
+                    "progress_callback": progress_callback,
+                },
+            )
+        )
+        record["diagnosis"] = str(reply or "").strip()
+    except Exception as exc:  # noqa: BLE001 - preserve the repository and visible task
+        record["status"] = "failed"
+        record["summary"] = "KB Agent 未能完成冲突处理。"
+        record["error"] = f"maintenance agent failed: {exc}"
+        rebase_abort(root, config)
+        return _finish(root, record)
+
+    status = sync_status(root, config, check_remote=True)
+    incomplete: list[str] = []
+    if status.get("rebase_in_progress"):
+        incomplete.append("rebase is still in progress")
+    if status.get("unmerged"):
+        incomplete.append("unmerged files remain: " + ", ".join(status.get("unmerged") or []))
+    if status.get("dirty"):
+        incomplete.append("working tree is dirty")
+    if int(status.get("behind") or 0) > 0:
+        incomplete.append(f"branch is still behind origin by {int(status.get('behind') or 0)} commit(s)")
+    if not status.get("ok"):
+        incomplete.append(str(status.get("remote_error") or "git status verification failed"))
+    if incomplete:
+        record["status"] = "failed"
+        record["summary"] = "KB Agent 返回后仓库仍未完成冲突处理。"
+        record["error"] = "; ".join(incomplete)
+        rebase_abort(root, config)
+        return _finish(root, record)
+
+    record["fallback_used"] = False
+    record["resolutions"] = {path: "agent" for path in conflict_paths}
+    if do_push:
+        pushed = push(root, config)
+        record["pushed"] = bool(pushed.get("pushed"))
+        if not pushed.get("ok"):
+            record["status"] = "failed"
+            record["summary"] = "冲突已由 KB Agent 解决，但推送到远端失败。"
+            record["error"] = f"push failed: {pushed.get('error')}"
+            return _finish(root, record)
+    record["status"] = "resolved"
+    record["summary"] = "KB Agent 已直接解决 Git 冲突并完成 rebase。"
+    return _finish(root, record)
+
+
 def run_kb_maintenance_job(
     root: Path,
     config: dict | None = None,
@@ -319,6 +370,22 @@ def run_kb_maintenance_job(
                     record["status"] = "failed"
                     record["error"] = cont.get("error") or "rebase continue failed"
             return _finish(root, record)
+
+        if isinstance(task_context, dict):
+            return _run_direct_agent_resolution(
+                root,
+                config,
+                record,
+                detail,
+                agent=agent or default_maintenance_agent,
+                task_context=task_context,
+                backend=backend,
+                model=model,
+                reasoning_effort=reasoning_effort,
+                proxy_enabled=proxy_enabled,
+                progress_callback=progress_callback,
+                do_push=do_push,
+            )
 
         plan: list = []
         fallback_used = False
@@ -476,7 +543,17 @@ def run_kb_sync_recovery_job(
     model = resolved_agent["model"]
     reasoning_effort = resolved_agent["reasoning_effort"]
     proxy_enabled = resolved_agent["proxy_enabled"]
-    if sync_result.get("conflict") or unmerged_paths(knowledge_root(root, config)):
+    repo = knowledge_root(root, config)
+    if sync_result.get("conflict") and not unmerged_paths(repo) and not rebase_in_progress(repo):
+        prepared_pull = pull(root, config, keep_rebase_on_conflict=True)
+        if prepared_pull.get("ok"):
+            record = _fresh_record(root, config, backend=backend, task_context=task_context)
+            record["status"] = "resolved"
+            record["summary"] = "同步重试后未再出现冲突。"
+            record["retry"] = prepared_pull
+            return _finish(root, record)
+        sync_result = prepared_pull
+    if sync_result.get("conflict") or unmerged_paths(repo):
         return run_kb_maintenance_job(
             root,
             config,
@@ -606,7 +683,7 @@ def _prepare_sync_maintenance_task(
     operation = "sync_conflict" if is_conflict else "sync_failure"
     title = "知识库同步冲突处理" if is_conflict else "知识库同步故障处理"
     description = (
-        "知识库同步发生 Git 冲突。KB Agent 将分析冲突，按用户优先原则生成方案，并由 AHA 确定性应用。"
+        "知识库同步发生 Git 冲突。KB Agent 将在 Knowledge workspace 中直接检查并解决全部 rebase 冲突，然后返回处理结果。"
         if is_conflict
         else "知识库同步因网络、认证、远端状态或本机 Git 环境失败。KB Agent 将诊断原因并执行一次安全重试。"
     )
@@ -621,6 +698,7 @@ def _prepare_sync_maintenance_task(
         reasoning_effort=None,
         proxy_enabled=None,
         metadata={"source": source, "sync_result": sync_result or {}},
+        reuse_operation=True,
     )
     task_context["operation"] = operation
     resolved_backend = task_context.get("backend")
@@ -672,7 +750,8 @@ def _execute_sync_maintenance_task(
         )
         diagnosis = str(record.get("diagnosis") or "").strip()
         summary = str(record.get("summary") or record.get("error") or "同步维护结束。")
-        final = f"{summary}\n\n{diagnosis}".strip()
+        error = str(record.get("error") or "").strip()
+        final = "\n\n".join(part for part in (summary, error, diagnosis) if part).strip()
         finish_knowledge_task(root, task_context, final, ok=record.get("status") == "resolved")
         return record
     except Exception as exc:  # noqa: BLE001 - background jobs must always settle their visible task
