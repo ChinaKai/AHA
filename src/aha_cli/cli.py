@@ -1324,6 +1324,7 @@ def cmd_browser(args: argparse.Namespace) -> int:
                 root,
                 "POST",
                 f"/api/task/{args.task_id}/browser-action",
+                query={"run_id": run_id},
                 payload={
                     "action": action,
                     "args": request_args,

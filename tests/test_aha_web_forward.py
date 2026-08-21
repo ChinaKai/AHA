@@ -39,6 +39,7 @@ class AhaWebForwardCliTests(unittest.TestCase):
             def fake_forward(_root, method, path, *, query=None, payload=None, web_token=None, timeout=30.0):
                 self.assertEqual(method, "POST")
                 self.assertEqual(path, f"/api/task/task-001/browser-action")
+                self.assertEqual(query, {"run_id": run_id})
                 self.assertEqual(payload["action"], "navigate")
                 return {"ok": True, "url": payload["args"]["url"]}
 
