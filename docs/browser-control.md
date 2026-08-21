@@ -150,7 +150,9 @@ Start 不只检查 Bridge PID，还会验证 task-scoped Unix Socket 是否仍�
 Bridge。用户无需刷新 AHA 页面。
 Start/Restart 的 lifecycle API 会继续等待到新 Bridge 同时满足
 `running`、进程存活和 Socket 可连接后才返回，前端不会在 `starting` 阶段提前
-建立 WebSocket。
+建立 WebSocket。由短命 agent CLI 懒启动的 Bridge 使用 detached 生命周期，
+CLI 退出后继续运行；只有 Web 等长生命周期 owner 显式请求 `parent_bound`
+时，Windows 才把 Bridge 加入父进程的 kill-on-close Job。
 
 管理栏的齿轮面板编辑 Runtime、显示方式、下载、上传和代理。运行中
 保存会把全部高级项作为一次原子更新，并冷重启当前任务的 Bridge；已关闭时只

@@ -178,12 +178,41 @@ class BrowserPolicyTests(unittest.TestCase):
                     "aha_cli.services.browser_runtime.browser_bridge_launcher",
                     return_value=["python", "-m", "aha_cli"],
                 ),
+                mock.patch(
+                    "aha_cli.services.browser_runtime.process_control.assign_parent_death",
+                ) as assign_parent,
             ):
                 status = ensure_browser_bridge(root, run_id, task_id)
 
             stop.assert_called_once_with(root, run_id, task_id, timeout=2.0)
+            assign_parent.assert_not_called()
             self.assertEqual(status["pid"], 5678)
         self.assertEqual(status["status"], "starting")
+
+    def test_parent_bound_browser_bridge_joins_parent_job(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            plan = create_plan(root, "Browser parent binding", 1, "research", ["Browser"], [])
+            run_id = plan["id"]
+            task_id = plan["tasks"][0]["id"]
+            update_task_browser_control_config(root, run_id, task_id, mode="managed")
+            process = mock.Mock(pid=5678)
+
+            with (
+                mock.patch("aha_cli.services.browser_runtime.subprocess.Popen", return_value=process) as popen,
+                mock.patch(
+                    "aha_cli.services.browser_runtime.browser_bridge_launcher",
+                    return_value=["python", "-m", "aha_cli"],
+                ),
+                mock.patch(
+                    "aha_cli.services.browser_runtime.process_control.assign_parent_death",
+                ) as assign_parent,
+            ):
+                status = ensure_browser_bridge(root, run_id, task_id, parent_bound=True)
+
+            assign_parent.assert_called_once_with(process)
+            self.assertFalse(popen.call_args.kwargs["start_new_session"])
+            self.assertEqual(status["pid"], 5678)
 
     def test_browser_bridge_launcher_requests_playwright_capable_python(self) -> None:
         with mock.patch(

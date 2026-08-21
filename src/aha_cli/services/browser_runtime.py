@@ -562,7 +562,8 @@ def ensure_browser_bridge(
                 env=child_env,
                 **platform.hidden_subprocess_kwargs(),
             )
-            process_control.assign_parent_death(proc)
+            if parent_bound:
+                process_control.assign_parent_death(proc)
         state_path = browser_bridge_state_path(root, run_id, task_id)
         state_path.write_text(
             json.dumps(
