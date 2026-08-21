@@ -224,6 +224,9 @@ def test_visible_maintenance_task_agent_resolves_repository_directly(tmp_path: P
         description="Resolve directly.",
         reuse_operation=True,
     )
+    # Legacy releases could misclassify nested pull conflicts as read-only
+    # sync_failure tasks. The direct conflict path must still be writable.
+    context["sandbox"] = "read-only"
     seen: dict = {}
 
     def agent(agent_context: dict) -> str:
@@ -252,6 +255,98 @@ def test_visible_maintenance_task_agent_resolves_repository_directly(tmp_path: P
     assert seen["sandbox"] == "danger-full-access"
     assert "USER LOCAL VERSION" in local_entry.read_text(encoding="utf-8")
     assert kg.rebase_in_progress(repo) is False
+
+
+def test_nested_pull_conflict_creates_writable_conflict_task(tmp_path: Path):
+    root, cfg, _repo, _entry = _diverged_repo(tmp_path)
+    nested_result = {
+        "ok": False,
+        "steps": {
+            "pull": {
+                "ok": False,
+                "conflict": True,
+                "error": "rebase conflict with remote; aborted to keep repo clean",
+            }
+        },
+    }
+
+    context, is_conflict, _state = km._prepare_sync_maintenance_task(
+        root,
+        cfg,
+        sync_result=nested_result,
+        source="scheduled",
+    )
+
+    assert km.sync_result_has_conflict(nested_result) is True
+    assert is_conflict is True
+    assert context["operation"] == "sync_conflict"
+    assert context["sandbox"] == "danger-full-access"
+    detail = task_snapshot(root, context["run_id"], context["task_id"])["task"]
+    assert detail["title"] == "知识库同步冲突处理"
+    assert detail["knowledge_operation"] == "sync_conflict"
+    assert detail["preferred_sandbox"] == "danger-full-access"
+
+
+def test_sync_recovery_resolves_nested_aborted_conflict_directly(tmp_path: Path):
+    root, cfg, repo, local_entry = _diverged_repo(tmp_path)
+    aborted = kg.pull(root, cfg)
+    assert aborted["conflict"] is True
+    assert kg.rebase_in_progress(repo) is False
+    nested_result = {"ok": False, "steps": {"pull": aborted}}
+    context, is_conflict, _state = km._prepare_sync_maintenance_task(
+        root,
+        cfg,
+        sync_result=nested_result,
+        source="scheduled",
+    )
+    seen: dict = {}
+
+    def agent(agent_context: dict) -> str:
+        seen.update(agent_context)
+        assert kg.rebase_in_progress(repo) is True
+        kg.resolve_unmerged(
+            root,
+            cfg,
+            decisions={"general/wiki/concept.md": {"action": "local"}},
+        )
+        assert kg.rebase_continue(root, cfg)["ok"] is True
+        return "Resolved and verified the Knowledge rebase."
+
+    record = km.run_kb_sync_recovery_job(
+        root,
+        cfg,
+        nested_result,
+        agent=agent,
+        task_context=context,
+    )
+
+    assert is_conflict is True
+    assert seen["sandbox"] == "danger-full-access"
+    assert record["status"] == "resolved"
+    assert record["pushed"] is True
+    assert "USER LOCAL VERSION" in local_entry.read_text(encoding="utf-8")
+    assert kg.rebase_in_progress(repo) is False
+
+
+def test_maintenance_prompts_require_action_instead_of_user_handoff(tmp_path: Path):
+    root, cfg, _repo, _entry = _diverged_repo(tmp_path)
+    conflict_prompt = km.build_maintenance_prompt(
+        root,
+        cfg,
+        {"repo": str(knowledge_root(root, cfg)), "conflicts": [{"path": "a.md"}]},
+    )
+    recovery_prompt = km.build_sync_recovery_prompt(
+        root,
+        cfg,
+        {"ok": False, "steps": {"push": {"ok": False, "error": "network down"}}},
+    )
+
+    assert "execution task, not a diagnostic or planning task" in conflict_prompt
+    assert "Do not return only a diagnosis" in conflict_prompt
+    assert "only when no unmerged files remain" in conflict_prompt
+    assert "responsible for restoring" in recovery_prompt
+    assert "perform every safe recovery action" in recovery_prompt
+    assert "Reserve user action only for a verified external blocker" in recovery_prompt
 
 
 def test_visible_maintenance_task_fails_when_agent_leaves_rebase_incomplete(tmp_path: Path):

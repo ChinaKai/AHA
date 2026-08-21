@@ -98,15 +98,19 @@ def build_maintenance_prompt(root: Path, config: dict | None, detail: dict) -> s
         "",
         "A rebase is already in progress and has conflicts.",
         "Resolve the conflicts directly in the current workspace.",
+        "This is an execution task, not a diagnostic or planning task.",
         "",
         "Required workflow:",
         "- Inspect `git status`, `git diff --cc`, and Git index stages as needed.",
         "- Preserve valuable content from both sides. Human-authored content has priority over generated content.",
+        "- When both sides contain useful human-authored content, perform a content-preserving semantic merge instead of asking the user to choose a side.",
         "- Edit conflicted files, run `git add`, then continue the rebase.",
         "- Continue through every subsequent conflict until no rebase is in progress.",
         "- Use `git -c maintenance.auto=false -c gc.auto=0 rebase --continue` to avoid auto-maintenance interference.",
         "- Do not push, force-push, reset --hard, delete unrelated changes, or abort the rebase.",
-        "- Return a concise Markdown summary of files resolved and the final `git status`.",
+        "- Do not return only a diagnosis, proposed plan, or instructions for the user.",
+        "- Your turn is complete only when no unmerged files remain, no rebase is in progress, and `git status --porcelain` is clean.",
+        "- Return a concise Markdown summary of actions taken, files resolved, and the verified final Git state.",
         "",
         "Initially conflicted paths:",
         *(f"- {path}" for path in conflict_paths),
@@ -279,7 +283,9 @@ def _run_direct_agent_resolution(
                     "model": model,
                     "reasoning_effort": reasoning_effort,
                     "proxy_enabled": proxy_enabled,
-                    "sandbox": task_context.get("sandbox") or "danger-full-access",
+                    # Conflict resolution must be writable even when a legacy
+                    # task was previously misclassified as sync_failure.
+                    "sandbox": "danger-full-access",
                     "progress_callback": progress_callback,
                 },
             )
@@ -495,8 +501,30 @@ def _sync_failure_errors(result: dict) -> list[str]:
     return errors
 
 
+def sync_result_has_conflict(result: object) -> bool:
+    """Detect conflict state anywhere in a composed sync result."""
+    if isinstance(result, list):
+        return any(sync_result_has_conflict(item) for item in result)
+    if not isinstance(result, dict):
+        return False
+    if result.get("conflict") is True or result.get("rebase_in_progress") is True:
+        return True
+    unmerged = result.get("unmerged")
+    if isinstance(unmerged, list) and any(str(path or "").strip() for path in unmerged):
+        return True
+    return any(
+        sync_result_has_conflict(value)
+        for value in result.values()
+        if isinstance(value, (dict, list))
+    )
+
+
 def should_dispatch_sync_agent(result: dict) -> bool:
-    return bool(isinstance(result, dict) and not result.get("ok") and (result.get("conflict") or _sync_failure_errors(result)))
+    return bool(
+        isinstance(result, dict)
+        and not result.get("ok")
+        and (sync_result_has_conflict(result) or _sync_failure_errors(result))
+    )
 
 
 def build_sync_recovery_prompt(root: Path, config: dict | None, sync_result: dict) -> str:
@@ -504,10 +532,11 @@ def build_sync_recovery_prompt(root: Path, config: dict | None, sync_result: dic
     errors = _sync_failure_errors(sync_result)
     return "\n".join(
         [
-            "You are diagnosing an AHA Knowledge Git synchronization failure.",
-            "The repository must remain safe: do not recommend force-push, deleting local changes, or rewriting history.",
-            "Analyze the external/environmental cause, identify safe automatic recovery steps, and clearly state any user action required.",
-            "Reply in concise Markdown with sections: Root cause, Safe handling, User action.",
+            "You are responsible for restoring AHA Knowledge Git synchronization, not merely diagnosing it.",
+            "Run bounded, non-destructive diagnostics directly in the current workspace and perform every safe recovery action available within your sandbox.",
+            "Do not force-push, delete local changes, rewrite history, or stop after giving the user a plan.",
+            "AHA will automatically retry sync after your turn. Reserve user action only for a verified external blocker you cannot change, such as missing repository permission, expired credentials, or unavailable network access.",
+            "Reply in concise Markdown with sections: Actions taken, Verified result, Remaining external blocker.",
             "",
             f"Knowledge root: {knowledge_root(root, config)}",
             f"Git status: {json.dumps(status, ensure_ascii=False)}",
@@ -544,7 +573,8 @@ def run_kb_sync_recovery_job(
     reasoning_effort = resolved_agent["reasoning_effort"]
     proxy_enabled = resolved_agent["proxy_enabled"]
     repo = knowledge_root(root, config)
-    if sync_result.get("conflict") and not unmerged_paths(repo) and not rebase_in_progress(repo):
+    conflict_detected = sync_result_has_conflict(sync_result)
+    if conflict_detected and not unmerged_paths(repo) and not rebase_in_progress(repo):
         prepared_pull = pull(root, config, keep_rebase_on_conflict=True)
         if prepared_pull.get("ok"):
             record = _fresh_record(root, config, backend=backend, task_context=task_context)
@@ -553,7 +583,8 @@ def run_kb_sync_recovery_job(
             record["retry"] = prepared_pull
             return _finish(root, record)
         sync_result = prepared_pull
-    if sync_result.get("conflict") or unmerged_paths(repo):
+        conflict_detected = sync_result_has_conflict(sync_result)
+    if conflict_detected or unmerged_paths(repo):
         return run_kb_maintenance_job(
             root,
             config,
@@ -595,7 +626,7 @@ def run_kb_sync_recovery_job(
         if retry.get("ok"):
             record["status"] = "resolved"
             record["summary"] = "同步故障经 Agent 分析后重试成功。"
-        elif retry.get("conflict"):
+        elif sync_result_has_conflict(retry):
             return run_kb_maintenance_job(
                 root,
                 config,
@@ -609,7 +640,7 @@ def run_kb_sync_recovery_job(
             )
         else:
             record["status"] = "failed"
-            record["summary"] = "Agent 已完成诊断，但同步仍需用户处理。"
+            record["summary"] = "Agent 已执行安全恢复，但同步仍被外部条件阻塞。"
             record["error"] = "; ".join(_sync_failure_errors(retry)) or "sync retry failed"
         return _finish(root, record)
     except Exception as exc:  # noqa: BLE001
@@ -679,7 +710,10 @@ def _prepare_sync_maintenance_task(
     sync_result: dict | None = None,
     source: str = "sync",
 ) -> tuple[dict, bool, dict]:
-    is_conflict = bool((sync_result or {}).get("conflict") or unmerged_paths(knowledge_root(root, config)))
+    is_conflict = bool(
+        sync_result_has_conflict(sync_result or {})
+        or unmerged_paths(knowledge_root(root, config))
+    )
     operation = "sync_conflict" if is_conflict else "sync_failure"
     title = "知识库同步冲突处理" if is_conflict else "知识库同步故障处理"
     description = (
