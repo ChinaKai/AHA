@@ -343,6 +343,8 @@
       set("start_url", policy.start_url || DEFAULT_BROWSER_START_URL);
       set("agent_access", policy.agent_access || "read_only");
       set("profile", policy.profile || "ephemeral");
+      set("browser_mode", policy.browser_mode || "privacy");
+      set("proxy_mode", policy.proxy_mode === "inherit" ? "inherit" : "direct");
       renderBrowserProfileOptions(form, policy.profile_name || "");
       syncCreateBrowserControlFields();
     }

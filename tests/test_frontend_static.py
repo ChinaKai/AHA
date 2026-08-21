@@ -3448,6 +3448,8 @@ if (!html.includes('value="__manual__"')) process.exit(1);
         self.assertNotIn("browserSessionController?.unmount", browser_panel_branch)
         self.assertIn("taskBrowserControlEnabled", task_list)
         self.assertIn("createBrowserControlPayload", create_controller)
+        self.assertIn('set("browser_mode", policy.browser_mode || "privacy");', create_controller)
+        self.assertIn('set("proxy_mode", policy.proxy_mode === "inherit" ? "inherit" : "direct");', create_controller)
         self.assertIn("/browser-control", config_controller)
         self.assertIn(".browser-frame-stage", styles)
         self.assertIn(".browser-frame-area", styles)
