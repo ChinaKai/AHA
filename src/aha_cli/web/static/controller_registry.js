@@ -464,19 +464,30 @@
     deps.loadBootstrap?.().then(async () => {
       void deps.loadAccessControlStatus?.();
       if (deps.currentRunId?.()) {
-        await renderScheduler.tick();
-        deps.openInitialTaskMemoHome?.();
+        deps.completeBootGate?.();
+        try {
+          await renderScheduler.tick();
+          deps.openInitialTaskMemoHome?.();
+        } catch (err) {
+          console.warn("Failed to hydrate the initial run", err);
+          deps.renderError?.(err);
+        }
       } else {
         deps.renderFirstRunState?.(true);
+        deps.completeBootGate?.();
       }
     }).catch(err => {
       if (deps.isAuthRequiredError?.(err)) {
         deps.renderLoginState?.(window.AHAI18n?.t?.("auth.token_invalid", "Token is incorrect. Try again."), true);
+        deps.completeBootGate?.();
         return;
       }
       deps.setBootstrapError?.(err?.message || String(err));
       deps.renderBootstrapError?.(deps.bootstrapError?.());
+      deps.completeBootGate?.();
     }).finally(() => {
+      // Idempotent safety net for unexpected exceptions in a render branch.
+      deps.completeBootGate?.();
       startPollLoop();
     });
 

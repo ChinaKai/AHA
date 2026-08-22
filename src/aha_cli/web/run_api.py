@@ -9,6 +9,7 @@ from aha_cli.services.browser_runtime import list_named_browser_profiles
 from aha_cli.services.provider_config import public_config
 from aha_cli.services.proxy import default_backend_proxy_status
 from aha_cli.services.task_skills import discover_task_skill_options
+from aha_cli.services.web_service_settings import service_settings_status
 from aha_cli.store.config import load_config
 from aha_cli.store.filesystem import (
     config_path,
@@ -180,6 +181,7 @@ def bootstrap_payload(root: Path, default_run_id: str, cwd: Path | None = None) 
         "web_upgrade": upgrade,
         "initialized": config_path(root).exists(),
         "config": public_config(cfg),
+        "service_settings": service_settings_status(root),
         "config_backend_options": [
             name for name in agent_backend_names() if name != "stub"
         ],

@@ -608,9 +608,15 @@ def _test_gateway_model(
 
 
 def _saved_provider(root: Path, payload: dict) -> dict:
+    draft = payload.get("provider")
+    if isinstance(draft, dict):
+        existing = load_config(root).get("providers", [])
+        providers = normalize_providers([draft], existing)
+        if providers:
+            return providers[0]
     provider_id = str(payload.get("provider_id") or "").strip()
     if not provider_id:
-        raise ValueError("provider_id is required")
+        raise ValueError("provider_id or provider is required")
     provider = provider_by_id(load_config(root), provider_id)
     if not provider:
         raise ValueError("provider not found")
@@ -995,6 +1001,101 @@ def _reasoning_effort(value: object, backend: str) -> str | None:
         raise ValueError(f"unknown {backend} reasoning_effort: {value}") from exc
 
 
+def _knowledge_config_from_payload(
+    value: object,
+    existing_config: dict,
+    defaults: dict,
+) -> dict:
+    current = (
+        existing_config.get("knowledge")
+        if isinstance(existing_config.get("knowledge"), dict)
+        else defaults["knowledge"]
+    )
+    knowledge = json.loads(json.dumps(current))
+    payload = _object_value(value, "knowledge")
+    if "enabled" in payload:
+        knowledge["enabled"] = parse_optional_bool(payload.get("enabled"), "knowledge.enabled")
+    if "path" in payload:
+        knowledge["path"] = _optional_string(payload.get("path"))
+
+    for key in ("git", "curation", "project_nav", "agent", "sync"):
+        if not isinstance(knowledge.get(key), dict):
+            knowledge[key] = {}
+
+    git = _object_value(payload.get("git"), "knowledge.git")
+    if "enabled" in git:
+        knowledge["git"]["enabled"] = parse_optional_bool(git.get("enabled"), "knowledge.git.enabled")
+    if "proxy_enabled" in git:
+        knowledge["git"]["proxy_enabled"] = parse_optional_bool(
+            git.get("proxy_enabled"),
+            "knowledge.git.proxy_enabled",
+        )
+    if "remote" in git:
+        knowledge["git"]["remote"] = _optional_string(git.get("remote"))
+    if "branch" in git:
+        knowledge["git"]["branch"] = _string_or_default(git.get("branch"), "main")
+
+    curation = _object_value(payload.get("curation"), "knowledge.curation")
+    if "gate" in curation:
+        gate = _string_or_default(curation.get("gate"), "agent-auto")
+        if gate not in {"manual", "auto", "agent-auto", "off"}:
+            raise ValueError("knowledge.curation.gate is invalid")
+        knowledge["curation"]["gate"] = gate
+
+    project_nav = _object_value(payload.get("project_nav"), "knowledge.project_nav")
+    if "enabled" in project_nav:
+        knowledge["project_nav"]["enabled"] = parse_optional_bool(
+            project_nav.get("enabled"),
+            "knowledge.project_nav.enabled",
+        )
+
+    agent = _object_value(payload.get("agent"), "knowledge.agent")
+    if "backend" in agent:
+        backend = _optional_string(agent.get("backend"))
+        if backend not in {None, "codex", "claude"}:
+            raise ValueError("knowledge.agent.backend must be codex, claude, or inherit")
+        knowledge["agent"]["backend"] = backend
+    if "model" in agent:
+        knowledge["agent"]["model"] = _optional_string(agent.get("model"))
+    if "reasoning_effort" in agent:
+        backend = str(
+            knowledge["agent"].get("backend")
+            or existing_config.get("backend")
+            or defaults.get("backend")
+            or "codex"
+        )
+        knowledge["agent"]["reasoning_effort"] = _reasoning_effort(
+            agent.get("reasoning_effort"),
+            backend if backend in {"codex", "claude"} else "codex",
+        )
+    if "proxy_enabled" in agent:
+        raw_proxy = agent.get("proxy_enabled")
+        knowledge["agent"]["proxy_enabled"] = (
+            None
+            if raw_proxy is None or str(raw_proxy).strip().lower() in {"", "inherit"}
+            else parse_optional_bool(raw_proxy, "knowledge.agent.proxy_enabled")
+        )
+
+    sync = _object_value(payload.get("sync"), "knowledge.sync")
+    if "mode" in sync:
+        mode = _string_or_default(sync.get("mode"), "auto")
+        if mode not in {"auto", "manual", "off"}:
+            raise ValueError("knowledge.sync.mode must be auto, manual, or off")
+        knowledge["sync"]["mode"] = mode
+    if "interval_minutes" in sync:
+        try:
+            interval = max(1, int(sync.get("interval_minutes") or 60))
+        except (TypeError, ValueError) as exc:
+            raise ValueError("knowledge.sync.interval_minutes must be an integer") from exc
+        knowledge["sync"]["interval_minutes"] = interval
+    if "resolve_conflicts" in sync:
+        resolution = _string_or_default(sync.get("resolve_conflicts"), "agent")
+        if resolution not in {"agent", "manual"}:
+            raise ValueError("knowledge.sync.resolve_conflicts must be agent or manual")
+        knowledge["sync"]["resolve_conflicts"] = resolution
+    return knowledge
+
+
 def _proxy_config_from_payload(value: object, field_name: str, fallback: dict | None = None) -> dict:
     fallback = fallback or {}
     payload = _object_value(value, field_name)
@@ -1147,8 +1248,17 @@ def _bootstrap_config_from_payload(payload: dict, existing_config: dict | None =
         configured_model_input,
         (str(item.get("id") or "") for item in providers),
     )
+    knowledge = (
+        _knowledge_config_from_payload(
+            payload.get("knowledge"),
+            existing_config,
+            defaults,
+        )
+        if "knowledge" in payload
+        else None
+    )
 
-    return {
+    result = {
         "backend": backend,
         "runner_command": _optional_string(payload.get("runner_command")),
         "default_parallel": default_parallel,
@@ -1165,6 +1275,9 @@ def _bootstrap_config_from_payload(payload: dict, existing_config: dict | None =
         "claude": claude,
         "opencode": opencode,
     }
+    if knowledge is not None:
+        result["knowledge"] = knowledge
+    return result
 
 
 def _preserve_existing_bootstrap_sections(config_file: Path, cfg: dict) -> dict:
@@ -1175,7 +1288,7 @@ def _preserve_existing_bootstrap_sections(config_file: Path, cfg: dict) -> dict:
     except (OSError, ValueError):
         return cfg
     existing_knowledge = existing.get("knowledge") if isinstance(existing, dict) else None
-    if isinstance(existing_knowledge, dict):
+    if isinstance(existing_knowledge, dict) and "knowledge" not in cfg:
         cfg["knowledge"] = existing_knowledge
     return cfg
 

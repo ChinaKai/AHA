@@ -398,6 +398,46 @@ class ProviderConfigTests(unittest.TestCase):
         self.assertEqual(len(calls), 2)
         self.assertEqual(calls[1].headers["X-api-key"], "secret")
 
+    def test_detect_models_accepts_unsaved_provider_draft(self) -> None:
+        models = [{"id": "draft-model"}]
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            mock.patch(
+                "aha_cli.web.run_routes._detect_gateway_models",
+                return_value=(models, "bearer"),
+            ) as detect,
+        ):
+            root = Path(tmp) / ".aha"
+            root.mkdir()
+            response = asyncio.run(
+                fetch_ui_response(
+                    root,
+                    "",
+                    "/api/detect-models",
+                    method="POST",
+                    payload={
+                        "provider": {
+                            "name": "Draft Gateway",
+                            "base_url": "https://draft.test/v1",
+                            "auth_style": "auto",
+                            "credential": "draft-secret",
+                        }
+                    },
+                )
+            )
+
+        body = json_response_body(response)
+        self.assertTrue(response.startswith(b"HTTP/1.1 200 OK"))
+        self.assertEqual(body["models"], models)
+        self.assertTrue(body["provider_id"].startswith("draft-gateway-"))
+        self.assertEqual(detect.call_args.args[:3], (
+            "https://draft.test/v1",
+            "draft-secret",
+            "draft-secret",
+        ))
+        self.assertFalse((root / "config.json").exists())
+        self.assertNotIn("draft-secret", response.decode("utf-8"))
+
     def test_detect_models_uses_opencode_zen_catalog_and_catalog_capabilities(self) -> None:
         catalog = [{
             "id": "big-pickle",

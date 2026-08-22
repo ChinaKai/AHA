@@ -121,7 +121,7 @@
     });
     panelEl?.addEventListener("change", event => {
       const select = event.target instanceof HTMLSelectElement ? event.target : null;
-      if (!select?.matches('[data-bootstrap-config-field="codex.model"], [data-bootstrap-config-field="claude.model"]')) return;
+      if (!select?.matches('[data-bootstrap-config-field="codex.model"], [data-bootstrap-config-field="claude.model"], [data-bootstrap-config-field="knowledge.agent.backend"], [data-bootstrap-config-field="knowledge.agent.model"]')) return;
       handlers.syncBootstrapModelOptions(select.closest("[data-bootstrap-config-form]"));
     });
     panelEl?.addEventListener("click", event => {

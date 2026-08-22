@@ -41,6 +41,10 @@ from aha_cli.services.weixin import (
     status_snapshot as weixin_status_snapshot,
 )
 from aha_cli.services.weixin_notifications import notification_status, set_notifications_enabled
+from aha_cli.services.web_service_settings import (
+    service_settings_status,
+    update_service_settings,
+)
 from aha_cli.store.config import load_config
 from aha_cli.store.filesystem import append_event
 from aha_cli.store.runs import run_exists
@@ -657,6 +661,21 @@ def system_route_response(
     bind_host: str | None = None,
     bind_port: int | str | None = None,
 ) -> bytes | None:
+    if method in {"GET", "HEAD"} and path == "/api/service-settings":
+        return head_or_json(
+            method,
+            {"ok": True, "service_settings": service_settings_status(root)},
+            request_headers=headers,
+        )
+    if method in {"POST", "PATCH"} and path == "/api/service-settings":
+        payload = parse_json_body(body) if body.strip() else {}
+        try:
+            result = update_service_settings(root, payload)
+        except ValueError as exc:
+            return json_response({"error": str(exc)}, "400 Bad Request")
+        except Exception as exc:  # noqa: BLE001 - platform helper failures are user-facing
+            return json_response({"error": str(exc)}, "500 Internal Server Error")
+        return json_response(result)
     if method in {"GET", "HEAD"} and path == "/api/prompts":
         prompt_name = str(query.get("name", [""])[0] or "").strip()
         return json_response(prompts_payload(prompt_name))

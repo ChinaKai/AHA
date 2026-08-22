@@ -73,6 +73,8 @@ class WebRunApiTests(unittest.TestCase):
         self.assertEqual(body["aha_home"], str(root))
         self.assertEqual(body["aha_version"], "20260527.057e500")
         self.assertFalse(body["initialized"])
+        self.assertEqual(body["service_settings"]["aha_home"], str(root.resolve()))
+        self.assertFalse(body["service_settings"]["startup_supported"])
         self.assertEqual(body["config"]["backend"], "stub")
         self.assertEqual(body["config"]["default_parallel"], 10)
         self.assertEqual(body["config_backend_options"], ["codex", "claude", "opencode"])
@@ -280,6 +282,29 @@ class WebRunApiTests(unittest.TestCase):
                                 }
                             ],
                         },
+                        "knowledge": {
+                            "enabled": True,
+                            "path": str(Path(tmp) / "knowledge"),
+                            "curation": {"gate": "manual"},
+                            "project_nav": {"enabled": False},
+                            "git": {
+                                "enabled": True,
+                                "proxy_enabled": True,
+                                "remote": "git@example.test:kb.git",
+                                "branch": "kb-main",
+                            },
+                            "sync": {
+                                "mode": "manual",
+                                "interval_minutes": 30,
+                                "resolve_conflicts": "manual",
+                            },
+                            "agent": {
+                                "backend": "claude",
+                                "model": "env:work",
+                                "reasoning_effort": "high",
+                                "proxy_enabled": False,
+                            },
+                        },
                     },
                 )
             )
@@ -327,6 +352,20 @@ class WebRunApiTests(unittest.TestCase):
                 }
             ],
         )
+        self.assertTrue(cfg["knowledge"]["enabled"])
+        self.assertEqual(cfg["knowledge"]["path"], str(Path(tmp) / "knowledge"))
+        self.assertEqual(cfg["knowledge"]["curation"]["gate"], "manual")
+        self.assertFalse(cfg["knowledge"]["project_nav"]["enabled"])
+        self.assertTrue(cfg["knowledge"]["git"]["proxy_enabled"])
+        self.assertEqual(cfg["knowledge"]["git"]["remote"], "git@example.test:kb.git")
+        self.assertEqual(cfg["knowledge"]["git"]["branch"], "kb-main")
+        self.assertEqual(cfg["knowledge"]["sync"]["mode"], "manual")
+        self.assertEqual(cfg["knowledge"]["sync"]["interval_minutes"], 30)
+        self.assertEqual(cfg["knowledge"]["sync"]["resolve_conflicts"], "manual")
+        self.assertEqual(cfg["knowledge"]["agent"]["backend"], "claude")
+        self.assertEqual(cfg["knowledge"]["agent"]["model"], "env:work")
+        self.assertEqual(cfg["knowledge"]["agent"]["reasoning_effort"], "high")
+        self.assertFalse(cfg["knowledge"]["agent"]["proxy_enabled"])
 
     def test_api_bootstrap_persists_model_source_defaults_and_validation(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

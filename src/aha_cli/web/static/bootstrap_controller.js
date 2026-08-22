@@ -2,6 +2,10 @@
   function createBootstrapController(elements = {}, deps = {}) {
     const bootstrapConfigHelpers = deps.bootstrapConfigHelpers || {};
 
+    function t(key, fallback = "") {
+      return window.AHAI18n?.t?.(key, fallback) || fallback;
+    }
+
     function configData() {
       return deps.bootstrapData?.()?.config || {};
     }
@@ -9,6 +13,8 @@
     function configContext() {
       return {
         config: configData(),
+        serviceSettings: deps.bootstrapData?.()?.service_settings || {},
+        settingsSection: deps.settingsSection?.() || "",
         backendModels: deps.backendModels?.() || new Map(),
         modelOptionsForBackend: deps.modelOptionsForBackend || (() => []),
         reasoningEffortSelectOptions: deps.reasoningEffortSelectOptions || (() => "")
@@ -45,6 +51,7 @@
           ${formHtml({ mode: "init", submitLabel: "Save AHA Config" })}
         </div>
       `;
+      syncModelOptions(elements.panelEl.querySelector("[data-bootstrap-config-form]"));
     }
 
     function renderBootstrapError(error) {
@@ -260,7 +267,7 @@
           const payload = await deps.fetchJson?.("/api/detect-models/test", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ provider_id: provider.id, auth_style: provider.auth_style, models: modelIds })
+            body: JSON.stringify({ provider, auth_style: provider.auth_style, models: modelIds })
           }, "Interface test failed");
           applyDetectResults(payload?.results);
           button.textContent = doneLabel;
@@ -338,39 +345,70 @@
       });
     }
 
+    function providerFromRow(row) {
+      if (!row) return null;
+      const value = key => String(row.querySelector(`[data-bootstrap-provider-field="${key}"]`)?.value || "").trim();
+      const name = value("name");
+      const baseUrl = value("base_url");
+      if (!name || !baseUrl) return null;
+      let id = value("id");
+      if (!id) {
+        id = `draft-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+        const idInput = row.querySelector('[data-bootstrap-provider-field="id"]');
+        if (idInput instanceof HTMLInputElement) idInput.value = id;
+        row.dataset.providerId = id;
+      }
+      return {
+        id,
+        name,
+        base_url: baseUrl,
+        anthropic_base_url: value("anthropic_base_url"),
+        auth_style: value("auth_style") || "auto",
+        credential: value("api_key")
+      };
+    }
+
     async function detectEnvModels(button) {
       const form = button?.closest?.("[data-bootstrap-config-form]");
-      const block = button?.closest?.("[data-bootstrap-provider-detect]");
-      if (!form || !block) return;
-      const statusEl = block.querySelector("[data-bootstrap-detect-status]");
-      const providerId = String(block.querySelector("[data-bootstrap-detect-provider]")?.value || "").trim();
-      const provider = (bootstrapConfigHelpers.providerList?.(configData().providers) || []).find(item => String(item.id || "") === providerId)
-        || { id: providerId, name: block.querySelector("[data-bootstrap-detect-provider] option:checked")?.textContent || providerId };
-      if (!providerId || !provider) {
-        if (statusEl) statusEl.textContent = "Save and select a Provider first.";
+      const providerRow = button?.closest?.("[data-bootstrap-provider-row]");
+      if (!form || !providerRow) return;
+      const statusEl = providerRow.querySelector("[data-bootstrap-detect-status]");
+      const provider = providerFromRow(providerRow);
+      if (!provider) {
+        if (statusEl) statusEl.textContent = t("settings.provider_required", "Enter Provider name and Base URL first.");
         return;
       }
       if (button instanceof HTMLButtonElement) button.disabled = true;
-      if (statusEl) statusEl.textContent = "Detecting models...";
+      if (statusEl) statusEl.textContent = t("settings.detecting_models", "Detecting models...");
       try {
         const payload = await deps.fetchJson?.("/api/detect-models", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ provider_id: providerId })
+          body: JSON.stringify({ provider })
         }, "Failed to detect models");
         const models = Array.isArray(payload?.models) ? payload.models : [];
         if (!models.length) {
-          if (statusEl) statusEl.textContent = "No models found.";
+          if (statusEl) statusEl.textContent = t("settings.no_models_found", "No models found.");
           return;
         }
         const detectedAuthStyle = String(payload?.auth_style || provider.auth_style || "auto");
-        const detectedProvider = { ...provider, auth_style: detectedAuthStyle };
+        const detectedProvider = {
+          ...provider,
+          id: String(payload?.provider_id || provider.id),
+          auth_style: detectedAuthStyle
+        };
+        const idInput = providerRow.querySelector('[data-bootstrap-provider-field="id"]');
+        if (idInput instanceof HTMLInputElement) idInput.value = detectedProvider.id;
+        providerRow.dataset.providerId = detectedProvider.id;
         if (provider.auth_style === "auto" && detectedAuthStyle !== "auto") {
-          const providerRow = form.querySelector(`[data-bootstrap-provider-row][data-provider-id="${CSS.escape(providerId)}"]`);
           const authSelect = providerRow?.querySelector('[data-bootstrap-provider-field="auth_style"]');
           if (authSelect instanceof HTMLSelectElement) authSelect.value = detectedAuthStyle;
         }
-        if (statusEl) statusEl.textContent = `Detected ${models.length} models · Authentication: ${detectedAuthStyle}`;
+        if (statusEl) statusEl.textContent = window.AHAI18n?.format?.(
+          "settings.models_detected",
+          { count: models.length, auth: detectedAuthStyle },
+          `Detected ${models.length} models · Authentication: ${detectedAuthStyle}`
+        ) || `Detected ${models.length} models · Authentication: ${detectedAuthStyle}`;
         await openDetectModal({ form, provider: detectedProvider, models });
       } catch (err) {
         if (statusEl) statusEl.textContent = err?.message || String(err);
@@ -406,8 +444,33 @@
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(body)
         }, mode === "settings" ? "Failed to save settings" : "Failed to initialize AHA");
-        deps.applyBootstrapPayload?.(payload);
-        if (state) state.textContent = mode === "settings" ? "Saved." : "";
+        let nextPayload = payload;
+        let savedMessage = mode === "settings" ? "Saved." : "";
+        const serviceBody = body.service_settings || {};
+        const serviceChanged = Boolean(
+          serviceBody.web_token
+          || serviceBody.aha_home !== String(configContext().serviceSettings?.configured_aha_home || configContext().serviceSettings?.aha_home || "")
+          || serviceBody.startup_enabled !== Boolean(configContext().serviceSettings?.startup_enabled)
+        );
+        if (serviceChanged) {
+          const serviceResult = await deps.fetchJson?.("/api/service-settings", {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(serviceBody)
+          }, "Failed to save AHA service settings");
+          nextPayload = {
+            ...payload,
+            service_settings: serviceResult?.service_settings || payload.service_settings
+          };
+          if (state && serviceResult?.restart_required) {
+            savedMessage = t(
+              "settings.saved_restart_required",
+              "Saved. Restart AHA from the tray to apply AHA_HOME or Web Token changes."
+            );
+          }
+        }
+        deps.applyBootstrapPayload?.(nextPayload);
+        if (state) state.textContent = savedMessage;
         if (mode === "settings") {
           maskSavedBackendCredentials(form);
           return;

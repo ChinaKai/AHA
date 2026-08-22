@@ -58,6 +58,32 @@ class WebSystemRoutesTests(unittest.TestCase):
             )
             self.assertFalse(traversal["ok"])
 
+    def test_service_settings_reports_home_and_rotates_token(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, mock.patch(
+            "aha_cli.services.web_service_settings.platform.is_windows",
+            return_value=False,
+        ):
+            root = Path(tmp) / ".aha"
+            status = json_response_body(
+                system_route_response(root, "", "GET", "/api/service-settings", {})
+            )
+            updated = json_response_body(
+                system_route_response(
+                    root,
+                    "",
+                    "PATCH",
+                    "/api/service-settings",
+                    {},
+                    body=json.dumps({"web_token": "new-web-token"}).encode("utf-8"),
+                )
+            )
+            token_text = (root / "web-token").read_text(encoding="utf-8")
+
+        self.assertEqual(status["service_settings"]["aha_home"], str(root.resolve()))
+        self.assertFalse(status["service_settings"]["startup_supported"])
+        self.assertTrue(updated["restart_required"])
+        self.assertEqual(token_text, "new-web-token")
+
     def test_group_digital_human_permissions_get_returns_defaults(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

@@ -2911,6 +2911,46 @@ button, input, select, textarea { font: inherit; }
   text-align: center;
   text-decoration: none;
 }
+.app-boot-gate {
+  display: none;
+}
+
+body.app-booting {
+  overflow: hidden;
+}
+
+body.app-booting > header,
+body.app-booting > main,
+body.app-booting > .login-view,
+body.app-booting > .task-memo-page,
+body.app-booting > .knowledge-home-page,
+body.app-booting > .global-search-dialog {
+  visibility: hidden;
+}
+
+body.app-booting .app-boot-gate {
+  position: fixed;
+  inset: 0;
+  z-index: 10000;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  background: var(--color-bg);
+  color: var(--color-text-subtle);
+}
+
+body.app-booting .app-boot-gate img {
+  width: 48px;
+  height: 48px;
+}
+
+body.app-booting .app-boot-gate strong {
+  color: var(--color-text-strong);
+  font-size: 22px;
+}
+
 body.auth-required main,
 body.auth-required .session-control,
 body.auth-required .home-view-switch,

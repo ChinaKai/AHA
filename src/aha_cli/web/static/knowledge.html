@@ -855,7 +855,7 @@
           <button class="button-ghost kb-navigation-action" type="button" data-kb-view="navigation" data-i18n="knowledge.tab_navigation">Nav</button>
           <button class="button-ghost" type="button" data-kb-view="graph" data-i18n="knowledge.tab_graph">Graph</button>
           <button class="button-ghost" type="button" data-kb-view="pending"><span data-i18n="knowledge.tab_pending">Pending</span><span id="pending-badge" class="kb-sidebar-count"></span></button>
-          <button class="button-ghost" id="kb-settings-open" type="button" data-i18n="common.settings">Settings</button>
+          <button class="button-ghost" id="kb-sync-now" type="button" data-i18n="knowledge.sync_now">Sync now</button>
         </div>
         <button class="button-ghost kb-sidebar-toggle" id="kb-sidebar-toggle" type="button" aria-controls="graph-file-tree" aria-expanded="true" aria-label="Collapse sidebar" data-i18n-aria-label="common.collapse_sidebar">‹</button>
       </div>
@@ -1247,7 +1247,7 @@
   <script src="/static/textarea_image_paste.js?v=clipboard-image-dedupe-v1"></script>
   <script src="/static/task_memo_markdown.js?v=underscore-literal-v1"></script>
   <script src="/static/search_highlight.js?v=global-search-v4"></script>
-  <script src="/static/i18n.js?v=knowledge-local-changes-v1"></script>
+  <script src="/static/i18n.js?v=settings-i18n-v1"></script>
   <script>
     const $ = (s) => document.querySelector(s);
     const t = (key, fallback) => window.AHAI18n?.t?.(key, fallback) || fallback || key;
@@ -1361,7 +1361,7 @@
     let compactSidebarExpanded = false;
     let compactSidebarResizeObserver = null;
     const GRAPH_SETTINGS_KEY = "aha:kb:graph-settings:v1";
-    const KB_TABS = ["entries", "navigation", "graph", "pending", "skills", "settings"];
+    const KB_TABS = ["entries", "navigation", "graph", "pending", "skills"];
     const ENTRIES_PAGE_LIMIT = 120;
 
     const GRAPH_SETTINGS_DEFAULTS = Object.freeze({
@@ -1600,7 +1600,6 @@
       for (const button of document.querySelectorAll("[data-kb-view]")) {
         button.classList.toggle("active", button.dataset.kbView === tab);
       }
-      $("#kb-settings-open")?.classList.toggle("active", tab === "settings");
       for (const id of KB_TABS) $("#tab-" + id).hidden = id !== tab;
       if (tab !== "graph") stopGraphLoop();
       if (tab === "navigation") {
@@ -1608,7 +1607,6 @@
       }
       if (tab === "pending") return loadPending();
       if (tab === "skills") return loadSkills();
-      if (tab === "settings") return loadSettings();
       if (tab === "entries") return loadEntries();
       if (tab === "graph") return loadGraph();
       return Promise.resolve();
@@ -5078,7 +5076,10 @@
     }
 
     window.openKbAgentSettings = async () => {
-      await showTab("settings");
+      const target = new URL(window.top.location.href);
+      target.searchParams.set("view", "settings");
+      target.searchParams.set("settings_section", "knowledge");
+      window.top.location.href = target.toString();
       $("#s-agent-backend")?.focus();
     };
 
@@ -5616,7 +5617,7 @@
     }
 
     function syncButtons() {
-      return [$("#settings-sync")].filter(Boolean);
+      return [$("#kb-sync-now"), $("#settings-sync")].filter(Boolean);
     }
 
     let currentSyncMode = "auto";
@@ -5953,7 +5954,6 @@
     for (const button of document.querySelectorAll("[data-kb-view]")) {
       button.addEventListener("click", () => showTab(button.dataset.kbView));
     }
-    $("#kb-settings-open").addEventListener("click", () => showTab("settings"));
     $("#kb-local-changes-close").addEventListener("click", closeLocalChangesModal);
     $("#kb-local-changes-modal").addEventListener("click", event => {
       if (event.target.id === "kb-local-changes-modal") closeLocalChangesModal();

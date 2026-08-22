@@ -50,6 +50,9 @@
       if (!elements.settingsContentEl) return;
       elements.settingsContentEl.innerHTML = bootstrapConfigFormHtml({ mode: "settings", submitLabel: "Save Settings" });
       window.AHAI18n?.apply(elements.settingsContentEl);
+      deps.syncBootstrapModelOptions?.(
+        elements.settingsContentEl.querySelector("[data-bootstrap-config-form]")
+      );
     }
 
     async function open(options = {}) {
@@ -157,7 +160,12 @@
       });
       elements.settingsDialogEl?.addEventListener("change", event => {
         const filter = event.target instanceof Element ? event.target.closest("[data-bootstrap-config-field$='.model_source']") : null;
-        if (filter) deps.syncBootstrapModelOptions?.(filter.closest("[data-bootstrap-config-form]"));
+        const knowledgeAgent = event.target instanceof Element
+          ? event.target.closest('[data-bootstrap-config-field="knowledge.agent.backend"], [data-bootstrap-config-field="knowledge.agent.model"]')
+          : null;
+        if (filter || knowledgeAgent) {
+          deps.syncBootstrapModelOptions?.((filter || knowledgeAgent).closest("[data-bootstrap-config-form]"));
+        }
       });
     }
 

@@ -712,8 +712,14 @@ if (html.includes('value="xhigh"')) process.exit(1);
     def test_knowledge_uses_shared_kb_agent_settings(self) -> None:
         root = static_root()
         html = (root / "knowledge.html").read_text(encoding="utf-8")
+        bootstrap = (root / "bootstrap_config.js").read_text(encoding="utf-8")
         i18n = (root / "i18n.js").read_text(encoding="utf-8")
 
+        self.assertNotIn('id="kb-settings-open"', html)
+        self.assertIn('id="kb-sync-now"', html)
+        self.assertIn('data-bootstrap-config-field="knowledge.agent.backend"', bootstrap)
+        self.assertIn('data-bootstrap-config-field="knowledge.agent.model"', bootstrap)
+        self.assertIn('data-bootstrap-config-field="knowledge.agent.reasoning_effort"', bootstrap)
         for field_id in ["s-agent-backend", "s-agent-model", "s-agent-effort", "s-agent-proxy"]:
             self.assertIn(f'id="{field_id}"', html)
         self.assertIn('id="s-agent-options-status" class="kb-muted" role="status" aria-live="polite"', html)
@@ -827,19 +833,20 @@ const context = { window: {} };
 vm.createContext(context);
 vm.runInContext(fs.readFileSync(0, "utf8"), context);
 const config = context.window.AHABootstrapConfig;
-const settings = config.bootstrapConfigFormHtml({ mode: "settings", config: { codex: {}, claude: {} } });
-for (const summary of ["Core", "Proxy", "Workspace", "Backend"]) {
-  if (!settings.includes(`<summary>${summary}</summary>`)) process.exit(1);
+const settings = config.bootstrapConfigFormHtml({ mode: "settings", config: { codex: {}, claude: {}, knowledge: {} } });
+for (const key of ["core", "proxy", "workspace", "backend", "knowledge"]) {
+  if (!settings.includes(`data-i18n="settings.section_${key}"`)) process.exit(1);
 }
-if ((settings.match(/bootstrap-config-section/g) || []).length !== 4) process.exit(1);
+if ((settings.match(/bootstrap-config-section/g) || []).length !== 5) process.exit(1);
 if (/bootstrap-config-section[^>]* open/.test(settings)) process.exit(1);
 if (!settings.includes('data-bootstrap-backend-card="codex"')) process.exit(1);
 if (!settings.includes('data-bootstrap-backend-card="claude"')) process.exit(1);
 if (!settings.includes('data-bootstrap-config-field="codex.model_source"')) process.exit(1);
 if (!settings.includes('data-bootstrap-config-field="claude.model_source"')) process.exit(1);
 if (settings.includes("Codex defaults") || settings.includes("Claude defaults")) process.exit(1);
-const init = config.bootstrapConfigFormHtml({ mode: "init", config: { codex: {}, claude: {} } });
+const init = config.bootstrapConfigFormHtml({ mode: "init", config: { codex: {}, claude: {}, knowledge: {} } });
 if ((init.match(/bootstrap-config-section[^>]*" open/g) || []).length !== 4) process.exit(1);
+if (!init.includes('data-bootstrap-section="knowledge"')) process.exit(1);
 '''
         result = subprocess.run(
             [node, "-e", assertion],
@@ -1267,7 +1274,7 @@ if (sourcePayload.claude.model_source !== "env") process.exit(1);
         self.assertEqual(result.returncode, 0, result.stderr)
         settings_controller = static_root().joinpath("settings_controller.js").read_text(encoding="utf-8")
         self.assertIn("[data-bootstrap-config-field$='.model_source']", settings_controller)
-        self.assertIn("deps.syncBootstrapModelOptions?.(filter.closest(\"[data-bootstrap-config-form]\"))", settings_controller)
+        self.assertIn('deps.syncBootstrapModelOptions?.((filter || knowledgeAgent).closest("[data-bootstrap-config-form]"))', settings_controller)
 
     def test_global_settings_omit_feishu_and_preserve_existing_integration(self) -> None:
         node = shutil.which("node")
@@ -1898,8 +1905,8 @@ controller.unmount();
         self.assertIn('id="token-usage"', integration_actions)
         self.assertNotIn('id="token-usage-popover"', integration_actions)
         self.assertLess(html.index('id="skills-console-popover"'), html.index('id="token-usage-popover"'))
-        self.assertIn('<link rel="stylesheet" href="/static/styles.css?v=hardware-groups-v2">', html)
-        self.assertIn('<script src="/static/i18n.js?v=hardware-groups-v2"></script>', html)
+        self.assertIn('<link rel="stylesheet" href="/static/styles.css?v=settings-knowledge-v1">', html)
+        self.assertIn('<script src="/static/i18n.js?v=settings-i18n-v1"></script>', html)
         self.assertIn('"task.open": "任务"', i18n)
         self.assertIn('"agents.open": "智能体"', i18n)
         self.assertIn('"agents.title": "智能体"', i18n)
@@ -2094,7 +2101,7 @@ controller.unmount();
         html = (root / "knowledge.html").read_text(encoding="utf-8")
         i18n = (root / "i18n.js").read_text(encoding="utf-8")
 
-        self.assertIn('<script src="/static/i18n.js?v=knowledge-local-changes-v1"></script>', html)
+        self.assertIn('<script src="/static/i18n.js?v=settings-i18n-v1"></script>', html)
         self.assertIn('id="s-git-proxy-enabled"', html)
         self.assertIn('$("#s-git-proxy-enabled").value = boolMode(s.git.proxy_enabled);', html)
         self.assertIn('proxy_enabled: modeBool("#s-git-proxy-enabled")', html)
@@ -2319,7 +2326,8 @@ controller.unmount();
         self.assertIn('onclick="openGraphCapture', html)
         self.assertIn('const skillsKey = "sidebar:skills";', html)
         self.assertIn("specialFileGroupCollapsed(skillsKey, true)", html)
-        self.assertIn('id="kb-settings-open"', html)
+        self.assertIn('id="kb-sync-now"', html)
+        self.assertNotIn('id="kb-settings-open"', html)
         self.assertNotIn('class="kb-tabs"', html)
         self.assertNotIn('data-tab="map"', html)
         self.assertNotIn('data-i18n-placeholder="knowledge.project_filter"', html)
@@ -2414,7 +2422,7 @@ controller.unmount();
         self.assertIn("opt.dataset.workspaceId = workspace.id || \"\"", html)
         self.assertIn("opt.textContent = workspace.label || workspace.name || workspace.path", html)
         self.assertIn("workspace_path: workspacePath || null", html)
-        self.assertIn('const KB_TABS = ["entries", "navigation", "graph", "pending", "skills", "settings"]', html)
+        self.assertIn('const KB_TABS = ["entries", "navigation", "graph", "pending", "skills"]', html)
         # Force-directed graph tab: canvas, floating controls, renderer, and test hook.
         self.assertIn('<canvas id="graph-canvas" class="kb-graph-canvas"></canvas>', html)
         self.assertIn('id="graph-controls-toggle"', html)
@@ -4575,7 +4583,7 @@ const tick = () => new Promise(resolve => setImmediate(resolve));
         i18n = (root / "i18n.js").read_text(encoding="utf-8")
         styles = (root / "styles.css").read_text(encoding="utf-8")
 
-        self.assertIn("<body>", html)
+        self.assertIn('<body class="app-booting" aria-busy="true">', html)
         self.assertIn('class="home-view-switch"', html)
         self.assertIn('id="open-task-view" class="home-view-button"', html)
         self.assertIn('id="open-task-memos"', html)
@@ -5728,15 +5736,32 @@ if (fallback.length !== 1 || fallback[0] !== fallbackFile) {
         event_bindings_script = (static / "event_bindings.js").read_text(encoding="utf-8")
         task_config_script = (static / "task_config_controller.js").read_text(encoding="utf-8")
         app_controller_factory_script = (static / "app_controller_factory.js").read_text(encoding="utf-8")
+        controller_registry_script = (static / "controller_registry.js").read_text(encoding="utf-8")
         ui_shell_script = (static / "ui_shell.js").read_text(encoding="utf-8")
+        i18n_script = (static / "i18n.js").read_text(encoding="utf-8")
         styles = (root / "src" / "aha_cli" / "web" / "static" / "styles.css").read_text(encoding="utf-8")
 
         self.assertIn("/api/bootstrap", script)
+        self.assertIn('<body class="app-booting" aria-busy="true">', html)
+        self.assertIn('id="app-boot-gate"', html)
+        self.assertIn('deps.completeBootGate?.();', controller_registry_script)
+        bootstrap_start = controller_registry_script.index("deps.loadBootstrap?.().then")
+        bootstrap_end = controller_registry_script.index("document.addEventListener", bootstrap_start)
+        bootstrap_flow = controller_registry_script[bootstrap_start:bootstrap_end]
+        self.assertLess(
+            bootstrap_flow.index("deps.completeBootGate?.();"),
+            bootstrap_flow.index("await renderScheduler.tick();"),
+        )
+        self.assertIn("Failed to hydrate the initial run", bootstrap_flow)
+        self.assertIn('document.body?.classList?.remove("app-booting")', script)
+        self.assertIn("body.app-booting .app-boot-gate", styles)
         self.assertIn('deps.fetchJson?.(deps.apiUrl?.("/api/tasks", params)', script)
         self.assertIn('deps.apiUrl?.("/api/agents/runtime"', script)
         self.assertIn("agentsRuntimeCache", script)
         self.assertIn("renderFirstRunState", script)
         self.assertIn("renderBootstrapConfigState", script)
+        self.assertIn('syncModelOptions(elements.panelEl.querySelector("[data-bootstrap-config-form]"))', script)
+        self.assertIn('elements.settingsContentEl.querySelector("[data-bootstrap-config-form]")', script)
         self.assertIn("deps.clearBootstrapHomeViews?.();", script)
         self.assertIn("deps.applyWorkflowTemplateData?.(payload.workflow_templates)", script)
         self.assertIn("function renderWorkflowTemplateOptions", script)
@@ -5764,11 +5789,22 @@ if (fallback.length !== 1 || fallback[0] !== fallbackFile) {
         self.assertIn(".aha/config.json", script)
         self.assertIn("data-bootstrap-config-form", script)
         self.assertIn("data-bootstrap-config-field", script)
-        self.assertIn("<summary>Core</summary>", script)
+        self.assertIn('data-i18n="settings.section_core"', script)
+        self.assertIn('data-bootstrap-service-field="aha_home"', script)
+        self.assertIn('data-bootstrap-service-field="web_token"', script)
+        self.assertIn('data-bootstrap-service-field="startup_enabled"', script)
         self.assertIn("Task concurrency", script)
-        self.assertIn("<summary>Proxy</summary>", script)
-        self.assertIn("<summary>Workspace</summary>", script)
-        self.assertIn("<summary>Backend</summary>", script)
+        self.assertIn('data-i18n="settings.section_proxy"', script)
+        self.assertIn('data-i18n="settings.section_workspace"', script)
+        self.assertIn('data-i18n="settings.section_backend"', script)
+        self.assertIn('data-i18n="settings.section_knowledge"', script)
+        self.assertIn('data-bootstrap-config-field="knowledge.enabled"', script)
+        self.assertIn('data-bootstrap-config-field="knowledge.sync.mode"', script)
+        self.assertIn('data-bootstrap-config-field="knowledge.agent.backend"', script)
+        self.assertIn("knowledge: {", script)
+        self.assertIn('data-i18n="settings.knowledge_intro"', script)
+        self.assertIn('data-i18n="settings.web_token_help"', script)
+        self.assertIn('"settings.knowledge_intro": "配置 AHA 知识库存储、同步、整理策略以及负责知识维护的 Agent。"', i18n_script)
         self.assertIn("Provider Connections", script)
         self.assertIn("bootstrapSharedProxyFieldsHtml(proxy)", script)
         self.assertIn('bootstrapBackendProxySwitchHtml("codex"', script)
@@ -5835,8 +5871,9 @@ if (fallback.length !== 1 || fallback[0] !== fallbackFile) {
         self.assertIn('anthropic_base_url: value("anthropic_base_url") || ""', script)
         self.assertIn('data-bootstrap-provider-field="anthropic_base_url"', script)
         self.assertIn("data-bootstrap-add-provider", script)
-        self.assertIn("Discover Models", script)
-        self.assertIn("data-bootstrap-detect-provider", script)
+        self.assertIn("Detect and bind models before saving this form.", script)
+        self.assertIn("providerFromRow", script)
+        self.assertIn("body: JSON.stringify({ provider })", script)
         self.assertIn("data-bootstrap-binding-list", script)
         self.assertIn("data-bootstrap-bind-backend", script)
         self.assertIn("configured_models: bootstrapConfiguredModels(form)", script)
@@ -6565,11 +6602,11 @@ if (resetCount !== 1 || emptyWorkspaceCount !== 1) {
         self.assertIn("task-supervision-mode", create_form)
         self.assertNotIn("selected-task-supervision-mode", create_form)
         self.assertIn('<script src="/static/time_format.js"></script>', html)
-        self.assertIn('<script src="/static/i18n.js?v=hardware-groups-v2"></script>', html)
+        self.assertIn('<script src="/static/i18n.js?v=settings-i18n-v1"></script>', html)
         self.assertIn('<script src="/static/app_helpers.js"></script>', html)
         self.assertIn('<script src="/static/task_metadata.js?v=hardware-groups-v1"></script>', html)
-        self.assertIn('<script src="/static/bootstrap_config.js?v=backend-plugin-v1"></script>', html)
-        self.assertIn('<script src="/static/bootstrap_controller.js?v=backend-plugin-v1"></script>', html)
+        self.assertIn('<script src="/static/bootstrap_config.js?v=settings-knowledge-v1"></script>', html)
+        self.assertIn('<script src="/static/bootstrap_controller.js?v=settings-knowledge-v1"></script>', html)
         self.assertIn('<script src="/static/task_form.js?v=hardware-terminal-v1"></script>', html)
         self.assertIn('<script src="/static/hardware_serial_picker.js?v=hardware-groups-v2"></script>', html)
         self.assertIn('<script src="/static/task_config_controller.js?v=hardware-groups-v2"></script>', html)
@@ -6607,7 +6644,7 @@ if (resetCount !== 1 || emptyWorkspaceCount !== 1) {
         self.assertIn('<script src="/static/auth_controller.js"></script>', html)
         self.assertIn('<script src="/static/backend_status.js"></script>', html)
         self.assertIn('<script src="/static/message_composer.js?v=chat-only-input-v38"></script>', html)
-        self.assertIn('<script src="/static/event_bindings.js?v=chat-scroll-v1"></script>', html)
+        self.assertIn('<script src="/static/event_bindings.js?v=settings-knowledge-v1"></script>', html)
         self.assertIn('<script src="/static/panel_controller.js?v=context-scroll-v2"></script>', html)
         self.assertIn('<script src="/static/render_orchestrator.js"></script>', html)
         self.assertIn('<script src="/static/status_store.js"></script>', html)
@@ -6615,16 +6652,16 @@ if (resetCount !== 1 || emptyWorkspaceCount !== 1) {
         self.assertIn('<script src="/static/run_actions.js?v=web-upgrade-v12"></script>', html)
         self.assertIn('<script src="/static/task_create_controller.js?v=browser-create-v3"></script>', html)
         self.assertIn('<script src="/static/app_actions.js"></script>', html)
-        self.assertIn('<script src="/static/settings_controller.js?v=provider-models-v11"></script>', html)
+        self.assertIn('<script src="/static/settings_controller.js?v=settings-knowledge-v1"></script>', html)
         self.assertIn('<script src="/static/run_controller.js?v=permissions-v1"></script>', html)
         self.assertIn('<script src="/static/message_flow.js?v=hardware-terminal-v1"></script>', html)
         self.assertIn('<script src="/static/render_scheduler.js"></script>', html)
         self.assertIn('<script src="/static/confirm_dialog.js"></script>', html)
-        self.assertIn('<script src="/static/controller_registry.js?v=hardware-group-switch-v2"></script>', html)
+        self.assertIn('<script src="/static/controller_registry.js?v=boot-gate-v2"></script>', html)
         self.assertIn('<script src="/static/app_bridge.js?v=permissions-v1"></script>', html)
         self.assertIn('<script src="/static/app_controller_factory.js?v=chat-scroll-v1"></script>', html)
         self.assertIn('<script src="/static/app_runtime_setup.js?v=permissions-v1"></script>', html)
-        self.assertIn('<script src="/static/app_runtime_wiring.js?v=chat-scroll-v1"></script>', html)
+        self.assertIn('<script src="/static/app_runtime_wiring.js?v=settings-knowledge-v1"></script>', html)
         self.assertIn('<script src="/static/app.js"></script>', html)
         self.assertLess(html.find("time_format.js"), html.find("app.js"))
         self.assertLess(html.find("time_format.js"), html.find("i18n.js"))

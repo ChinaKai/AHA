@@ -241,6 +241,10 @@
             <option value="x-api-key" ${provider.auth_style === "x-api-key" ? "selected" : ""}>x-api-key</option>
             <option value="none" ${provider.auth_style === "none" ? "selected" : ""}>None</option>
           </select><div class="field-help">Auto detects the authentication header when models are fetched.</div></label>
+          <div class="bootstrap-provider-detect-actions">
+            <button class="bootstrap-add-row" type="button" data-bootstrap-detect-models data-i18n="settings.detect_models">Detect Models</button>
+            <div class="field-help" data-bootstrap-detect-status data-i18n="settings.detect_models_draft_help">Detect and bind models before saving this form.</div>
+          </div>
         </div>
       </div>`;
   }
@@ -810,6 +814,13 @@
     const codex = cfg.codex || {};
     const claude = cfg.claude || {};
     const opencode = cfg.opencode || {};
+    const knowledge = cfg.knowledge || {};
+    const knowledgeGit = knowledge.git || {};
+    const knowledgeAgent = knowledge.agent || {};
+    const knowledgeSync = knowledge.sync || {};
+    const knowledgeCuration = knowledge.curation || {};
+    const knowledgeProjectNav = knowledge.project_nav || {};
+    const serviceSettings = options.serviceSettings || {};
     const proxy = cfg.proxy || {};
     const codexProxy = codex.proxy || {};
     const claudeProxy = claude.proxy || {};
@@ -817,13 +828,14 @@
     const backend = backendOptions.includes(configString(cfg.backend)) ? configString(cfg.backend) : "codex";
     const maskSecrets = mode === "settings";
     const sectionOpen = mode === "settings" ? "" : " open";
+    const knowledgeSectionOpen = String(options.settingsSection || "").toLowerCase() === "knowledge" ? " open" : "";
     const codexModel = selectedBackendModel("codex", codex.model || envModelValue(codex.env_active), options);
     const claudeModel = selectedBackendModel("claude", claude.model || envModelValue(claude.env_active), options);
     const opencodeModel = selectedBackendModel("opencode", opencode.model || envModelValue(opencode.env_active), options);
     return `
       <form class="bootstrap-form" data-bootstrap-config-form data-bootstrap-config-mode="${escapeHtml(mode)}">
         <details class="bootstrap-config-section"${sectionOpen}>
-          <summary>Core</summary>
+          <summary data-i18n="settings.section_core">Core</summary>
           <div class="bootstrap-config-stack">
             <label class="field-label">
               <span>Default backend</span>
@@ -835,17 +847,31 @@
               <input data-bootstrap-config-field="default_parallel" type="number" min="1" step="1" value="${escapeHtml(configString(cfg.default_parallel, "10"))}">
               <div class="field-help">Default number of tasks AHA may run in parallel.</div>
             </label>
+            <label class="field-label">
+              <span data-i18n="settings.aha_home">AHA_HOME</span>
+              <input data-bootstrap-service-field="aha_home" value="${escapeHtml(configString(serviceSettings.configured_aha_home || serviceSettings.aha_home))}" ${(mode !== "settings" || !serviceSettings.aha_home_editable) ? "disabled" : ""}>
+              <div class="field-help" data-i18n="${serviceSettings.aha_home_editable ? "settings.aha_home_help" : "settings.aha_home_readonly_help"}">${serviceSettings.aha_home_editable ? "Switches the tray-managed AHA home after a full AHA restart; existing data is not moved." : "Current AHA home. Change it from a Windows tray-managed installation."}</div>
+            </label>
+            <label class="field-label">
+              <span data-i18n="settings.web_token">Web Token</span>
+              <input data-bootstrap-service-field="web_token" type="password" autocomplete="new-password" placeholder="${serviceSettings.web_token_configured ? "Configured; leave blank to keep" : "Set a Web access token"}">
+              <div class="field-help" data-i18n="settings.web_token_help">Changing the token requires a full AHA restart and invalidates existing browser sessions.</div>
+            </label>
+            <label class="field-label checkbox-field">
+              <span data-i18n="settings.start_before_signin">Start Web before sign-in</span>
+              <span class="checkbox-line"><input data-bootstrap-service-field="startup_enabled" type="checkbox" ${serviceSettings.startup_enabled ? "checked" : ""} ${serviceSettings.startup_supported ? "" : "disabled"}><span data-i18n="${serviceSettings.startup_supported ? "settings.start_before_signin_help" : "settings.start_before_signin_unavailable"}">${serviceSettings.startup_supported ? "Use the Windows startup task; enabling may show UAC and credential prompts." : "Available for Windows tray-managed installations."}</span></span>
+            </label>
           </div>
         </details>
         <details class="bootstrap-config-section"${sectionOpen}>
-          <summary>Proxy</summary>
+          <summary data-i18n="settings.section_proxy">Proxy</summary>
           <div class="bootstrap-config-grid">
             ${bootstrapSharedProxyFieldsHtml(proxy)}
           </div>
           <div class="field-help">Shared by Codex, Claude, Web upgrades, and other AHA network operations.</div>
         </details>
         <details class="bootstrap-config-section"${sectionOpen}>
-          <summary>Workspace</summary>
+          <summary data-i18n="settings.section_workspace">Workspace</summary>
           <label class="field-label">
             <span>Workspace roots</span>
             <div class="bootstrap-config-list" data-bootstrap-config-list="workspace_roots">
@@ -861,7 +887,7 @@
           </label>
         </details>
         <details class="bootstrap-config-section bootstrap-backend-section"${sectionOpen}>
-          <summary>Backend</summary>
+          <summary data-i18n="settings.section_backend">Backend</summary>
           <div class="field-help bootstrap-section-intro">Configure Codex, Claude and OpenCode runtimes, then connect models from shared API Providers.</div>
           <div class="bootstrap-backend-runtime-grid">
             <section class="bootstrap-backend-card" data-bootstrap-backend-card="codex">
@@ -993,13 +1019,6 @@
           </div>
           <div class="bootstrap-provider-heading">
             <div>
-              <strong>Discover Models</strong>
-              <div class="field-help">Fetch a saved Provider's models, test selected interface capabilities, then bind each model to one or more Backends.</div>
-            </div>
-          </div>
-          ${bootstrapEnvDetectHtml(cfg.providers)}
-          <div class="bootstrap-provider-heading">
-            <div>
               <strong>Configured Models</strong>
               <div class="field-help">The same Provider model may be bound to Codex, Claude and OpenCode with different wire APIs.</div>
             </div>
@@ -1007,6 +1026,93 @@
           </div>
           <div class="bootstrap-config-list bootstrap-model-binding-list" data-bootstrap-binding-list>
             ${configuredModelsHtml(cfg.configured_models, cfg.providers)}
+          </div>
+        </details>
+        <details class="bootstrap-config-section" data-bootstrap-section="knowledge"${knowledgeSectionOpen}>
+          <summary data-i18n="settings.section_knowledge">Knowledge</summary>
+          <div class="field-help bootstrap-section-intro" data-i18n="settings.knowledge_intro">Configure AHA Knowledge storage, synchronization, curation, and the Agent used for Knowledge maintenance.</div>
+          <div class="bootstrap-config-grid">
+            <label class="field-label checkbox-field">
+              <span data-i18n="settings.knowledge_enabled">Knowledge enabled</span>
+              <span class="checkbox-line"><input data-bootstrap-config-field="knowledge.enabled" type="checkbox" ${knowledge.enabled !== false ? "checked" : ""}><span data-i18n="settings.knowledge_enabled_help">Use Knowledge and project navigation in AHA tasks</span></span>
+            </label>
+            <label class="field-label">
+              <span data-i18n="settings.knowledge_path">Storage path</span>
+              <input data-bootstrap-config-field="knowledge.path" placeholder="default: AHA_HOME/knowledge" value="${escapeHtml(configString(knowledge.path))}">
+            </label>
+            <label class="field-label">
+              <span data-i18n="settings.knowledge_curation">Curation</span>
+              <select data-bootstrap-config-field="knowledge.curation.gate">
+                ${["agent-auto", "auto", "manual", "off"].map(value => `<option value="${value}" ${configString(knowledgeCuration.gate, "agent-auto") === value ? "selected" : ""}>${value}</option>`).join("")}
+              </select>
+            </label>
+            <label class="field-label checkbox-field">
+              <span data-i18n="settings.knowledge_project_nav">Project Navigation</span>
+              <span class="checkbox-line"><input data-bootstrap-config-field="knowledge.project_nav.enabled" type="checkbox" ${knowledgeProjectNav.enabled !== false ? "checked" : ""}><span data-i18n="settings.knowledge_project_nav_help">Maintain project navigation</span></span>
+            </label>
+          </div>
+          <div class="bootstrap-provider-heading"><strong data-i18n="settings.knowledge_sync">Knowledge Sync</strong></div>
+          <div class="bootstrap-config-grid">
+            <label class="field-label checkbox-field">
+              <span data-i18n="settings.knowledge_git_enabled">Git sync enabled</span>
+              <span class="checkbox-line"><input data-bootstrap-config-field="knowledge.git.enabled" type="checkbox" ${knowledgeGit.enabled !== false ? "checked" : ""}><span data-i18n="settings.knowledge_git_enabled_help">Use a Git repository for Knowledge synchronization</span></span>
+            </label>
+            <label class="field-label">
+              <span data-i18n="settings.knowledge_sync_mode">Sync mode</span>
+              <select data-bootstrap-config-field="knowledge.sync.mode">
+                ${["auto", "manual", "off"].map(value => `<option value="${value}" ${configString(knowledgeSync.mode, "auto") === value ? "selected" : ""}>${value}</option>`).join("")}
+              </select>
+            </label>
+            <label class="field-label">
+              <span data-i18n="settings.knowledge_sync_interval">Interval (minutes)</span>
+              <input data-bootstrap-config-field="knowledge.sync.interval_minutes" type="number" min="1" value="${escapeHtml(configString(knowledgeSync.interval_minutes, "60"))}">
+            </label>
+            <label class="field-label">
+              <span data-i18n="settings.knowledge_conflicts">Conflict handling</span>
+              <select data-bootstrap-config-field="knowledge.sync.resolve_conflicts">
+                <option value="agent" ${configString(knowledgeSync.resolve_conflicts, "agent") === "agent" ? "selected" : ""}>Agent resolves</option>
+                <option value="manual" ${configString(knowledgeSync.resolve_conflicts, "agent") === "manual" ? "selected" : ""}>Manual</option>
+              </select>
+            </label>
+            <label class="field-label checkbox-field">
+              <span data-i18n="settings.knowledge_git_proxy">Git proxy</span>
+              <span class="checkbox-line"><input data-bootstrap-config-field="knowledge.git.proxy_enabled" type="checkbox" ${knowledgeGit.proxy_enabled ? "checked" : ""}><span data-i18n="settings.knowledge_git_proxy_help">Use the shared AHA proxy</span></span>
+            </label>
+            <label class="field-label">
+              <span data-i18n="settings.knowledge_remote">Remote</span>
+              <input data-bootstrap-config-field="knowledge.git.remote" placeholder="git@github.com:user/aha-kb.git" value="${escapeHtml(configString(knowledgeGit.remote))}">
+            </label>
+            <label class="field-label">
+              <span data-i18n="settings.knowledge_branch">Branch</span>
+              <input data-bootstrap-config-field="knowledge.git.branch" value="${escapeHtml(configString(knowledgeGit.branch, "main"))}">
+            </label>
+          </div>
+          <div class="bootstrap-provider-heading"><strong data-i18n="settings.knowledge_agent">Knowledge Agent</strong></div>
+          <div class="bootstrap-config-grid">
+            <label class="field-label">
+              <span data-i18n="settings.knowledge_agent_backend">Backend</span>
+              <select data-bootstrap-config-field="knowledge.agent.backend">
+                <option value="" ${!configString(knowledgeAgent.backend) ? "selected" : ""}>Follow global</option>
+                <option value="codex" ${configString(knowledgeAgent.backend) === "codex" ? "selected" : ""}>Codex</option>
+                <option value="claude" ${configString(knowledgeAgent.backend) === "claude" ? "selected" : ""}>Claude</option>
+              </select>
+            </label>
+            <label class="field-label">
+              <span data-i18n="settings.knowledge_agent_model">Model</span>
+              <select data-bootstrap-config-field="knowledge.agent.model"></select>
+            </label>
+            <label class="field-label">
+              <span data-i18n="settings.knowledge_agent_effort">Reasoning effort</span>
+              <select data-bootstrap-config-field="knowledge.agent.reasoning_effort"></select>
+            </label>
+            <label class="field-label">
+              <span data-i18n="settings.knowledge_agent_proxy">Proxy</span>
+              <select data-bootstrap-config-field="knowledge.agent.proxy_enabled">
+                <option value="inherit" ${knowledgeAgent.proxy_enabled == null ? "selected" : ""}>Follow backend</option>
+                <option value="true" ${knowledgeAgent.proxy_enabled === true ? "selected" : ""}>On</option>
+                <option value="false" ${knowledgeAgent.proxy_enabled === false ? "selected" : ""}>Off</option>
+              </select>
+            </label>
           </div>
         </details>
         <div class="bootstrap-form-actions">
@@ -1154,6 +1260,22 @@
       effortSelect.innerHTML = backendReasoningEffortSelectOptions(backend, select.value || "", previousEffort, context);
       if ([...effortSelect.options].some(item => item.value === previousEffort)) effortSelect.value = previousEffort;
     }
+    const knowledgeBackendSelect = bootstrapConfigField(form, "knowledge.agent.backend");
+    const knowledgeModelSelect = bootstrapConfigField(form, "knowledge.agent.model");
+    const knowledgeEffortSelect = bootstrapConfigField(form, "knowledge.agent.reasoning_effort");
+    if (knowledgeBackendSelect && knowledgeModelSelect && knowledgeEffortSelect) {
+      const backend = String(
+        knowledgeBackendSelect.value
+        || bootstrapConfigText(form, "backend")
+        || "codex"
+      );
+      const previousModel = String(knowledgeModelSelect.value || context.config?.knowledge?.agent?.model || "");
+      knowledgeModelSelect.innerHTML = bootstrapFormModelSelectOptions(form, backend, previousModel, context);
+      if ([...knowledgeModelSelect.options].some(item => item.value === previousModel)) knowledgeModelSelect.value = previousModel;
+      const previousEffort = String(knowledgeEffortSelect.value || context.config?.knowledge?.agent?.reasoning_effort || "");
+      knowledgeEffortSelect.innerHTML = backendReasoningEffortSelectOptions(backend, knowledgeModelSelect.value || "", previousEffort, context);
+      if ([...knowledgeEffortSelect.options].some(item => item.value === previousEffort)) knowledgeEffortSelect.value = previousEffort;
+    }
   }
 
   function addBootstrapConfigRow(button, context = {}) {
@@ -1225,6 +1347,42 @@
       retention_policy: config.retention_policy || {},
       providers: bootstrapProviders(form, context),
       configured_models: bootstrapConfiguredModels(form),
+      service_settings: {
+        aha_home: String(form.querySelector('[data-bootstrap-service-field="aha_home"]')?.value || "").trim(),
+        web_token: String(form.querySelector('[data-bootstrap-service-field="web_token"]')?.value || "").trim(),
+        startup_enabled: Boolean(form.querySelector('[data-bootstrap-service-field="startup_enabled"]')?.checked)
+      },
+      knowledge: {
+        enabled: Boolean(bootstrapConfigField(form, "knowledge.enabled")?.checked),
+        path: bootstrapConfigText(form, "knowledge.path") || null,
+        curation: {
+          gate: bootstrapConfigText(form, "knowledge.curation.gate") || "agent-auto"
+        },
+        project_nav: {
+          enabled: Boolean(bootstrapConfigField(form, "knowledge.project_nav.enabled")?.checked)
+        },
+        git: {
+          enabled: Boolean(bootstrapConfigField(form, "knowledge.git.enabled")?.checked),
+          proxy_enabled: Boolean(bootstrapConfigField(form, "knowledge.git.proxy_enabled")?.checked),
+          remote: bootstrapConfigText(form, "knowledge.git.remote") || null,
+          branch: bootstrapConfigText(form, "knowledge.git.branch") || "main"
+        },
+        sync: {
+          mode: bootstrapConfigText(form, "knowledge.sync.mode") || "auto",
+          interval_minutes: Number(bootstrapConfigText(form, "knowledge.sync.interval_minutes") || 60),
+          resolve_conflicts: bootstrapConfigText(form, "knowledge.sync.resolve_conflicts") || "agent"
+        },
+        agent: {
+          backend: bootstrapConfigText(form, "knowledge.agent.backend") || null,
+          model: bootstrapConfigText(form, "knowledge.agent.model") || null,
+          reasoning_effort: bootstrapConfigText(form, "knowledge.agent.reasoning_effort") || null,
+          proxy_enabled: ({
+            true: true,
+            false: false,
+            inherit: null
+          })[bootstrapConfigText(form, "knowledge.agent.proxy_enabled") || "inherit"]
+        }
+      },
       codex: {
         bin: bootstrapConfigText(form, "codex.bin") || "codex",
         model: bootstrapConfigCodexModel(form),

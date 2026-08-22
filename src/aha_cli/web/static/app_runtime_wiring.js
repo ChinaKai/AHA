@@ -641,6 +641,7 @@ bootstrapController = window.AHABootstrapController.createBootstrapController({
   locationOrigin: () => location.origin,
   modelOptionsForBackend: backend => runtimeOptions.modelOptionsForBackend(backend),
   reasoningEffortSelectOptions: (backend, model, current) => runtimeOptions.reasoningEffortSelectOptions(backend, model, current),
+  settingsSection: () => String(queryParams.get("settings_section") || "").trim().toLowerCase(),
   openTaskMemoHome: () => taskMemoController.openDialog?.(),
   renderEmptyWorkspace: renderOrchestrator.renderEmptyWorkspace,
   resetEmptyRunState: () => {
@@ -1453,6 +1454,11 @@ window.AHAAppRuntime = Object.freeze({
       },
       authRequired: () => authController.isRequired(),
       bootstrapError: () => bootstrapError,
+      completeBootGate: () => {
+        document.body?.classList?.remove("app-booting");
+        document.body?.removeAttribute?.("aria-busy");
+        document.getElementById("app-boot-gate")?.remove?.();
+      },
       currentRunId: () => currentRunId,
       documentHidden: () => document.visibilityState === "hidden",
       ensureConversationLoaded,
