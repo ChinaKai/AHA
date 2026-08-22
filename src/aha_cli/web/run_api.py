@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from aha_cli.backends.registry import agent_backends
+from aha_cli.backends.registry import agent_backend_names, agent_backends
 from aha_cli.domain.workflow_templates import workflow_template_metadata
 from aha_cli.services.app_version import aha_version
 from aha_cli.services.browser_runtime import list_named_browser_profiles
@@ -180,7 +180,9 @@ def bootstrap_payload(root: Path, default_run_id: str, cwd: Path | None = None) 
         "web_upgrade": upgrade,
         "initialized": config_path(root).exists(),
         "config": public_config(cfg),
-        "config_backend_options": ["codex", "claude"],
+        "config_backend_options": [
+            name for name in agent_backend_names() if name != "stub"
+        ],
         "default_workspace_path": str(cwd or Path.cwd()),
         "default_run_id": selected_run_id,
         "ui_state": read_global_ui_state(root),

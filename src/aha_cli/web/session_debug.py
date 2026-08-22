@@ -4,6 +4,7 @@ from functools import lru_cache
 import json
 from pathlib import Path
 
+from aha_cli.backends.plugin import maybe_backend_plugin
 from aha_cli.services.backend_runtime import backend_session_jsonl_path
 from aha_cli.services.prompt_templates import render_prompt_template
 from aha_cli.web.realtime_debug import realtime_debug_log
@@ -159,6 +160,7 @@ def _cached_backend_session_analysis(
 def backend_session_jsonl_info(
     session: dict,
     *,
+    root: Path | None = None,
     distro: str | None = None,
     native_home: str | None = None,
 ) -> dict:
@@ -168,6 +170,22 @@ def backend_session_jsonl_info(
     compact_summary = session.get("compact_summary") if isinstance(session.get("compact_summary"), dict) else None
     if not session_id:
         return {"id": "", "backend": backend, "path": "", "size_bytes": None, "exists": False, "analysis": {}, "history": history, "compact_summary": compact_summary}
+
+    plugin = maybe_backend_plugin(backend)
+    if plugin is not None and root is not None:
+        artifact = plugin.session_artifact_info(
+            aha_home=root,
+            run_id=str(session.get("run_id") or ""),
+            task_id=str(session.get("task_id") or "").strip() or None,
+            target=str(session.get("agent_id") or "").strip() or None,
+            session_id=session_id,
+        )
+        if artifact:
+            return {
+                **artifact,
+                "history": history,
+                "compact_summary": compact_summary,
+            }
 
     path = backend_session_jsonl_path(
         session_id,

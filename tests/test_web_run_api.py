@@ -75,7 +75,7 @@ class WebRunApiTests(unittest.TestCase):
         self.assertFalse(body["initialized"])
         self.assertEqual(body["config"]["backend"], "stub")
         self.assertEqual(body["config"]["default_parallel"], 10)
-        self.assertEqual(body["config_backend_options"], ["codex", "claude"])
+        self.assertEqual(body["config_backend_options"], ["codex", "claude", "opencode"])
         workflow_templates = body["workflow_templates"]
         self.assertEqual(workflow_templates[0]["id"], "auto")
         self.assertIn("fault-debug", {item["id"] for item in workflow_templates})

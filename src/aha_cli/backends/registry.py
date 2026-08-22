@@ -7,6 +7,18 @@ import subprocess
 import time
 
 from aha_cli import platform
+from aha_cli.backends.plugin import (
+    BackendDescriptor,
+    BackendResolvedTurn,
+    BackendTurnRequest,
+    BackendTurnResult,
+    FunctionalBackendPlugin,
+    agent_backend_plugins,
+    backend_plugins,
+    get_backend_plugin,
+    maybe_backend_plugin,
+    register_backend,
+)
 from aha_cli.services.backend_paths import add_user_backend_paths
 
 CODEX_DEFAULT_MODEL = "gpt-5.5"
@@ -195,12 +207,18 @@ def _codex_model_options(config: dict | None = None) -> list[dict]:
 
 
 def _backend_model_options(backend: str, config: dict | None = None) -> list[dict]:
+    plugin = maybe_backend_plugin(backend)
+    if plugin is not None:
+        return plugin.model_options(config)
     if backend == "codex":
         return _codex_model_options(config)
     return _copy_model_options(BACKENDS.get(backend, {}).get("models", DEFAULT_MODEL_OPTIONS))
 
 
 def _backend_reasoning_effort_options(backend: str) -> list[dict]:
+    plugin = maybe_backend_plugin(backend)
+    if plugin is not None:
+        return plugin.reasoning_effort_options()
     if backend == "codex":
         return _reasoning_effort_options(CODEX_FALLBACK_REASONING_EFFORT_NAMES)
     if backend == "claude":
@@ -213,6 +231,8 @@ def _env_group_model_id(backend: str, group: dict) -> str:
         return str(group.get("OPENAI_MODEL") or group.get("ANTHROPIC_MODEL") or group.get("model") or "").strip()
     if backend == "claude":
         return str(group.get("ANTHROPIC_MODEL") or group.get("model") or "").strip()
+    if backend == "opencode":
+        return str(group.get("OPENCODE_MODEL") or group.get("model") or "").strip()
     return ""
 
 
@@ -280,17 +300,30 @@ def reasoning_effort_options(backend: str = "codex") -> list[dict]:
     return _backend_reasoning_effort_options(backend)
 
 
-def normalize_reasoning_effort(value: object, backend: str | None = None) -> str | None:
+def _normalize_reasoning_effort_for_names(
+    value: object,
+    names: tuple[str, ...] | list[str],
+) -> str | None:
     effort = str(value or "").strip().lower()
     if not effort or effort in {"default", "none", "null"}:
         return None
-    allowed = CLAUDE_REASONING_EFFORT_NAMES if backend == "claude" else REASONING_EFFORT_NAMES
-    if effort not in allowed:
+    if effort not in names:
         raise ValueError(f"unknown reasoning effort: {value}")
     return effort
 
 
+def normalize_reasoning_effort(value: object, backend: str | None = None) -> str | None:
+    plugin = maybe_backend_plugin(str(backend or ""))
+    if plugin is not None:
+        return plugin.normalize_reasoning_effort(value)
+    allowed = CLAUDE_REASONING_EFFORT_NAMES if backend == "claude" else REASONING_EFFORT_NAMES
+    return _normalize_reasoning_effort_for_names(value, allowed)
+
+
 def resolve_model(backend: str, model: str | None) -> str | None:
+    plugin = maybe_backend_plugin(backend)
+    if plugin is not None:
+        return plugin.resolve_model(model)
     normalized = str(model or "").strip()
     if backend == "codex" and normalized in {"", "default"}:
         return CODEX_DEFAULT_MODEL
@@ -341,7 +374,11 @@ def _matching_env_group_name(backend: str, model: str, config: dict | None) -> s
     return None
 
 
-def normalize_model_selector(backend: str, model: object, config: dict | None = None) -> str | None:
+def _normalize_model_selector_legacy(
+    backend: str,
+    model: object,
+    config: dict | None = None,
+) -> str | None:
     raw = str(model or "").strip()
     if not raw or raw.lower() == "default":
         return None
@@ -365,32 +402,42 @@ def normalize_model_selector(backend: str, model: object, config: dict | None = 
     return raw
 
 
+def normalize_model_selector(backend: str, model: object, config: dict | None = None) -> str | None:
+    plugin = maybe_backend_plugin(backend)
+    if plugin is not None:
+        return plugin.normalize_model_selector(model, config)
+    return _normalize_model_selector_legacy(backend, model, config)
+
+
 def backend_names() -> list[str]:
-    return sorted(BACKENDS)
+    return sorted(plugin.descriptor.name for plugin in backend_plugins())
 
 
 def agent_backend_names() -> list[str]:
-    return [name for name, backend in BACKENDS.items() if backend.get("kind") == "agent"]
+    return [plugin.descriptor.name for plugin in agent_backend_plugins()]
 
 
 def agent_backends(config: dict | None = None) -> list[dict]:
     result: list[dict] = []
-    for name in agent_backend_names():
-        catalog_models = _backend_model_options(name, config)
+    for plugin in agent_backend_plugins():
+        descriptor = plugin.descriptor
+        name = descriptor.name
+        catalog_models = plugin.model_options(config)
         result.append(
             {
                 "name": name,
                 "models": [*catalog_models, *_backend_env_model_options(name, config, catalog_models)],
-                "reasoning_efforts": _backend_reasoning_effort_options(name),
-                "commands": BACKENDS[name].get("commands", []),
-                "native_commands": BACKENDS[name].get("native_commands", []),
+                "reasoning_efforts": plugin.reasoning_effort_options(),
+                "commands": [dict(command) for command in descriptor.commands],
+                "native_commands": [dict(command) for command in descriptor.native_commands],
             }
         )
     return result
 
 
 def agent_commands(backend: str = "codex") -> list[dict]:
-    return list(BACKENDS.get(backend, {}).get("commands", []))
+    plugin = maybe_backend_plugin(backend)
+    return [dict(command) for command in plugin.descriptor.commands] if plugin else []
 
 
 def model_options(backend: str = "codex", config: dict | None = None) -> list[dict]:
@@ -408,8 +455,383 @@ def agent_backend_or_default(name: str | None, default: str = "codex") -> str:
 
 
 def require_backend(name: str) -> dict:
-    if name not in BACKENDS:
+    plugin = maybe_backend_plugin(name)
+    if plugin is None:
         raise SystemExit(f"Unknown backend: {name}")
-    backend = dict(BACKENDS[name])
-    backend["models"] = _backend_model_options(name)
+    descriptor = plugin.descriptor
+    backend = {
+        "name": descriptor.name,
+        "kind": descriptor.kind,
+        "label": descriptor.label,
+        "commands": [dict(command) for command in descriptor.commands],
+        "native_commands": [dict(command) for command in descriptor.native_commands],
+    }
+    backend["models"] = plugin.model_options()
     return backend
+
+
+def _run_codex_plugin_turn(request: BackendTurnRequest) -> BackendTurnResult:
+    from aha_cli.backends.codex import run_codex_exec
+
+    runner = request.resolved.extras.get("turn_runner")
+    if not callable(runner):
+        runner = run_codex_exec
+    kwargs = {
+        "cwd": request.cwd,
+        "output_file": request.output_file,
+        "codex_bin": request.binary,
+        "model": request.resolved.extras.get("execution_model")
+        or request.resolved.command_model,
+        "sandbox": request.sandbox,
+        "approval": request.approval,
+        "json_events": request.json_events,
+        "reasoning_effort": request.resolved.reasoning_effort,
+        "extra_args": request.extra_args,
+        "events_file": request.events_file,
+        "run_id": request.run_id,
+        "task_id": request.task_id,
+        "source": request.source,
+        "target": request.target,
+        "session": request.session,
+        "proxy_env": request.resolved.proxy_env,
+        "codex_config": request.resolved.backend_config,
+        "aha_home": request.aha_home,
+        "config": request.config,
+    }
+    if request.event_callback is not None:
+        kwargs["event_callback"] = request.event_callback
+    exit_code, reply, session = runner(request.prompt, **kwargs)
+    return BackendTurnResult(exit_code=exit_code, reply=reply, session=session)
+
+
+def _run_claude_plugin_turn(request: BackendTurnRequest) -> BackendTurnResult:
+    from aha_cli.backends.claude import run_claude_exec
+
+    runner = request.resolved.extras.get("turn_runner")
+    if not callable(runner):
+        runner = run_claude_exec
+    kwargs = {
+        "cwd": request.cwd,
+        "output_file": request.output_file,
+        "claude_bin": request.binary,
+        "model": request.resolved.command_model,
+        "permission_mode": str(
+            request.resolved.extras.get("permission_mode")
+            or request.resolved.backend_config.get("permission_mode")
+            or "plan"
+        ),
+        "reasoning_effort": request.resolved.reasoning_effort,
+        "extra_args": request.extra_args,
+        "events_file": request.events_file,
+        "run_id": request.run_id,
+        "task_id": request.task_id,
+        "source": request.source,
+        "target": request.target,
+        "session": request.session,
+        "proxy_env": request.resolved.proxy_env,
+        "claude_config": request.resolved.backend_config,
+    }
+    if request.event_callback is not None:
+        kwargs["event_callback"] = request.event_callback
+    exit_code, reply, session = runner(request.prompt, **kwargs)
+    return BackendTurnResult(exit_code=exit_code, reply=reply, session=session)
+
+
+def _codex_runner_plugin_command(args, config: dict) -> str:
+    from aha_cli.backends.codex import codex_runner_command
+
+    return codex_runner_command(args, config)
+
+
+def _claude_runner_plugin_command(args, config: dict) -> str:
+    from aha_cli.backends.claude import claude_runner_command
+
+    return claude_runner_command(args, config)
+
+
+def _opencode_model_plugin_options(config: dict | None) -> list[dict]:
+    from aha_cli.backends.opencode import opencode_model_options
+
+    return opencode_model_options(config)
+
+
+def _opencode_reasoning_plugin_options() -> list[dict]:
+    from aha_cli.backends.opencode import OPENCODE_REASONING_EFFORTS
+
+    return _reasoning_effort_options(OPENCODE_REASONING_EFFORTS)
+
+
+def _normalize_opencode_plugin_reasoning(value: object) -> str | None:
+    from aha_cli.backends.opencode import normalize_opencode_reasoning_effort
+
+    return normalize_opencode_reasoning_effort(value)
+
+
+def _resolve_opencode_plugin_turn(**kwargs) -> BackendResolvedTurn:
+    from aha_cli.backends.opencode import resolve_opencode_turn
+
+    return resolve_opencode_turn(**kwargs)
+
+
+def _run_opencode_plugin_turn(request: BackendTurnRequest) -> BackendTurnResult:
+    from aha_cli.backends.opencode import run_opencode_turn
+
+    return run_opencode_turn(request)
+
+
+def _normalize_opencode_plugin_usage(usage: dict) -> dict:
+    from aha_cli.backends.opencode import normalize_opencode_usage
+
+    return normalize_opencode_usage(usage)
+
+
+def _opencode_plugin_session_artifact_info(**kwargs) -> dict:
+    from aha_cli.backends.opencode import opencode_session_artifact_info
+
+    return opencode_session_artifact_info(**kwargs)
+
+
+def _resolve_codex_plugin_turn(
+    *,
+    config: dict,
+    model: str | None,
+    reasoning_effort: str | None,
+    task_scoped: bool,
+    session: dict | None = None,
+    requested_model_override: str | None = None,
+    requested_model_override_set: bool = False,
+) -> BackendResolvedTurn:
+    from aha_cli.backends.codex import (
+        codex_cli_model,
+        codex_config_for_model,
+        codex_resolved_model,
+    )
+
+    codex_cfg = config.get("codex") if isinstance(config.get("codex"), dict) else {}
+    configured_model = model
+    if not configured_model:
+        configured_model = CODEX_DEFAULT_MODEL if task_scoped else codex_cfg.get("model")
+    normalized_model = _normalize_model_selector_legacy(
+        "codex",
+        configured_model or (session or {}).get("model"),
+        config,
+    )
+    requested_model = requested_model_override
+    if not requested_model_override_set:
+        requested_model = (
+            configured_model
+            if configured_model is not None
+            else (session or {}).get("requested_model", normalized_model)
+        )
+    backend_config = codex_config_for_model(codex_cfg, normalized_model)
+    command_model = codex_cli_model(backend_config, normalized_model)
+    resolved_model = codex_resolved_model(backend_config, normalized_model)
+    return BackendResolvedTurn(
+        requested_model=requested_model,
+        command_model=command_model,
+        resolved_model=resolved_model,
+        reasoning_effort=reasoning_effort,
+        backend_config=backend_config,
+        extras={
+            "configured_model": configured_model,
+            "normalized_model": normalized_model,
+            "execution_model": normalized_model,
+        },
+    )
+
+
+def _resolve_claude_plugin_turn(
+    *,
+    config: dict,
+    model: str | None,
+    reasoning_effort: str | None,
+    task_scoped: bool,
+    session: dict | None = None,
+    requested_model_override: str | None = None,
+    requested_model_override_set: bool = False,
+) -> BackendResolvedTurn:
+    from aha_cli.backends.claude import (
+        claude_cli_model,
+        claude_config_for_model,
+        claude_resolved_model,
+    )
+
+    del task_scoped
+    claude_cfg = config.get("claude") if isinstance(config.get("claude"), dict) else {}
+    configured_model = model or claude_cfg.get("model")
+    normalized_model = _normalize_model_selector_legacy(
+        "claude",
+        configured_model or (session or {}).get("model"),
+        config,
+    )
+    requested_model = requested_model_override
+    if not requested_model_override_set:
+        requested_model = (
+            configured_model
+            if configured_model is not None
+            else (session or {}).get("requested_model", normalized_model)
+        )
+    backend_config = claude_config_for_model(claude_cfg, normalized_model)
+    command_model = claude_cli_model(normalized_model, claude_cfg)
+    resolved_model = claude_resolved_model(backend_config, normalized_model)
+    return BackendResolvedTurn(
+        requested_model=requested_model,
+        command_model=command_model,
+        resolved_model=resolved_model,
+        reasoning_effort=reasoning_effort,
+        backend_config=backend_config,
+        extras={
+            "configured_model": configured_model,
+            "normalized_model": normalized_model,
+        },
+    )
+
+
+def _register_builtin_plugins() -> None:
+    if maybe_backend_plugin("codex") is not None:
+        return
+    common_agent_commands = tuple(dict(command) for command in CODEX_AGENT_COMMANDS)
+    register_backend(
+        FunctionalBackendPlugin(
+            BackendDescriptor(
+                name="codex",
+                kind="agent",
+                label="Codex",
+                process_chat=True,
+                chat_command="codex-chat",
+                runner_command="codex-runner",
+                config_key="codex",
+                binary_option="--codex-bin",
+                default_binary="codex",
+                supports_sessions=True,
+                supports_reasoning_effort=True,
+                supports_runtime_context=True,
+                supports_no_json=True,
+                supports_requested_model_override=True,
+                sandbox_equivalence="os-enforced",
+                commands=common_agent_commands,
+            ),
+            model_options=_codex_model_options,
+            reasoning_options=lambda: _reasoning_effort_options(
+                CODEX_FALLBACK_REASONING_EFFORT_NAMES
+            ),
+            normalize_reasoning=lambda value: _normalize_reasoning_effort_for_names(
+                value,
+                REASONING_EFFORT_NAMES,
+            ),
+            normalize_model=lambda value, config: _normalize_model_selector_legacy(
+                "codex",
+                value,
+                config,
+            ),
+            resolve_model=lambda model: (
+                CODEX_DEFAULT_MODEL
+                if str(model or "").strip() in {"", "default"}
+                else str(model or "").strip() or None
+            ),
+            runner_command=_codex_runner_plugin_command,
+            resolve_turn=_resolve_codex_plugin_turn,
+            run_turn=_run_codex_plugin_turn,
+        )
+    )
+    register_backend(
+        FunctionalBackendPlugin(
+            BackendDescriptor(
+                name="claude",
+                kind="agent",
+                label="Claude",
+                process_chat=True,
+                chat_command="claude-chat",
+                runner_command="claude-runner",
+                config_key="claude",
+                binary_option="--claude-bin",
+                default_binary="claude",
+                supports_sessions=True,
+                supports_reasoning_effort=True,
+                supports_runtime_context=True,
+                sandbox_equivalence="tool-policy",
+                commands=tuple(dict(command) for command in CLAUDE_AGENT_COMMANDS),
+            ),
+            model_options=lambda _config: _copy_model_options(CLAUDE_MODEL_OPTIONS),
+            reasoning_options=lambda: _reasoning_effort_options(
+                CLAUDE_REASONING_EFFORT_NAMES
+            ),
+            normalize_reasoning=lambda value: _normalize_reasoning_effort_for_names(
+                value,
+                CLAUDE_REASONING_EFFORT_NAMES,
+            ),
+            normalize_model=lambda value, config: _normalize_model_selector_legacy(
+                "claude",
+                value,
+                config,
+            ),
+            runner_command=_claude_runner_plugin_command,
+            resolve_turn=_resolve_claude_plugin_turn,
+            run_turn=_run_claude_plugin_turn,
+        )
+    )
+    register_backend(
+        FunctionalBackendPlugin(
+            BackendDescriptor(
+                name="opencode",
+                kind="agent",
+                label="OpenCode (Experimental)",
+                process_chat=True,
+                chat_command="opencode-chat",
+                config_key="opencode",
+                binary_option="--opencode-bin",
+                default_binary="opencode",
+                supports_sessions=True,
+                supports_reasoning_effort=True,
+                supports_runtime_context=True,
+                sandbox_equivalence="tool-policy",
+                commands=common_agent_commands,
+            ),
+            model_options=_opencode_model_plugin_options,
+            reasoning_options=_opencode_reasoning_plugin_options,
+            normalize_reasoning=_normalize_opencode_plugin_reasoning,
+            resolve_turn=_resolve_opencode_plugin_turn,
+            run_turn=_run_opencode_plugin_turn,
+            normalize_usage=_normalize_opencode_plugin_usage,
+            session_artifact_info=_opencode_plugin_session_artifact_info,
+        )
+    )
+    register_backend(
+        FunctionalBackendPlugin(
+            BackendDescriptor(
+                name="stub",
+                kind="agent",
+                label="Stub",
+                commands=tuple(dict(command) for command in STUB_AGENT_COMMANDS),
+            ),
+            model_options=lambda _config: _copy_model_options(DEFAULT_MODEL_OPTIONS),
+        )
+    )
+    register_backend(
+        FunctionalBackendPlugin(
+            BackendDescriptor(
+                name="command",
+                kind="runner",
+                label="Shell command runner",
+            ),
+            model_options=lambda _config: _copy_model_options(DEFAULT_MODEL_OPTIONS),
+        )
+    )
+
+
+def _descriptor_metadata(plugin) -> dict:
+    descriptor = plugin.descriptor
+    return {
+        "name": descriptor.name,
+        "kind": descriptor.kind,
+        **({"label": descriptor.label} if descriptor.label else {}),
+        "commands": [dict(command) for command in descriptor.commands],
+        "native_commands": [dict(command) for command in descriptor.native_commands],
+    }
+
+
+_register_builtin_plugins()
+BACKENDS = {
+    plugin.descriptor.name: _descriptor_metadata(plugin)
+    for plugin in backend_plugins()
+}

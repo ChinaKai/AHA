@@ -209,12 +209,14 @@
           const modelId = String(row.dataset.modelId || "");
           const model = models.find(item => (typeof item === "string" ? item : String(item?.id || "").trim()) === modelId) || null;
           const contextWindow = Number(model?.max_input_tokens) > 0 ? Number(model.max_input_tokens) : "";
+          const maxOutputTokens = Number(model?.max_output_tokens) > 0 ? Number(model.max_output_tokens) : "";
           return [...row.querySelectorAll("[data-bootstrap-bind-backend]:checked")].map(input => ({
             provider_id: provider.id,
             model_id: modelId,
             backend: String(input.dataset.bootstrapBindBackend || ""),
             wire_api: String(input.dataset.wireApi || ""),
-            context_window: contextWindow
+            context_window: contextWindow,
+            max_output_tokens: maxOutputTokens
           }));
         });
         if (bindings.length) bootstrapConfigHelpers.insertConfiguredModels?.(form, provider, bindings);
@@ -240,8 +242,8 @@
               const statusEl = label.querySelector("[data-capability-status]");
               if (statusEl) statusEl.textContent = status.replaceAll("_", " ");
             }
-            const binding = row.querySelector(`[data-bootstrap-bind-backend][data-wire-api="${wireApi}"]`);
-            if (binding) {
+            const bindings = row.querySelectorAll(`[data-bootstrap-bind-backend][data-wire-api="${wireApi}"]`);
+            for (const binding of bindings) {
               binding.disabled = status !== "supported";
               if (binding.disabled) binding.checked = false;
             }

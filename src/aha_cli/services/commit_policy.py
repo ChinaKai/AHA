@@ -12,6 +12,7 @@ BACKEND_LABELS = {
     "claude": "Claude",
     "codex": "Codex",
     "command": "Command",
+    "opencode": "OpenCode",
     "stub": "Stub",
 }
 DEFAULT_GENERATED_BY = "AHA Codex GPT-5.5"

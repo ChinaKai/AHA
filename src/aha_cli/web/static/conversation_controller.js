@@ -174,6 +174,7 @@
       }
       if (analysis.error) return { label: "error", className: "session-error" };
       if (overflow) return { label: "overflow", className: "session-overflow" };
+      if (backendSession?.artifact_type === "sqlite") return { label: "ok", className: "session-ok" };
       const sessionSize = Number(backendSession.size_bytes || 0);
       if (sessionSize >= deps.backendSessionCompactBytes) return { label: "large", className: "session-large" };
       if (sessionSize >= deps.backendSessionWatchBytes) return { label: "watch", className: "session-watch" };
@@ -406,7 +407,7 @@
         ledger.isClaude && ledger.hasCacheCreationTokens ? renderTokenSummaryItem("Cache create", countValue(ledger.cacheCreationTokens, true), "not counted") : "",
         !ledger.isClaude && (ledger.hasCachedInputTokens || ledger.hasCacheReadTokens || ledger.cachedTokens) ? renderTokenSummaryItem(ledger.cacheSummaryLabel || "Cached", cachedValue, cachedDetail) : "",
         (ledger.hasOutputTokens || ledger.outputTokens) ? renderTokenSummaryItem("Output", outputValue, "model output") : "",
-        ledger.hasReasoningOutputTokens ? renderTokenSummaryItem("Reasoning", countValue(ledger.reasoningOutputTokens, true), "subset of output") : ""
+        ledger.hasReasoningOutputTokens ? renderTokenSummaryItem("Reasoning", countValue(ledger.reasoningOutputTokens, true), ledger.isOpenCode ? "counted in total" : "subset of output") : ""
       ].filter(Boolean).join("");
       const actionText = resetState?.label || compactAdviceText || (
         ledgerVerdict.className === "history"
@@ -416,7 +417,11 @@
             : "No action needed."
       );
       const rawDetails = [
-        backendSession?.exists && Number.isFinite(sessionSize) ? { label: "Session", value: deps.formatMetricBytes(sessionSize), detail: "backend session file" } : null,
+        backendSession?.exists && Number.isFinite(sessionSize) ? {
+          label: "Session",
+          value: deps.formatMetricBytes(sessionSize),
+          detail: backendSession?.artifact_type === "sqlite" ? "OpenCode SQLite session store" : "backend session file"
+        } : null,
         contextPressure?.model ? { label: "Model", value: String(contextPressure.model), detail: "context window" } : null,
         source ? { label: "Source", value: String(source), detail: "usage event" } : null
       ].filter(Boolean);

@@ -34,6 +34,7 @@ from aha_cli.services.backend_runtime import (
     stop_task_backends,
 )
 from aha_cli.services.onebin import AHA_WSL_AHA_BIN_ENV
+from aha_cli.store.config import load_config
 from aha_cli.store.filesystem import add_agent, append_event, read_json, session_path, update_agent_config, write_json
 
 
@@ -455,6 +456,63 @@ class BackendRuntimeTests(unittest.TestCase):
             self.assertEqual(target["distro"], "Ubuntu-24.04")
             self.assertEqual(target["backend_bin"], "/home/kaikai/.nvm/versions/node/v24.18.0/bin/codex")
             self.assertIn("aha_home", target)
+
+    def test_resolve_wsl_target_selects_opencode_from_workspace_distro(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with (
+                mock.patch(
+                    "aha_cli.services.wsl_backend.wsl_backends_for_workspace",
+                    return_value={
+                        "opencode": "/home/kaikai/.nvm/versions/node/v24.18.0/bin/opencode"
+                    },
+                ),
+                mock.patch(
+                    "aha_cli.services.backend_runtime._running_zipapp_path",
+                    return_value=Path("/tmp/aha"),
+                ),
+            ):
+                target = _resolve_wsl_target(
+                    root,
+                    r"\\wsl.localhost\Ubuntu-24.04\home\kaikai\proj",
+                    "opencode",
+                )
+
+        self.assertIsNotNone(target)
+        self.assertEqual(target["distro"], "Ubuntu-24.04")
+        self.assertEqual(
+            target["backend_bin"],
+            "/home/kaikai/.nvm/versions/node/v24.18.0/bin/opencode",
+        )
+
+    def test_resolve_wsl_target_honors_explicit_opencode_distro_for_windows_workspace(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            write_json(
+                root / "config.json",
+                {"opencode": {"wsl_distro": "Ubuntu-24.04"}},
+            )
+            with (
+                mock.patch(
+                    "aha_cli.services.wsl_backend.wsl_backends_for_workspace",
+                    return_value={
+                        "opencode": "/home/kaikai/bin/opencode",
+                    },
+                ),
+                mock.patch(
+                    "aha_cli.services.backend_runtime._running_zipapp_path",
+                    return_value=Path("/tmp/aha"),
+                ),
+            ):
+                target = _resolve_wsl_target(
+                    root,
+                    r"C:\work\project",
+                    "opencode",
+                )
+
+        self.assertIsNotNone(target)
+        self.assertEqual(target["distro"], "Ubuntu-24.04")
+        self.assertEqual(target["backend_bin"], "/home/kaikai/bin/opencode")
 
     def test_state_wsl_context_derives_home_from_launch_command(self) -> None:
         # Backends started before WSL home probing stored no home; derive the
@@ -935,6 +993,141 @@ class BackendRuntimeTests(unittest.TestCase):
         self.assertEqual(status["context_pressure"]["prompt_tokens"], 219640)
         self.assertEqual(status["context_pressure"]["runtime_input_tokens"], 226853)
         self.assertEqual(status["context_pressure"]["pressure_source"], "runtime.last_token_usage.input_tokens")
+
+    def test_backend_status_reports_opencode_context_from_historical_usage(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            aha_root = root / ".aha"
+            with mock.patch("pathlib.Path.cwd", return_value=root):
+                self.run_cli(
+                    "--home",
+                    str(aha_root),
+                    "init",
+                    "--portable",
+                    "--backend",
+                    "opencode",
+                )
+                cfg_path = aha_root / "config.json"
+                cfg = read_json(cfg_path)
+                cfg["providers"] = [
+                    {
+                        "id": "hualai-opencode",
+                        "name": "OpenCode Zen",
+                        "base_url": "https://opencode.ai/zen/v1",
+                        "credential": "test-secret",
+                    }
+                ]
+                cfg["configured_models"] = [
+                    {
+                        "provider_id": "hualai-opencode",
+                        "model_id": "big-pickle",
+                        "backend": "opencode",
+                        "wire_api": "chat_completions",
+                        "context_window": 200000,
+                        "max_output_tokens": 32000,
+                    }
+                ]
+                cfg["opencode"]["env"] = [
+                    {
+                        "name": "hualai-opencode-big-pickle",
+                        "AHA_PROVIDER_ID": "hualai-opencode",
+                        "OPENCODE_MODEL": "big-pickle",
+                        "OPENCODE_WIRE_API": "chat_completions",
+                    }
+                ]
+                write_json(cfg_path, cfg)
+                loaded_cfg = load_config(aha_root)
+                opencode_selector = (
+                    "env:"
+                    + str(loaded_cfg["opencode"]["env"][0]["name"])
+                )
+                code, plan_output = self.run_cli(
+                    "--home",
+                    str(aha_root),
+                    "plan",
+                    "OpenCode context pressure",
+                    "--agents",
+                    "1",
+                )
+                self.assertEqual(code, 0)
+                run_id = plan_output.splitlines()[0].split(": ", 1)[1]
+
+                class FakeProcess:
+                    pid = 4242
+
+                with (
+                    mock.patch(
+                        "aha_cli.services.backend_runtime.subprocess.Popen",
+                        return_value=FakeProcess(),
+                    ),
+                    mock.patch(
+                        "aha_cli.services.backend_runtime.pid_is_running",
+                        side_effect=lambda pid: bool(pid),
+                    ),
+                ):
+                    start_backend(
+                        aha_root,
+                        run_id,
+                        "main",
+                        backend="opencode",
+                        model=opencode_selector,
+                        task_id="task-001",
+                    )
+                append_event(
+                    aha_root,
+                    run_id,
+                    "agent_usage",
+                    {
+                        "task_id": "task-001",
+                        "target": "main",
+                        "usage": {
+                            "total": 10259,
+                            "input": 10119,
+                            "output": 56,
+                            "reasoning": 20,
+                            "cache": {"read": 64, "write": 0},
+                        },
+                    },
+                )
+                append_event(
+                    aha_root,
+                    run_id,
+                    "agent_prompt_metrics",
+                    {
+                        "task_id": "task-001",
+                        "target": "main",
+                        "source": "opencode-chat",
+                        "total": {
+                            "tokens": 1,
+                            "chars": 12,
+                            "bytes": 12,
+                            "lines": 1,
+                        },
+                    },
+                )
+
+                status = backend_status(
+                    aha_root,
+                    run_id,
+                    "main",
+                    task_id="task-001",
+                )
+
+        self.assertEqual(status["latest_usage"]["input_tokens"], 10119)
+        self.assertEqual(status["latest_usage"]["cache_read_input_tokens"], 64)
+        self.assertEqual(status["latest_usage"]["total_tokens"], 10259)
+        self.assertEqual(status["context_pressure"]["model"], "big-pickle")
+        self.assertEqual(status["context_pressure"]["context_window"], 200000)
+        self.assertEqual(
+            status["context_pressure"]["context_window_source"],
+            "configured",
+        )
+        self.assertEqual(
+            status["context_pressure"]["runtime_effective_input_tokens"],
+            10183,
+        )
+        self.assertEqual(status["context_pressure"]["percent"], 5.09)
+        self.assertEqual(status["context_pressure"]["level"], "ok")
 
     def test_detect_runtime_context_compaction_from_codex_token_count_drop(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

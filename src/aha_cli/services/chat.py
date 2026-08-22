@@ -8,12 +8,14 @@ import traceback
 import uuid
 
 from aha_cli import platform
-from aha_cli.backends.claude import claude_cli_model, claude_config_for_model, claude_permission_mode, claude_resolved_model, claude_session_resume_id, run_claude_exec
-from aha_cli.backends.codex import codex_cli_model, codex_config_for_model, codex_resolved_model, codex_sandbox, codex_session_resume_id, run_codex_exec
-from aha_cli.backends.registry import CODEX_DEFAULT_MODEL, normalize_reasoning_effort, resolve_model
+from aha_cli.backends.claude import claude_session_resume_id, run_claude_exec
+from aha_cli.backends.codex import codex_sandbox, codex_session_resume_id, run_codex_exec
+from aha_cli.backends.plugin import BackendResolvedTurn, get_backend_plugin
+from aha_cli.backends.registry import normalize_reasoning_effort
 from aha_cli.domain.models import is_feishu_group_task, is_service_assistant_task, utc_now
 from aha_cli.services.auto_context_compact import auto_compact_agent_context_after_turn
 from aha_cli.services.backend_runtime import (
+    PROCESS_AGENT_BACKENDS,
     backend_status,
     detect_runtime_context_compaction,
     ensure_backend_wsl_state,
@@ -45,8 +47,12 @@ from aha_cli.services.chat_prompt_context import (
     chat_prompt_with_metrics,
     model_family_for_guidance,
 )
+from aha_cli.services.backend_turn import BackendTurnExecution, execute_backend_turn
 from aha_cli.services.headroom_integration import prepare_headroom_codex_runtime
-from aha_cli.services.observe_proxy import prepare_observe_claude_runtime, prepare_observe_codex_runtime
+from aha_cli.services.observe_proxy import (
+    prepare_observe_claude_runtime,
+    prepare_observe_codex_runtime,
+)
 from aha_cli.services.chat_supervision import (
     SUPERVISION_FAILURE_FALLBACK_STATUS,
     apply_supervision_host_decision,
@@ -814,6 +820,8 @@ def _compact_unresumable_session(
     agent_id: str,
     backend_name: str,
     session: dict,
+    *,
+    resolved: BackendResolvedTurn | None = None,
 ) -> None:
     """Compact-and-reset a backend session that cannot resume in this runtime.
 
@@ -835,6 +843,23 @@ def _compact_unresumable_session(
             resumable = claude_session_resume_id(session) is not None
         elif backend_name == "codex":
             resumable = codex_session_resume_id(session) is not None
+        elif (
+            backend_name == "opencode"
+            and resolved is not None
+            and isinstance(resolved.backend_config.get("_aha_provider"), dict)
+        ):
+            from aha_cli.backends.opencode import opencode_session_resume_id
+
+            resumable = (
+                opencode_session_resume_id(
+                    root,
+                    run_id,
+                    task_id,
+                    agent_id,
+                    session,
+                )
+                is not None
+            )
         else:
             return
     except Exception:
@@ -844,14 +869,22 @@ def _compact_unresumable_session(
     try:
         from aha_cli.services.session_compact import compact_reset_backend_session
 
-        compact_reset_backend_session(
+        result = compact_reset_backend_session(
             root,
             run_id,
             task_id,
             agent_id,
             reason="runtime_environment_changed",
             restart=False,
+            # This check runs inside the active backend watcher. Stopping the
+            # backend here would terminate the process that must deliver the
+            # recovered full-context turn.
+            stop_backend_before_reset=False,
         )
+        reset_session = result.get("session") if isinstance(result, dict) else None
+        if backend_name == "opencode" and isinstance(reset_session, dict):
+            session.clear()
+            session.update(reset_session)
     except Exception as exc:  # noqa: BLE001 - must not affect the agent turn
         append_event(
             root,
@@ -1080,21 +1113,52 @@ def agent_chat(root: Path, run_id: str, args, *, backend_name: str) -> int:
                     or ((cfg.get(backend_name) or {}) if isinstance(cfg.get(backend_name), dict) else {}).get("reasoning_effort"),
                     backend_name,
                 )
+                backend_plugin = get_backend_plugin(backend_name)
+                backend_descriptor = backend_plugin.descriptor
+                binary_attr = str(backend_descriptor.binary_option or "").lstrip("-").replace("-", "_")
+                backend_binary = str(
+                    getattr(args, binary_attr, "")
+                    or backend_descriptor.default_binary
+                    or backend_name
+                )
                 configured_model = args.model or (agent or {}).get("model") or task.get("preferred_model")
-                if backend_name == "codex" and not configured_model:
-                    configured_model = CODEX_DEFAULT_MODEL if item_task_id else (cfg.get("codex", {}) or {}).get("model")
-                if backend_name == "claude" and not configured_model:
-                    configured_model = (cfg.get("claude", {}) or {}).get("model")
-                model = configured_model or session.get("model")
                 raw_requested_model = getattr(args, "requested_model", None)
-                requested_model = None if raw_requested_model == "" else raw_requested_model
-                if raw_requested_model is None:
-                    requested_model = configured_model if configured_model is not None else session.get("requested_model", model)
-                codex_config = codex_config_for_model((cfg.get("codex", {}) or {}), model) if backend_name == "codex" else None
-                claude_cfg = cfg.get("claude", {}) or {}
-                claude_config = claude_config_for_model(claude_cfg, model) if backend_name == "claude" else None
-                command_model = claude_cli_model(model, claude_cfg) if backend_name == "claude" else codex_cli_model(codex_config, model) if backend_name == "codex" else model
-                resolved_model = claude_resolved_model(claude_config, model) if backend_name == "claude" else codex_resolved_model(codex_config, model) if backend_name == "codex" else resolve_model(backend_name, command_model)
+                resolved_turn = backend_plugin.resolve_turn(
+                    config=cfg,
+                    model=configured_model,
+                    reasoning_effort=requested_reasoning_effort,
+                    task_scoped=bool(item_task_id),
+                    session=session,
+                    requested_model_override=(
+                        None if raw_requested_model == "" else raw_requested_model
+                    ),
+                    requested_model_override_set=raw_requested_model is not None,
+                )
+                if backend_name == "opencode":
+                    _compact_unresumable_session(
+                        root,
+                        run_id,
+                        item_task_id,
+                        agent_id,
+                        backend_name,
+                        session,
+                        resolved=resolved_turn,
+                    )
+                configured_model = resolved_turn.extras.get("configured_model")
+                model = resolved_turn.extras.get("normalized_model")
+                requested_model = resolved_turn.requested_model
+                command_model = resolved_turn.command_model
+                resolved_model = resolved_turn.resolved_model
+                codex_config = (
+                    resolved_turn.backend_config
+                    if backend_name == "codex"
+                    else None
+                )
+                claude_config = (
+                    resolved_turn.backend_config
+                    if backend_name == "claude"
+                    else None
+                )
                 checkpoint_model = configured_model or requested_model or model
                 recovered_turn_result = chat_turn_result_recoverable(turn_checkpoint, backend_name, checkpoint_model)
                 if turn_checkpoint and turn_checkpoint.get("phase") == "executed" and not recovered_turn_result:
@@ -1245,142 +1309,52 @@ def agent_chat(root: Path, run_id: str, args, *, backend_name: str) -> int:
                                 "turn_identity": turn_identity,
                             },
                         )
-                    elif backend_name == "claude":
-                        effective_proxy_env, observe_runtime = prepare_observe_claude_runtime(
-                            root,
-                            config=cfg,
-                            task=task,
-                            backend_name=backend_name,
-                            claude_config=claude_config,
-                            proxy_env=proxy_env,
-                            run_id=run_id,
-                            task_id=item_task_id,
-                            agent_id=agent_id,
-                            workspace=workspace,
-                        )
-                        if observe_runtime.get("enabled"):
-                            append_event(
-                                root,
-                                run_id,
-                                "observe_proxy_ready" if observe_runtime.get("ready") else "observe_proxy_skipped",
-                                {
-                                    "source": source_name,
-                                    "target": args.target,
-                                    "task_id": item_task_id,
-                                    "agent_id": agent_id,
-                                    "backend": backend_name,
-                                    "ready": bool(observe_runtime.get("ready")),
-                                    "reason": observe_runtime.get("reason"),
-                                    "port": observe_runtime.get("port"),
-                                    "scope": observe_runtime.get("scope"),
-                                    "upstream_base_url": observe_runtime.get("upstream_base_url"),
-                                    "local_base_url": observe_runtime.get("local_base_url"),
-                                },
-                            )
-                        exit_code, reply, returned_session = run_claude_exec(
-                            prompt,
-                            cwd=workspace,
-                            output_file=output_file,
-                            claude_bin=getattr(args, "claude_bin", "claude"),
-                            model=command_model,
-                            permission_mode=claude_permission_mode("research", sandbox),
-                            reasoning_effort=requested_reasoning_effort,
-                            extra_args=args.extra_arg or [],
-                            events_file=events_file,
-                            run_id=run_id,
-                            task_id=item_task_id,
-                            source=source_name,
-                            target=args.target,
-                            session=session,
-                            proxy_env=effective_proxy_env,
-                            claude_config=claude_config,
-                            event_callback=progress_heartbeat.handle_event if progress_heartbeat else None,
-                        )
                     else:
-                        effective_codex_config, effective_proxy_env, headroom_runtime = prepare_headroom_codex_runtime(
-                            root,
-                            config=cfg,
-                            task=task,
-                            backend_name=backend_name,
-                            codex_config=codex_config,
-                            proxy_env=proxy_env,
-                            run_id=run_id,
-                            task_id=item_task_id,
-                            agent_id=agent_id,
-                            workspace=workspace,
+                        turn_runner = (
+                            run_claude_exec
+                            if backend_name == "claude"
+                            else run_codex_exec
+                            if backend_name == "codex"
+                            else None
                         )
-                        if headroom_runtime.get("enabled"):
-                            append_event(
-                                root,
-                                run_id,
-                                "headroom_integration_ready" if headroom_runtime.get("ready") else "headroom_integration_skipped",
-                                {
-                                    "source": source_name,
-                                    "target": args.target,
-                                    "task_id": item_task_id,
-                                    "agent_id": agent_id,
-                                    "ready": bool(headroom_runtime.get("ready")),
-                                    "reason": headroom_runtime.get("reason"),
-                                    "port": headroom_runtime.get("port"),
-                                    "mode": headroom_runtime.get("mode"),
-                                    "scope": headroom_runtime.get("scope"),
-                                    "upstream_base_url": headroom_runtime.get("upstream_base_url"),
-                                    "local_base_url": headroom_runtime.get("local_base_url"),
-                                },
+                        turn_result = execute_backend_turn(
+                            BackendTurnExecution(
+                                root=root,
+                                config=cfg,
+                                run_id=run_id,
+                                task_id=item_task_id,
+                                agent_id=agent_id,
+                                backend_name=backend_name,
+                                task=task,
+                                plugin=backend_plugin,
+                                prompt=prompt,
+                                workspace=workspace,
+                                output_file=output_file,
+                                events_file=events_file,
+                                source=source_name,
+                                target=args.target,
+                                session=session,
+                                sandbox=sandbox,
+                                approval=requested_approval,
+                                extra_args=args.extra_arg or [],
+                                binary=backend_binary,
+                                json_events=not getattr(args, "no_json", False),
+                                resolved=resolved_turn,
+                                proxy_env=proxy_env,
+                                event_callback=(
+                                    progress_heartbeat.handle_event
+                                    if progress_heartbeat
+                                    else None
+                                ),
+                                turn_runner=turn_runner,
+                                prepare_headroom=prepare_headroom_codex_runtime,
+                                prepare_observe_codex=prepare_observe_codex_runtime,
+                                prepare_observe_claude=prepare_observe_claude_runtime,
                             )
-                        effective_codex_config, effective_proxy_env, observe_runtime = prepare_observe_codex_runtime(
-                            root,
-                            config=cfg,
-                            task=task,
-                            backend_name=backend_name,
-                            codex_config=effective_codex_config,
-                            proxy_env=effective_proxy_env,
-                            run_id=run_id,
-                            task_id=item_task_id,
-                            agent_id=agent_id,
-                            workspace=workspace,
                         )
-                        if observe_runtime.get("enabled"):
-                            append_event(
-                                root,
-                                run_id,
-                                "observe_proxy_ready" if observe_runtime.get("ready") else "observe_proxy_skipped",
-                                {
-                                    "source": source_name,
-                                    "target": args.target,
-                                    "task_id": item_task_id,
-                                    "agent_id": agent_id,
-                                    "backend": backend_name,
-                                    "ready": bool(observe_runtime.get("ready")),
-                                    "reason": observe_runtime.get("reason"),
-                                    "port": observe_runtime.get("port"),
-                                    "scope": observe_runtime.get("scope"),
-                                    "upstream_base_url": observe_runtime.get("upstream_base_url"),
-                                    "local_base_url": observe_runtime.get("local_base_url"),
-                                },
-                            )
-                        exit_code, reply, returned_session = run_codex_exec(
-                            prompt,
-                            cwd=workspace,
-                            output_file=output_file,
-                            codex_bin=args.codex_bin,
-                            model=model,
-                            sandbox=sandbox,
-                            approval=requested_approval,
-                            json_events=not getattr(args, "no_json", False),
-                            reasoning_effort=requested_reasoning_effort,
-                            extra_args=args.extra_arg or [],
-                            events_file=events_file,
-                            run_id=run_id,
-                            task_id=item_task_id,
-                            source=source_name,
-                            target=args.target,
-                            session=session,
-                            proxy_env=effective_proxy_env,
-                            codex_config=effective_codex_config,
-                            aha_home=root,
-                            config=cfg,
-                        )
+                        exit_code = turn_result.exit_code
+                        reply = turn_result.reply
+                        returned_session = turn_result.session
                     session = returned_session if returned_session is not None else runner_session
                 except Exception as exc:
                     traceback.print_exc()
@@ -1975,7 +1949,7 @@ def agent_chat(root: Path, run_id: str, args, *, backend_name: str) -> int:
                 if worker_backend_should_exit_after_turn(root, run_id, item_task_id, worker_task_id, inbox, item_offset, target=args.target):
                     exit_after_message = True
                 append_event(root, run_id, "agent_finished", {"source": source_name, "target": args.target, "task_id": item_task_id, "exit_code": exit_code})
-                if item_task_id and backend_name in {"codex", "claude"}:
+                if item_task_id and backend_name in PROCESS_AGENT_BACKENDS:
                     auto_compact_agent_context_after_turn(root, run_id, item_task_id, agent_id)
                 complete_chat_turn(turn_checkpoint_file, offset_file, item_offset, item)
                 if exit_after_message and worker_task_id:

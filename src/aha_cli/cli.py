@@ -13,13 +13,11 @@ import tempfile
 import time
 import uuid
 
-from aha_cli.backends.claude import claude_runner_command
-from aha_cli.backends.codex import codex_runner_command
 from aha_cli.backends.registry import agent_backend_or_default
 from aha_cli.cli_parser import MAX_WATCH_EVENTS_LIMIT, build_parser as build_cli_parser, normalize_run_subcommand, with_default_command
 from aha_cli.constants import AHA_WEB_SUPERVISED_ENV
 from aha_cli.domain.models import default_config, task_hardware_debug_can_write, utc_now
-from aha_cli.services.chat import auto_reply, claude_chat, codex_chat
+from aha_cli.services.chat import agent_chat, auto_reply, claude_chat, codex_chat
 from aha_cli.services.claude_runner import run_claude_task
 from aha_cli.services.commit_policy import DEFAULT_GENERATED_BY, format_commit_message, generated_by_for_backend_model, validate_commit_message
 from aha_cli.services.codex_runner import run_codex_task
@@ -252,7 +250,7 @@ def cmd_plan(args: argparse.Namespace) -> int:
 def cmd_run(args: argparse.Namespace) -> int:
     root = command_aha_home(args)
     run_id = resolve_run_id(root, args.run_id)
-    return run_pending_tasks(root, run_id, args, codex_runner_command, claude_runner_command)
+    return run_pending_tasks(root, run_id, args)
 
 
 def cmd_run_export(args: argparse.Namespace) -> int:
@@ -2186,6 +2184,37 @@ def cmd_claude_chat(args: argparse.Namespace) -> int:
     return claude_chat(root, run_id, args)
 
 
+def cmd_backend_chat(args: argparse.Namespace) -> int:
+    root = command_aha_home(args)
+    run_id = resolve_run_id(root, args.run_id)
+    return agent_chat(root, run_id, args, backend_name=str(args.backend_name))
+
+
+def cmd_opencode_detect_models(args: argparse.Namespace) -> int:
+    from aha_cli.backends.opencode import (
+        detect_opencode_zen_models,
+        detect_opencode_zen_models_for_runtime,
+    )
+
+    try:
+        payload = json.loads(sys.stdin.read() or "{}")
+        credential = str(payload.get("credential") or "")
+        models = (
+            detect_opencode_zen_models_for_runtime(
+                command_aha_home(args),
+                load_config(command_aha_home(args)),
+                credential,
+            )
+            if args.runtime_auto
+            else detect_opencode_zen_models(args.opencode_bin, credential)
+        )
+    except (OSError, RuntimeError, ValueError, json.JSONDecodeError) as exc:
+        print(json.dumps({"ok": False, "error": str(exc)}, ensure_ascii=False))
+        return 1
+    print(json.dumps({"ok": True, "models": models}, ensure_ascii=False))
+    return 0
+
+
 def cmd_observe_proxy(args: argparse.Namespace) -> int:
     return run_observe_proxy_server(args)
 
@@ -2766,6 +2795,8 @@ def command_handlers() -> dict[str, object]:
         "claude-runner": cmd_claude_runner,
         "codex-chat": cmd_codex_chat,
         "claude-chat": cmd_claude_chat,
+        "backend-chat": cmd_backend_chat,
+        "opencode-detect-models": cmd_opencode_detect_models,
         "observe-proxy": cmd_observe_proxy,
         "task": cmd_task,
         "agent": cmd_agent,

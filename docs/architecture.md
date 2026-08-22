@@ -166,6 +166,7 @@ Agent backends are valid choices for task-main and sub-agent sessions:
 stub
 codex
 claude
+opencode (experimental)
 ```
 
 Runner backends execute tasks as batch jobs and are not valid task-main or sub-agent choices:
@@ -174,11 +175,16 @@ Runner backends execute tasks as batch jobs and are not valid task-main or sub-a
 command
 ```
 
-Managed chat backends are started through `services/backend_runtime.py`. In source checkouts the runtime launches the backend-specific chat command, such as:
+Managed chat backends are registered through the internal plugin contract in
+`backends/plugin.py`; architecture and compatibility rules are documented in
+`docs/backend-plugin-architecture.md`. They are started through
+`services/backend_runtime.py`. In source checkouts the runtime launches the
+plugin-declared chat command, such as:
 
 ```text
 python -m aha_cli codex-chat ...
 python -m aha_cli claude-chat ...
+python -m aha_cli opencode-chat ...
 ```
 
 In a one-bin zipapp it launches the current one-bin artifact instead, so a packaged dashboard does not require `aha_cli` to be installed as an importable Python module. External backend CLIs such as `codex` and `claude` are still resolved from the target machine.
@@ -210,6 +216,21 @@ implicit shell, cwd is constrained to the task workspace, and Web shutdown
 or a terminal task stops the owned process tree. This provides turn persistence without creating
 system orphans; services that must survive an AHA Web restart still belong in
 an external service host.
+
+OpenCode is an experimental built-in plugin. Each turn starts a loopback-only
+OpenCode Server with generated Basic auth, reuses the OpenCode session id stored
+in the AHA session, subscribes to SSE for live text/tool events, and treats the
+REST message response as the authoritative completion/final-usage value. AHA
+generates session permission rules, disables OpenCode native task subagents,
+and reports its sandbox equivalence as tool-policy rather than OS-enforced.
+OpenCode models may come from its native catalog or from the same AHA
+`providers/configured_models` used by Codex and Claude. AHA Provider credentials
+are injected into the isolated OpenCode Server through temporary environment
+variables; generated OpenCode config contains only environment references.
+On Windows, Detect Models prefers a Windows OpenCode binary and falls back to a
+native WSL OpenCode helper when Windows has none. WSL UNC workspaces execute in
+their owning distro; Windows workspaces execute on Windows unless
+`opencode.wsl_distro` explicitly selects WSL.
 
 Changing a task `main`, `sub-*`, or assisted-supervision `host` backend or model is a lifecycle operation. AHA stops an active old backend, builds a compact handoff summary, archives and resets the backend session id, updates the agent backend/model, appends a handoff message for the new backend, and restarts the new backend when the old one was active. The supervision policy stores the host's selected `host_model`, so a Codex/Claude host does not have to inherit the task-main model. This keeps the logical AHA agent identity stable while making the backend session boundary explicit.
 

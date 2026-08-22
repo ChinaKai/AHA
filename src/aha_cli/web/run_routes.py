@@ -8,6 +8,10 @@ from urllib.parse import unquote
 from urllib.request import Request, urlopen
 
 from aha_cli.backends.claude import CLAUDE_ENV_GROUP_FIELDS
+from aha_cli.backends.opencode import (
+    detect_opencode_zen_models_for_runtime,
+    is_opencode_zen_url,
+)
 from aha_cli.backends.registry import agent_backend_names, agent_backend_or_default, normalize_reasoning_effort
 from aha_cli.domain.models import default_config, normalize_integrations_config
 from aha_cli.services.observe_proxy import observe_proxy_status, observe_proxy_usage_summary
@@ -71,7 +75,7 @@ SANDBOX_OPTIONS = {"read-only", "workspace-write", "danger-full-access"}
 CONFIG_SANDBOX_OPTIONS = SANDBOX_OPTIONS | {"auto"}
 APPROVAL_OPTIONS = {"untrusted", "on-failure", "on-request", "never"}
 SESSION_POLICY_OPTIONS = {"sticky", "fresh"}
-BOOTSTRAP_BACKEND_OPTIONS = {"codex", "claude"}
+BOOTSTRAP_BACKEND_OPTIONS = set(agent_backend_names()) - {"stub"}
 CODEX_ENV_GROUP_FIELDS = ("OPENAI_BASE_URL", "OPENAI_MODEL", "OPENAI_API_KEY", "CODEX_WIRE_API", "CODEX_ENV_KEY")
 CODEX_ENV_GROUP_ALIASES = {
     "OPENAI_BASE_URL": ("OPENAI_BASE_URL", "ANTHROPIC_BASE_URL", "base_url", "api_url"),
@@ -726,15 +730,29 @@ def handle_detect_models(root: Path, body: bytes) -> bytes:
     configured_auth_style = str(provider.get("auth_style") or "auto").strip()
     if configured_auth_style not in {"auto", "none"} and not credential:
         return json_response({"error": "provider credential is not configured"}, "400 Bad Request")
+    base_url = str(provider.get("base_url") or "")
     try:
-        models, detected_auth_style = _detect_gateway_models(
-            str(provider.get("base_url") or ""),
-            credential,
-            credential,
-            auth_style=configured_auth_style,
+        if is_opencode_zen_url(base_url):
+            models = detect_opencode_zen_models_for_runtime(
+                root,
+                load_config(root),
+                credential,
+            )
+            detected_auth_style = "bearer"
+        else:
+            models, detected_auth_style = _detect_gateway_models(
+                base_url,
+                credential,
+                credential,
+                auth_style=configured_auth_style,
+            )
+    except (OSError, RuntimeError, ValueError) as exc:
+        message = (
+            f"failed to detect OpenCode Zen models: {exc}"
+            if is_opencode_zen_url(base_url)
+            else "failed to detect provider models"
         )
-    except ValueError:
-        return json_response({"error": "failed to detect provider models"}, "502 Bad Gateway")
+        return json_response({"error": message}, "502 Bad Gateway")
     if not models:
         return json_response({"error": "no models found"}, "502 Bad Gateway")
     return json_response({
@@ -762,6 +780,48 @@ def handle_detect_model_test(root: Path, body: bytes) -> bytes:
         selected_models = []
     if not selected_models:
         return json_response({"error": "at least one model is required"}, "400 Bad Request")
+    if is_opencode_zen_url(provider.get("base_url")):
+        try:
+            catalog = {
+                str(item.get("id") or ""): item
+                for item in detect_opencode_zen_models_for_runtime(
+                    root,
+                    load_config(root),
+                    str(provider.get("credential") or ""),
+                )
+            }
+        except (OSError, RuntimeError, ValueError) as exc:
+            return json_response(
+                {"error": f"failed to test OpenCode Zen models: {exc}"},
+                "502 Bad Gateway",
+            )
+        results: list[dict[str, object]] = []
+        for model in dict.fromkeys(selected_models):
+            item = catalog.get(model)
+            supported_mode = str((item or {}).get("mode") or "")
+            capabilities = {
+                wire_api: {
+                    "status": (
+                        "supported"
+                        if wire_api == supported_mode
+                        else "unsupported"
+                    ),
+                    "source": "opencode_catalog",
+                }
+                for wire_api in (
+                    "responses",
+                    "chat_completions",
+                    "anthropic_messages",
+                )
+            }
+            results.append({
+                "model_id": model,
+                "capabilities": capabilities,
+            })
+        return json_response({
+            "provider_id": provider["id"],
+            "results": results,
+        })
     def _probe_one_model(model: str) -> dict[str, object]:
         capabilities = {
             wire_api: _probe_status(provider, model, wire_api)
@@ -891,6 +951,29 @@ def _codex_env_groups(value: object) -> list[dict]:
     return groups
 
 
+def _opencode_env_groups(value: object) -> list[dict]:
+    if not isinstance(value, list):
+        return []
+    fields = (
+        "AHA_PROVIDER_ID",
+        "OPENCODE_MODEL",
+        "OPENCODE_WIRE_API",
+        "OPENCODE_CONTEXT_WINDOW",
+    )
+    groups: list[dict] = []
+    for index, item in enumerate(value, start=1):
+        if not isinstance(item, dict):
+            continue
+        group = {"name": str(item.get("name") or f"env-{index}").strip()}
+        for key in fields:
+            text = str(item.get(key) or "").strip()
+            if text:
+                group[key] = text
+        if len(group) > 1:
+            groups.append(group)
+    return groups
+
+
 def _config_sandbox(value: object, default: str) -> str:
     sandbox = _string_or_default(value, default)
     if sandbox not in CONFIG_SANDBOX_OPTIONS:
@@ -954,11 +1037,23 @@ def _bootstrap_config_from_payload(payload: dict, existing_config: dict | None =
     codex_input_proxy = _proxy_config_from_payload(codex_payload.get("proxy"), "codex.proxy")
     claude_payload = _object_value(payload.get("claude"), "claude")
     claude_input_proxy = _proxy_config_from_payload(claude_payload.get("proxy"), "claude.proxy")
+    opencode_payload = _object_value(
+        payload.get("opencode", existing_config.get("opencode")),
+        "opencode",
+    )
+    opencode_input_proxy = _proxy_config_from_payload(
+        opencode_payload.get("proxy"),
+        "opencode.proxy",
+    )
     if not proxy_configured(shared_proxy):
-        candidates = [codex_input_proxy, claude_input_proxy]
-        if backend == "claude":
-            candidates.reverse()
-        shared_proxy = next((candidate for candidate in candidates if proxy_configured(candidate)), shared_proxy)
+        candidates = {
+            "codex": codex_input_proxy,
+            "claude": claude_input_proxy,
+            "opencode": opencode_input_proxy,
+        }
+        selected = candidates.pop(backend, None)
+        ordered = [selected, *candidates.values()] if selected else list(candidates.values())
+        shared_proxy = next((candidate for candidate in ordered if proxy_configured(candidate)), shared_proxy)
     codex = {
         "bin": _string_or_default(codex_payload.get("bin"), str(codex_defaults["bin"])),
         "model": _optional_string(codex_payload.get("model")),
@@ -997,6 +1092,49 @@ def _bootstrap_config_from_payload(payload: dict, existing_config: dict | None =
             bool(shared_proxy.get("enabled")),
         ),
     }
+    opencode_defaults = defaults["opencode"]
+    opencode = {
+        "bin": _string_or_default(
+            opencode_payload.get("bin"),
+            str(opencode_defaults["bin"]),
+        ),
+        "model": _optional_string(opencode_payload.get("model")),
+        "reasoning_effort": _reasoning_effort(
+            opencode_payload.get("reasoning_effort"),
+            "opencode",
+        ),
+        "sandbox": _config_sandbox(
+            opencode_payload.get("sandbox"),
+            str(opencode_defaults["sandbox"]),
+        ),
+        "approval": _string_or_default(
+            opencode_payload.get("approval"),
+            str(opencode_defaults["approval"]),
+        ),
+        "session_policy": _session_policy(
+            opencode_payload.get("session_policy"),
+            str(opencode_defaults["session_policy"]),
+        ),
+        "agent": _string_or_default(
+            opencode_payload.get("agent"),
+            str(opencode_defaults["agent"]),
+        ),
+        "experimental": True,
+        "wsl_distro": _optional_string(opencode_payload.get("wsl_distro")),
+        "env_active": _optional_string(opencode_payload.get("env_active")),
+        "model_source": _model_source(
+            opencode_payload.get("model_source"),
+            str(opencode_defaults.get("model_source", "both")),
+        ),
+        "env": _opencode_env_groups(opencode_payload.get("env")),
+        "proxy": _backend_proxy_switch_from_payload(
+            opencode_payload.get("proxy"),
+            "opencode.proxy",
+            bool(shared_proxy.get("enabled")),
+        ),
+    }
+    if opencode["approval"] not in APPROVAL_OPTIONS:
+        raise ValueError(f"unknown approval: {opencode['approval']}")
     integrations = normalize_integrations_config(_object_value(payload.get("integrations"), "integrations"))
     provider_input = payload.get("providers") if "providers" in payload else existing_config.get("providers", [])
     providers = normalize_providers(provider_input, existing_config.get("providers", []))
@@ -1025,6 +1163,7 @@ def _bootstrap_config_from_payload(payload: dict, existing_config: dict | None =
         "configured_models": configured_models,
         "codex": codex,
         "claude": claude,
+        "opencode": opencode,
     }
 
 

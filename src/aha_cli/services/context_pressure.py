@@ -169,7 +169,7 @@ def context_pressure(
         provider_id=provider_id,
     )
     runtime_effective_input_tokens = runtime_input_tokens
-    if normalized_backend == "claude" and runtime_input_tokens is not None:
+    if normalized_backend in {"claude", "opencode"} and runtime_input_tokens is not None:
         runtime_effective_input_tokens = runtime_input_tokens + int(runtime_cached_input_tokens or 0) + int(runtime_cache_creation_input_tokens or 0)
     runtime_context_consistent = (
         runtime_effective_input_tokens <= context_window
@@ -213,7 +213,7 @@ def context_pressure(
     if runtime_context_consistent is False:
         pressure_source = "runtime.last_token_usage.inconsistent_with_context_window"
     elif runtime_effective_input_tokens is not None:
-        pressure_source = "runtime.last_token_usage.effective_input_tokens" if normalized_backend == "claude" else "runtime.last_token_usage.input_tokens"
+        pressure_source = "runtime.last_token_usage.effective_input_tokens" if normalized_backend in {"claude", "opencode"} else "runtime.last_token_usage.input_tokens"
     elif prompt_tokens is not None:
         pressure_source = "prompt_metrics.tokens"
     elif prompt_chars or prompt_bytes:

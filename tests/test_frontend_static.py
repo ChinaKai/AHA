@@ -780,6 +780,10 @@ if (html.includes('value="xhigh"')) process.exit(1);
         if not node:
             self.skipTest("node is not available")
         script = static_root().joinpath("bootstrap_config.js").read_text(encoding="utf-8")
+        self.assertIn('const backendOptions = ["codex", "claude", "opencode"]', script)
+        self.assertIn('data-bootstrap-bind-backend="opencode"', script)
+        self.assertIn('data-bootstrap-backend-card="opencode"', script)
+        self.assertIn('data-bootstrap-config-field="opencode.model"', script)
         assertion = r'''
 const fs = require("fs");
 const vm = require("vm");
@@ -1130,11 +1134,11 @@ vm.runInContext(fs.readFileSync(0, "utf8"), context);
 const config = context.window.AHABootstrapConfig;
 // Configured model rows render a context badge and persist context_window.
 const configuredHtml = config.configuredModelsHtml([
-  { provider_id: "p1", model_id: "deepseek-v4-flash", backend: "claude", wire_api: "anthropic_messages", context_window: 262144 },
+  { provider_id: "p1", model_id: "deepseek-v4-flash", backend: "claude", wire_api: "anthropic_messages", context_window: 262144, max_output_tokens: 64000 },
   { provider_id: "p1", model_id: "claude-sonnet-5", backend: "claude", wire_api: "anthropic_messages" }
 ], [{ id: "p1", name: "Gateway" }]);
 if (!configuredHtml.includes('data-bootstrap-binding-field="context_window" value="262144"')) process.exit(1);
-if (configuredHtml.includes("max_output_tokens")) process.exit(1);
+if (!configuredHtml.includes('data-bootstrap-binding-field="max_output_tokens" value="64000"')) process.exit(1);
 if (!configuredHtml.includes("bootstrap-model-binding-ctx")) process.exit(1);
 if (!configuredHtml.includes("ctx 262K")) process.exit(1);
 if ((configuredHtml.match(/bootstrap-model-binding-ctx/g) || []).length !== 1) process.exit(1);
@@ -1147,6 +1151,7 @@ const rows = [{
       'data-bootstrap-binding-field="backend"': "claude",
       'data-bootstrap-binding-field="wire_api"': "anthropic_messages",
       'data-bootstrap-binding-field="context_window"': "262144",
+      'data-bootstrap-binding-field="max_output_tokens"': "64000",
       'data-bootstrap-binding-field="opus_model"': "claude-opus-5"
     };
     return { value: values[sel.replace(/[\[\]]/g, "")] || "" };
@@ -1155,7 +1160,7 @@ const rows = [{
 const payload = config.bootstrapConfiguredModels({ querySelectorAll: () => rows });
 if (payload.length !== 1) process.exit(1);
 if (payload[0].context_window !== 262144) process.exit(1);
-if (payload[0].max_output_tokens !== undefined) process.exit(1);
+if (payload[0].max_output_tokens !== 64000) process.exit(1);
 // Role models survive the save round-trip (editing a saved model must not drop them).
 if (payload[0].opus_model !== "claude-opus-5") process.exit(1);
 // Model source filter: official / env / both.
@@ -1175,6 +1180,7 @@ if (preserve.length !== 2 || preserve[1].name !== "env:gw") process.exit(1);
 const settings = config.bootstrapConfigFormHtml({ mode: "settings", config: { codex: {}, claude: {} } });
 if (!settings.includes('data-bootstrap-config-field="codex.model_source"')) process.exit(1);
 if (!settings.includes('data-bootstrap-config-field="claude.model_source"')) process.exit(1);
+if (!settings.includes('data-bootstrap-config-field="opencode.model_source"')) process.exit(1);
 if (!settings.includes('<option value="both" selected>BOTH</option>')) process.exit(1);
 if (!settings.includes('<option value="official">Official</option>')) process.exit(1);
 if (!settings.includes('<option value="env">ENV</option>')) process.exit(1);
@@ -1199,14 +1205,14 @@ if (config.bootstrapModelFilterValue(formWithSource("bogus"), "codex") !== "both
 // The editor renders model-level fields and readModelEditorFields parses them back.
 const editorHtml = config.configuredModelEditorHtml({
   provider_id: "p1", model_id: "deepseek-v4-flash", backend: "claude", wire_api: "anthropic_messages",
-  context_window: 262144, opus_model: "claude-opus-5", auto_compact_threshold_percent: 60
+  context_window: 262144, max_output_tokens: 64000, opus_model: "claude-opus-5", auto_compact_threshold_percent: 60
 }, [{ id: "p1", name: "Gateway" }]);
 if (!editorHtml.includes('data-bootstrap-model-field="provider_id"')) process.exit(1);
 if (!editorHtml.includes('data-bootstrap-model-field="model_id"') || !editorHtml.includes('value="deepseek-v4-flash"')) process.exit(1);
 if (!editorHtml.includes('data-bootstrap-model-field="context_window"')) process.exit(1);
 if (!editorHtml.includes('data-bootstrap-model-field="auto_compact_threshold_percent"')) process.exit(1);
 if (!editorHtml.includes('value="60"')) process.exit(1);
-if (editorHtml.includes('data-bootstrap-model-field="max_output_tokens"')) process.exit(1);
+if (!editorHtml.includes('data-bootstrap-model-field="max_output_tokens"') || !editorHtml.includes('value="64000"')) process.exit(1);
 if (!editorHtml.includes('data-bootstrap-model-field="opus_model"') || !editorHtml.includes('value="claude-opus-5"')) process.exit(1);
 if (!editorHtml.includes("Edit Model")) process.exit(1);
 const addEditor = config.configuredModelEditorHtml({}, [{ id: "p1", name: "Gateway" }]);
@@ -1223,13 +1229,13 @@ function editorRoot(fields) {
 }
 const parsed = config.readModelEditorFields(editorRoot({
   provider_id: "p1", model_id: "new-model", backend: "codex", wire_api: "responses",
-  context_window: "258000", fable_model: "fable-a", auto_compact_threshold_percent: "60"
+  context_window: "258000", max_output_tokens: "128000", fable_model: "fable-a", auto_compact_threshold_percent: "60"
 }));
 if (parsed.provider_id !== "p1" || parsed.model_id !== "new-model") process.exit(1);
 if (parsed.backend !== "codex" || parsed.wire_api !== "responses") process.exit(1);
 if (parsed.context_window !== 258000) process.exit(1);
 if (parsed.auto_compact_threshold_percent !== 60) process.exit(1);
-if (parsed.max_output_tokens !== undefined) process.exit(1);
+if (parsed.max_output_tokens !== 128000) process.exit(1);
 if (parsed.fable_model !== "fable-a") process.exit(1);
 // Out-of-range thresholds are dropped instead of clamped silently.
 const invalidParsed = config.readModelEditorFields(editorRoot({
@@ -5767,6 +5773,8 @@ if (fallback.length !== 1 || fallback[0] !== fallbackFile) {
         self.assertIn("bootstrapSharedProxyFieldsHtml(proxy)", script)
         self.assertIn('bootstrapBackendProxySwitchHtml("codex"', script)
         self.assertIn('bootstrapBackendProxySwitchHtml("claude"', script)
+        self.assertIn('bootstrapBackendProxySwitchHtml("opencode"', script)
+        self.assertIn('opencode: "OpenCode"', script)
         self.assertIn('data-bootstrap-config-field="${escapeHtml(prefix)}.proxy.enabled"', script)
         self.assertIn('bootstrapConfigText(form, "proxy.http_proxy")', script)
         self.assertIn('bootstrapConfigText(form, "proxy.https_proxy")', script)
@@ -5775,6 +5783,7 @@ if (fallback.length !== 1 || fallback[0] !== fallbackFile) {
         self.assertNotIn('bootstrapConfigText(form, "claude.proxy.http_proxy")', script)
         self.assertIn('enabled: Boolean(bootstrapConfigField(form, "codex.proxy.enabled")?.checked)', script)
         self.assertIn('enabled: Boolean(bootstrapConfigField(form, "claude.proxy.enabled")?.checked)', script)
+        self.assertIn('enabled: Boolean(bootstrapConfigField(form, "opencode.proxy.enabled")?.checked)', script)
         self.assertIn('const defaultBootstrapHttpProxy = "http://127.0.0.1:7890"', script)
         self.assertIn('const defaultBootstrapNoProxy = "localhost,127.0.0.1,::1"', script)
         self.assertIn("function fillBootstrapProxyDefaultFor", script)
@@ -6559,8 +6568,8 @@ if (resetCount !== 1 || emptyWorkspaceCount !== 1) {
         self.assertIn('<script src="/static/i18n.js?v=hardware-groups-v2"></script>', html)
         self.assertIn('<script src="/static/app_helpers.js"></script>', html)
         self.assertIn('<script src="/static/task_metadata.js?v=hardware-groups-v1"></script>', html)
-        self.assertIn('<script src="/static/bootstrap_config.js?v=env-effort-v1"></script>', html)
-        self.assertIn('<script src="/static/bootstrap_controller.js?v=provider-models-v11"></script>', html)
+        self.assertIn('<script src="/static/bootstrap_config.js?v=backend-plugin-v1"></script>', html)
+        self.assertIn('<script src="/static/bootstrap_controller.js?v=backend-plugin-v1"></script>', html)
         self.assertIn('<script src="/static/task_form.js?v=hardware-terminal-v1"></script>', html)
         self.assertIn('<script src="/static/hardware_serial_picker.js?v=hardware-groups-v2"></script>', html)
         self.assertIn('<script src="/static/task_config_controller.js?v=hardware-groups-v2"></script>', html)
@@ -7810,7 +7819,9 @@ if (resetCount !== 1 || emptyWorkspaceCount !== 1) {
         self.assertIn('renderTokenSummaryItem("Cache read", cachedValue, cachedDetail)', script)
         self.assertIn('renderTokenSummaryItem("Cache create", countValue(ledger.cacheCreationTokens, true), "not counted")', script)
         self.assertIn('renderTokenSummaryItem("Output", outputValue, "model output")', script)
-        self.assertIn('renderTokenSummaryItem("Reasoning", countValue(ledger.reasoningOutputTokens, true), "subset of output")', script)
+        self.assertIn('ledger.isOpenCode ? "counted in total" : "subset of output"', script)
+        self.assertIn('backendSession?.artifact_type === "sqlite"', script)
+        self.assertIn('"OpenCode SQLite session store"', script)
         self.assertIn('renderTokenSummaryItem("AHA", ahaValue, ahaDetail)', script)
         self.assertIn('renderTokenSummaryItem("Context", contextValue, contextDetail)', script)
         self.assertIn("function usageTokenBreakdown(usage = {},", prompt_metrics_script)
@@ -7818,8 +7829,13 @@ if (resetCount !== 1 || emptyWorkspaceCount !== 1) {
         self.assertIn('const usageState = agentUsageState(taskId, target, backendSession);', script)
         self.assertIn('aggregateUsageRecords?.(events.map(event => eventData(event || {}).usage || {}))', script)
         self.assertIn("const usage = metrics.usage || {};", script)
-        self.assertIn('return normalizedUsageBackend(backend) === "claude" ? "input + cache read + output" : "input + output";', prompt_metrics_script)
-        self.assertIn("const calculatedTotal = inputTokens + outputTokens + (isClaude ? cacheReadTokens : 0);", prompt_metrics_script)
+        self.assertIn('if (normalized === "opencode") return "input + cache read + cache create + output + reasoning";', prompt_metrics_script)
+        self.assertIn('const isOpenCode = resolvedBackend === "opencode";', prompt_metrics_script)
+        self.assertIn("((isClaude || isOpenCode) ? cacheReadTokens : 0)", prompt_metrics_script)
+        self.assertIn("(isOpenCode ? cacheCreationTokens + reasoningOutputTokens : 0)", prompt_metrics_script)
+        self.assertIn("usage?.input_tokens ?? usage?.input", prompt_metrics_script)
+        self.assertIn("usage?.cache_read_input_tokens ?? rawCache.read", prompt_metrics_script)
+        self.assertIn("usage?.total_tokens ?? usage?.total", prompt_metrics_script)
         self.assertIn("cachedTokens: cacheReadTokens + cacheCreationTokens,", prompt_metrics_script)
         self.assertIn('const hasCachedInputTokens = usageHasField(usage, "cached_input_tokens");', prompt_metrics_script)
         self.assertIn('hasReasoningOutputTokens: usageBreakdown.hasReasoningOutputTokens', prompt_metrics_script)

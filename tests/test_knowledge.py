@@ -5,11 +5,13 @@ import io
 import json
 import subprocess
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 from aha_cli.cli import main
 from aha_cli.domain.models import default_config
+from aha_cli.store import project_identity as project_identity_store
 from aha_cli.store.config import load_config
 from aha_cli.store.io import read_json, write_json
 from aha_cli.store.knowledge import (
@@ -101,6 +103,62 @@ def test_normalize_git_remote_equivalence():
     https = normalize_git_remote("https://github.com/user/repo")
     ssh_443 = normalize_git_remote("ssh://git@ssh.github.com:443/user/repo.git")
     assert ssh == https == ssh_443 == "github.com/user/repo"
+
+
+def test_project_identity_git_hides_windows_console(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict = {}
+
+    def fake_run(command, **kwargs):
+        captured["command"] = command
+        captured.update(kwargs)
+        return SimpleNamespace(returncode=0, stdout="value\n")
+
+    monkeypatch.setattr(project_identity_store.subprocess, "run", fake_run)
+    monkeypatch.setattr(
+        project_identity_store.platform,
+        "hidden_subprocess_kwargs",
+        lambda: {"creationflags": 0x08000000},
+    )
+
+    assert project_identity_store._run_git(tmp_path, "status") == "value"
+    assert captured["command"] == ["git", "-C", str(tmp_path), "status"]
+    assert captured["creationflags"] == 0x08000000
+
+
+def test_resolve_project_identity_reuses_git_facts_snapshot(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    calls = 0
+
+    def fake_facts(_workspace: Path) -> dict:
+        nonlocal calls
+        calls += 1
+        return {
+            "is_git": True,
+            "workspace_path": str(workspace),
+            "repo_root": str(workspace),
+            "git_dir": str(workspace / ".git"),
+            "remote": "git@github.com:user/repo.git",
+            "git_identity": "github.com/user/repo",
+            "repository_fingerprint": "roots:abc",
+            "subpath": ".",
+        }
+
+    monkeypatch.setattr(project_identity_store, "git_workspace_facts", fake_facts)
+
+    identity = project_identity_store.resolve_project_identity(
+        tmp_path / "knowledge",
+        workspace,
+    )
+
+    assert calls == 1
+    assert identity["project_key"].endswith("-git-d8289862e453")
 
 
 def _make_git_workspace(path: Path, remote: str) -> Path:

@@ -86,6 +86,52 @@ class ProviderConfigTests(unittest.TestCase):
         self.assertEqual(cfg["claude"]["env"][0]["ANTHROPIC_MODEL"], "shared-model")
         self.assertEqual(cfg["claude"]["env"][0]["ANTHROPIC_AUTH_TOKEN"], "secret")
 
+    def test_sync_legacy_env_generates_opencode_provider_binding_without_secret(self) -> None:
+        cfg = {
+            "providers": [{
+                "id": "gateway",
+                "name": "Gateway",
+                "base_url": "https://gateway.test/v1",
+                "auth_style": "bearer",
+                "credential": "secret",
+            }],
+            "configured_models": [{
+                "provider_id": "gateway",
+                "model_id": "model-a",
+                "backend": "opencode",
+                "wire_api": "chat_completions",
+                "context_window": 200000,
+            }],
+            "codex": {"env": []},
+            "claude": {"env": []},
+            "opencode": {"env": []},
+        }
+
+        sync_legacy_backend_env(cfg)
+
+        group = cfg["opencode"]["env"][0]
+        self.assertEqual(group["AHA_PROVIDER_ID"], "gateway")
+        self.assertEqual(group["OPENCODE_MODEL"], "model-a")
+        self.assertEqual(group["OPENCODE_WIRE_API"], "chat_completions")
+        self.assertEqual(group["OPENCODE_CONTEXT_WINDOW"], "200000")
+        self.assertNotIn("credential", group)
+        self.assertNotIn("secret", json.dumps(group))
+
+    def test_normalize_configured_models_accepts_opencode_backend(self) -> None:
+        models = normalize_configured_models(
+            [{
+                "provider_id": "p1",
+                "model_id": "model-a",
+                "backend": "opencode",
+                "wire_api": "responses",
+                "max_output_tokens": 64000,
+            }],
+            ["p1"],
+        )
+
+        self.assertEqual(models[0]["backend"], "opencode")
+        self.assertEqual(models[0]["max_output_tokens"], 64000)
+
     def test_sync_legacy_env_propagates_configured_model_context_window(self) -> None:
         cfg = {
             "providers": [{"id": "p1", "name": "Gateway", "base_url": "https://gateway.test/v1", "auth_style": "bearer", "credential": "secret"}],
@@ -200,6 +246,50 @@ class ProviderConfigTests(unittest.TestCase):
         self.assertNotIn("credential", body["config"]["providers"][0])
         self.assertNotIn("OPENAI_API_KEY", body["config"]["codex"]["env"][0])
 
+    def test_bootstrap_persists_opencode_provider_binding_without_copying_secret(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / ".aha"
+            response = asyncio.run(fetch_ui_response(
+                root,
+                "",
+                "/api/bootstrap",
+                method="POST",
+                payload={
+                    "backend": "opencode",
+                    "providers": [{
+                        "id": "gateway",
+                        "name": "Gateway",
+                        "base_url": "https://gateway.test/v1",
+                        "auth_style": "bearer",
+                        "credential": "opencode-provider-secret",
+                    }],
+                    "configured_models": [{
+                        "provider_id": "gateway",
+                        "model_id": "model-a",
+                        "backend": "opencode",
+                        "wire_api": "responses",
+                        "context_window": 200000,
+                        "max_output_tokens": 64000,
+                    }],
+                    "opencode": {
+                        "bin": "opencode",
+                        "model": "env:gateway-model-a",
+                        "model_source": "env",
+                    },
+                },
+            ))
+            body = json_response_body(response)
+            stored = read_json(root / "config.json")
+
+        self.assertEqual(stored["backend"], "opencode")
+        self.assertEqual(stored["configured_models"][0]["backend"], "opencode")
+        self.assertEqual(stored["configured_models"][0]["max_output_tokens"], 64000)
+        self.assertEqual(stored["opencode"]["env"][0]["AHA_PROVIDER_ID"], "gateway")
+        self.assertEqual(stored["opencode"]["env"][0]["OPENCODE_MODEL"], "model-a")
+        self.assertNotIn("opencode-provider-secret", json.dumps(stored["opencode"]))
+        self.assertNotIn("opencode-provider-secret", response.decode("utf-8"))
+        self.assertTrue(body["config"]["providers"][0]["credential_configured"])
+
     def test_bootstrap_persists_and_returns_anthropic_base_url(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / ".aha"
@@ -307,6 +397,61 @@ class ProviderConfigTests(unittest.TestCase):
         self.assertEqual(body["auth_style"], "x-api-key")
         self.assertEqual(len(calls), 2)
         self.assertEqual(calls[1].headers["X-api-key"], "secret")
+
+    def test_detect_models_uses_opencode_zen_catalog_and_catalog_capabilities(self) -> None:
+        catalog = [{
+            "id": "big-pickle",
+            "mode": "chat_completions",
+            "max_input_tokens": 200000,
+            "max_output_tokens": 32000,
+        }]
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            mock.patch(
+                "aha_cli.web.run_routes.detect_opencode_zen_models_for_runtime",
+                return_value=catalog,
+            ) as detect,
+        ):
+            root = Path(tmp) / ".aha"
+            root.mkdir()
+            (root / "config.json").write_text(json.dumps({
+                "providers": [{
+                    "id": "zen",
+                    "name": "OpenCode Zen",
+                    "base_url": "https://opencode.ai/zen/v1",
+                    "auth_style": "bearer",
+                    "credential": "zen-secret",
+                }],
+            }), encoding="utf-8")
+            detected_response = asyncio.run(fetch_ui_response(
+                root,
+                "",
+                "/api/detect-models",
+                method="POST",
+                payload={"provider_id": "zen"},
+            ))
+            tested_response = asyncio.run(fetch_ui_response(
+                root,
+                "",
+                "/api/detect-models/test",
+                method="POST",
+                payload={"provider_id": "zen", "models": ["big-pickle"]},
+            ))
+
+        detected = json_response_body(detected_response)
+        tested = json_response_body(tested_response)
+        self.assertEqual(detected["models"], catalog)
+        self.assertEqual(detected["auth_style"], "bearer")
+        capabilities = tested["results"][0]["capabilities"]
+        self.assertEqual(capabilities["chat_completions"]["status"], "supported")
+        self.assertEqual(capabilities["responses"]["status"], "unsupported")
+        self.assertEqual(
+            capabilities["chat_completions"]["source"],
+            "opencode_catalog",
+        )
+        self.assertEqual(detect.call_count, 2)
+        self.assertNotIn("zen-secret", detected_response.decode("utf-8"))
+        self.assertNotIn("zen-secret", tested_response.decode("utf-8"))
 
     def test_capability_probe_classifies_each_protocol_for_selected_models(self) -> None:
         calls = []

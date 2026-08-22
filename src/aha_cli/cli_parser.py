@@ -4,6 +4,7 @@ import argparse
 from collections.abc import Callable, Mapping
 
 from aha_cli import platform
+from aha_cli.backends.plugin import process_backend_plugins
 from aha_cli.backends.registry import CLAUDE_REASONING_EFFORT_NAMES, REASONING_EFFORT_NAMES, agent_backend_names, backend_names
 from aha_cli.domain.run_lifecycle import RUN_LIFECYCLE_CHOICES
 from aha_cli.domain.workflow_templates import workflow_template_ids
@@ -52,6 +53,7 @@ COMMANDS = {
     "claude-runner",
     "codex-chat",
     "claude-chat",
+    "opencode-detect-models",
     "observe-proxy",
     "task",
     "agent",
@@ -60,6 +62,11 @@ COMMANDS = {
     "tray",
     "ui",
 }
+COMMANDS.update(
+    str(plugin.descriptor.chat_command)
+    for plugin in process_backend_plugins()
+    if plugin.descriptor.chat_command
+)
 
 
 def add_codex_options(parser: argparse.ArgumentParser, prefix: str = "codex") -> None:
@@ -713,43 +720,67 @@ def build_parser(handlers: Mapping[str, Callable[[argparse.Namespace], int]]) ->
     claude_runner_p.add_argument("--extra-arg", action="append", default=[])
     claude_runner_p.set_defaults(func=handlers["claude-runner"])
 
-    codex_chat_p = sub.add_parser("codex-chat")
-    codex_chat_p.add_argument("run_id", nargs="?")
-    codex_chat_p.add_argument("target", nargs="?", default="main")
-    codex_chat_p.add_argument("--task-id", default=None)
-    codex_chat_p.add_argument("--sender", default="main")
-    codex_chat_p.add_argument("--reply-target", default=None)
-    codex_chat_p.add_argument("--interval", type=float, default=1.0)
-    codex_chat_p.add_argument("--from-start", action="store_true")
-    codex_chat_p.add_argument("--once", action="store_true")
-    codex_chat_p.add_argument("--codex-bin", default="codex")
-    codex_chat_p.add_argument("--model", default=None)
-    codex_chat_p.add_argument("--requested-model", default=None)
-    codex_chat_p.add_argument("--reasoning-effort", choices=REASONING_EFFORT_NAMES, default=None)
-    codex_chat_p.add_argument("--sandbox", choices=["auto", "read-only", "workspace-write", "danger-full-access"], default="workspace-write")
-    codex_chat_p.add_argument("--approval", choices=["untrusted", "on-failure", "on-request", "never"], default="never")
-    codex_chat_p.add_argument("--extra-arg", action="append", default=[])
-    codex_chat_p.add_argument("--no-json", action="store_true")
-    codex_chat_p.add_argument("--prompt-prefix", default=render_prompt_template("backend_prompt_prefix.md").strip())
-    codex_chat_p.set_defaults(func=handlers["codex-chat"])
+    for plugin in process_backend_plugins():
+        descriptor = plugin.descriptor
+        command = str(descriptor.chat_command or "").strip()
+        if not command:
+            continue
+        chat_p = sub.add_parser(command)
+        chat_p.add_argument("run_id", nargs="?")
+        chat_p.add_argument("target", nargs="?", default="main")
+        chat_p.add_argument("--task-id", default=None)
+        chat_p.add_argument("--sender", default="main")
+        chat_p.add_argument("--reply-target", default=None)
+        chat_p.add_argument("--interval", type=float, default=1.0)
+        chat_p.add_argument("--from-start", action="store_true")
+        chat_p.add_argument("--once", action="store_true")
+        if descriptor.binary_option:
+            chat_p.add_argument(
+                descriptor.binary_option,
+                default=descriptor.default_binary or descriptor.name,
+            )
+        chat_p.add_argument("--model", default=None)
+        if descriptor.supports_requested_model_override:
+            chat_p.add_argument("--requested-model", default=None)
+        effort_choices = [
+            str(option.get("name") or "")
+            for option in plugin.reasoning_effort_options()
+            if str(option.get("name") or "")
+        ]
+        chat_p.add_argument(
+            "--reasoning-effort",
+            choices=effort_choices or None,
+            default=None,
+        )
+        chat_p.add_argument(
+            "--sandbox",
+            choices=["auto", "read-only", "workspace-write", "danger-full-access"],
+            default="workspace-write",
+        )
+        chat_p.add_argument(
+            "--approval",
+            choices=["untrusted", "on-failure", "on-request", "never"],
+            default="never",
+        )
+        chat_p.add_argument("--extra-arg", action="append", default=[])
+        if descriptor.supports_no_json:
+            chat_p.add_argument("--no-json", action="store_true")
+        chat_p.add_argument(
+            "--prompt-prefix",
+            default=render_prompt_template("backend_prompt_prefix.md").strip(),
+        )
+        chat_p.set_defaults(
+            func=handlers["backend-chat"],
+            backend_name=descriptor.name,
+        )
 
-    claude_chat_p = sub.add_parser("claude-chat")
-    claude_chat_p.add_argument("run_id", nargs="?")
-    claude_chat_p.add_argument("target", nargs="?", default="main")
-    claude_chat_p.add_argument("--task-id", default=None)
-    claude_chat_p.add_argument("--sender", default="main")
-    claude_chat_p.add_argument("--reply-target", default=None)
-    claude_chat_p.add_argument("--interval", type=float, default=1.0)
-    claude_chat_p.add_argument("--from-start", action="store_true")
-    claude_chat_p.add_argument("--once", action="store_true")
-    claude_chat_p.add_argument("--claude-bin", default="claude")
-    claude_chat_p.add_argument("--model", default=None)
-    claude_chat_p.add_argument("--reasoning-effort", choices=CLAUDE_REASONING_EFFORT_NAMES, default=None)
-    claude_chat_p.add_argument("--sandbox", choices=["auto", "read-only", "workspace-write", "danger-full-access"], default="workspace-write")
-    claude_chat_p.add_argument("--approval", choices=["untrusted", "on-failure", "on-request", "never"], default="never")
-    claude_chat_p.add_argument("--extra-arg", action="append", default=[])
-    claude_chat_p.add_argument("--prompt-prefix", default=render_prompt_template("backend_prompt_prefix.md").strip())
-    claude_chat_p.set_defaults(func=handlers["claude-chat"])
+    opencode_detect = sub.add_parser(
+        "opencode-detect-models",
+        help=argparse.SUPPRESS,
+    )
+    opencode_detect.add_argument("--opencode-bin", default="opencode")
+    opencode_detect.add_argument("--runtime-auto", action="store_true")
+    opencode_detect.set_defaults(func=handlers["opencode-detect-models"])
 
     observe_proxy_p = sub.add_parser("observe-proxy", help=argparse.SUPPRESS)
     observe_proxy_p.add_argument("--run-id", required=True)

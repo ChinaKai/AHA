@@ -14,14 +14,18 @@ import zipfile
 
 from aha_cli.backends.claude import (
     apply_claude_environment,
-    claude_cli_model,
     claude_config_env,
     claude_config_for_model,
     claude_context_window,
-    claude_resolved_model,
 )
-from aha_cli.backends.codex import apply_codex_environment, codex_cli_model, codex_config_for_model, codex_resolved_model
-from aha_cli.backends.registry import CODEX_DEFAULT_MODEL, normalize_model_selector, normalize_reasoning_effort, resolve_model
+from aha_cli.backends.codex import apply_codex_environment
+from aha_cli.backends.plugin import (
+    backend_plugin_for_chat_command,
+    get_backend_plugin,
+    maybe_backend_plugin,
+    process_backend_plugins,
+)
+from aha_cli.backends.registry import normalize_reasoning_effort, resolve_model
 from aha_cli.domain.models import utc_now
 from aha_cli.services.backend_paths import add_user_backend_paths
 from aha_cli.services.commit_policy import generated_by_for_backend_model
@@ -49,7 +53,10 @@ CODEX_CONTEXT_DROP_MIN_PREVIOUS_PERCENT = 70.0
 CODEX_CONTEXT_DROP_MAX_CURRENT_PERCENT = 60.0
 CODEX_CONTEXT_DROP_MIN_DELTA_PERCENT = 20.0
 CODEX_CONTEXT_DROP_MIN_DELTA_TOKENS = 30_000
-PROCESS_AGENT_BACKENDS = {"codex", "claude"}
+PROCESS_AGENT_BACKENDS = frozenset(
+    plugin.descriptor.name
+    for plugin in process_backend_plugins()
+)
 _WINDOWS = os.name == "nt"
 
 # Platform-layer public interface (L4 分层固化): the backend process lifecycle
@@ -315,9 +322,14 @@ def backend_session_jsonl_path(
     native_home: str | None = None,
 ) -> Path | None:
     normalized_backend = str(backend or "").strip().lower().removesuffix("-chat")
+    plugin = maybe_backend_plugin(normalized_backend)
+    if plugin is not None and not plugin.descriptor.supports_runtime_context:
+        return None
     if normalized_backend == "claude":
         return _claude_session_jsonl_path(session_id, distro=distro, native_home=native_home)
-    return _codex_session_jsonl_path(session_id, distro=distro, native_home=native_home)
+    if normalized_backend == "codex":
+        return _codex_session_jsonl_path(session_id, distro=distro, native_home=native_home)
+    return None
 
 
 def _claude_assistant_usage(record: dict) -> tuple[str, dict] | None:
@@ -617,7 +629,11 @@ def _discover_backend_process(root: Path, run_id: str, target: str, task_id: str
         except OSError:
             continue
         parts = [part.decode("utf-8", errors="replace") for part in raw.split(b"\0") if part]
-        chat_commands = [command for command in ("codex-chat", "claude-chat") if command in parts]
+        chat_commands = [
+            str(plugin.descriptor.chat_command)
+            for plugin in process_backend_plugins()
+            if plugin.descriptor.chat_command in parts
+        ]
         if not chat_commands:
             continue
         index = parts.index(chat_commands[0])
@@ -673,6 +689,38 @@ def _provider_id_for_model(cfg: dict, backend: str, model: str | None) -> str | 
     return None
 
 
+def _context_model_for_backend(
+    cfg: dict,
+    backend: str,
+    requested_model: str | None,
+    resolved_model: str | None,
+) -> str | None:
+    normalized_backend = str(backend or "").strip().lower().removesuffix("-chat")
+    resolved = str(resolved_model or "").strip()
+    if normalized_backend != "opencode":
+        return resolved or None
+    if resolved and "/" in resolved:
+        return resolved.split("/", 1)[1]
+    selectors = [str(requested_model or "").strip(), resolved]
+    section = cfg.get("opencode") if isinstance(cfg.get("opencode"), dict) else {}
+    groups = section.get("env")
+    if isinstance(groups, dict):
+        groups = [groups]
+    for selector in selectors:
+        if not selector.startswith("env:"):
+            continue
+        group_name = selector.split(":", 1)[1].strip()
+        for group in groups if isinstance(groups, list) else []:
+            if not isinstance(group, dict):
+                continue
+            if str(group.get("name") or "").strip() != group_name:
+                continue
+            model_id = str(group.get("OPENCODE_MODEL") or "").strip()
+            if model_id:
+                return model_id
+    return resolved or None
+
+
 def _state_wsl_context(state: dict) -> tuple[str | None, str | None]:
     """Return (distro, native_home) for a WSL backend from its state.
 
@@ -691,10 +739,14 @@ def _state_wsl_context(state: dict) -> tuple[str | None, str | None]:
     if len(command) > 3 and str(command[1]) == "-d":
         distro = distro or str(command[2])
     # The inner command is a single ``bash -c`` script string, so also scan the
-    # joined command line for --claude-bin/--codex-bin (e.g.
+    # joined command line for the registered backend binary flags (e.g.
     # ``--claude-bin /home/kaikai/.local/bin/claude``).
     joined = " ".join(str(part) for part in command)
-    for flag in ("--claude-bin", "--codex-bin"):
+    for flag in (
+        str(plugin.descriptor.binary_option)
+        for plugin in process_backend_plugins()
+        if plugin.descriptor.binary_option
+    ):
         marker = f"{flag} "
         if marker in joined:
             value = joined.split(marker, 1)[1].strip().split()[0]
@@ -774,6 +826,9 @@ def backend_status(root: Path, run_id: str, target: str = "main", task_id: str |
     latest_prompt_metrics = event_runtime["latest_prompt_metrics"]
     cfg = load_config(root)
     normalized_backend_name = str(backend_name).removesuffix("-chat")
+    plugin = maybe_backend_plugin(normalized_backend_name)
+    if plugin is not None:
+        latest_usage = plugin.normalize_usage(latest_usage)
     wsl_distro, wsl_native_home = _state_wsl_context(state)
     if not wsl_distro or not wsl_native_home:
         task_wsl_distro, task_wsl_native_home = _task_wsl_context(root, run_id, task_id)
@@ -809,6 +864,12 @@ def backend_status(root: Path, run_id: str, target: str = "main", task_id: str |
     # agent_usage event, which the backend already wrote to the single-copy
     # events.jsonl, so context pressure keeps refreshing in WSL workspaces.
     pressure_runtime_usage = runtime_context_usage or latest_usage
+    context_model = _context_model_for_backend(
+        cfg,
+        normalized_backend_name,
+        str(requested_model) if requested_model else None,
+        str(resolved_model) if resolved_model else None,
+    )
     return {
         "target": target,
         "task_id": task_id,
@@ -833,7 +894,7 @@ def backend_status(root: Path, run_id: str, target: str = "main", task_id: str |
         "latest_prompt_metrics": latest_prompt_metrics,
         "context_pressure": context_pressure(
             backend_name,
-            str(resolved_model) if resolved_model else None,
+            context_model,
             latest_prompt_metrics,
             runtime_context_window=runtime_context_window,
             runtime_token_usage=pressure_runtime_usage,
@@ -867,7 +928,11 @@ def _pid_is_backend_worker(pid: int, run_id: str, target: str, task_id: str | No
     signature, which uniquely identifies it regardless of pid namespace.
     """
     parts = _process_cmdline_parts(pid)
-    chat_commands = [command for command in ("codex-chat", "claude-chat") if command in parts]
+    chat_commands = [
+        str(plugin.descriptor.chat_command)
+        for plugin in process_backend_plugins()
+        if plugin.descriptor.chat_command in parts
+    ]
     if not chat_commands:
         return False
     index = parts.index(chat_commands[0])
@@ -1048,15 +1113,27 @@ def _resolve_wsl_target(
     """Build a WSL launch target when the workspace is a WSL path.
 
     Returns a dict with ``distro``, ``aha_home`` (WSL-native), ``aha_bin``
-    (onebin path as seen from WSL), and ``backend_bin`` (native codex/claude),
-    or ``None`` when the workspace is not WSL or no native backend is available.
+    (onebin path as seen from WSL), and ``backend_bin``. A WSL UNC workspace
+    always selects its owning distro. A Windows workspace remains native unless
+    that backend explicitly configures ``wsl_distro``.
     """
     from aha_cli.store.ws_target import is_wsl_workspace, wsl_distro_and_path, wsl_native_home
     from aha_cli.services.wsl_backend import wsl_backends_for_workspace
 
-    if not is_wsl_workspace(workspace):
-        return None
-    distro, _native = wsl_distro_and_path(workspace)
+    distro = None
+    if is_wsl_workspace(workspace):
+        distro, _native = wsl_distro_and_path(workspace)
+    else:
+        cfg = load_config(root)
+        plugin = maybe_backend_plugin(backend)
+        section = (
+            cfg.get(plugin.descriptor.config_key)
+            if plugin is not None
+            and plugin.descriptor.config_key
+            and isinstance(cfg.get(plugin.descriptor.config_key), dict)
+            else {}
+        )
+        distro = str(section.get("wsl_distro") or "").strip() or None
     if not distro:
         return None
     backends = wsl_backends_for_workspace(root, distro)
@@ -1097,6 +1174,7 @@ def _agent_chat_command(
     aha_home: Path,
     codex_bin: str = "codex",
     claude_bin: str = "claude",
+    backend_bin: str | None = None,
     model: str | None = None,
     reasoning_effort: str | None = None,
     sandbox: str = "workspace-write",
@@ -1111,12 +1189,23 @@ def _agent_chat_command(
 ) -> list[str]:
     if backend not in PROCESS_AGENT_BACKENDS:
         raise ValueError(f"backend {backend} does not have a chat process")
+    plugin = get_backend_plugin(backend)
+    descriptor = plugin.descriptor
+    chat_command = str(descriptor.chat_command or "").strip()
+    if not chat_command:
+        raise ValueError(f"backend {backend} does not define a chat command")
+    selected_backend_bin = str(
+        backend_bin
+        or (codex_bin if backend == "codex" else claude_bin if backend == "claude" else "")
+        or descriptor.default_binary
+        or backend
+    ).strip()
     command_model = resolve_model(backend, model)
     command = [
         *_aha_cli_invocation(),
         "--home",
         str(aha_home),
-        f"{backend}-chat",
+        chat_command,
         run_id,
         target,
         "--sender",
@@ -1130,10 +1219,8 @@ def _agent_chat_command(
         "--prompt-prefix",
         prompt_prefix,
     ]
-    if backend == "codex":
-        command.extend(["--codex-bin", codex_bin])
-    else:
-        command.extend(["--claude-bin", claude_bin])
+    if descriptor.binary_option:
+        command.extend([descriptor.binary_option, selected_backend_bin])
     if task_id:
         command.extend(["--task-id", task_id])
     if command_model:
@@ -1144,7 +1231,7 @@ def _agent_chat_command(
         command.extend(["--reasoning-effort", reasoning_effort])
     if from_start:
         command.append("--from-start")
-    if no_json and backend == "codex":
+    if no_json and descriptor.supports_no_json:
         command.append("--no-json")
     for item in extra_args or []:
         command.extend(["--extra-arg", item])
@@ -1155,8 +1242,7 @@ def _agent_chat_command(
     # onebin via the WSL-mapped AHA home.
     distro = str(wsl_target.get("distro") or "").strip()
     wsl_home = str(wsl_target.get("aha_home") or "").strip()
-    default_bin = codex_bin if backend == "codex" else claude_bin
-    inner_bin = str(wsl_target.get("backend_bin") or default_bin).strip()
+    inner_bin = str(wsl_target.get("backend_bin") or selected_backend_bin).strip()
     inner_python = str(wsl_target.get("python") or "python3").strip()
     aha_bin = str(wsl_target.get("aha_bin") or "").strip()
     if not distro or not wsl_home or not aha_bin:
@@ -1174,7 +1260,7 @@ def _agent_chat_command(
     inner.extend([
         "--home",
         wsl_home,
-        f"{backend}-chat",
+        chat_command,
         run_id,
         target,
         "--sender",
@@ -1188,8 +1274,8 @@ def _agent_chat_command(
         "--prompt-prefix",
         prompt_prefix,
     ])
-    inner_bin_key = "--codex-bin" if backend == "codex" else "--claude-bin"
-    inner.extend([inner_bin_key, inner_bin])
+    if descriptor.binary_option:
+        inner.extend([descriptor.binary_option, inner_bin])
     if task_id:
         inner.extend(["--task-id", task_id])
     if command_model:
@@ -1200,7 +1286,7 @@ def _agent_chat_command(
         inner.extend(["--reasoning-effort", reasoning_effort])
     if from_start:
         inner.append("--from-start")
-    if no_json and backend == "codex":
+    if no_json and descriptor.supports_no_json:
         inner.append("--no-json")
     for item in extra_args or []:
         inner.extend(["--extra-arg", item])
@@ -1347,6 +1433,7 @@ def start_backend(
     backend: str = "codex",
     codex_bin: str = "codex",
     claude_bin: str = "claude",
+    backend_bin: str | None = None,
     model: str | None = None,
     reasoning_effort: str | None = None,
     sandbox: str = "workspace-write",
@@ -1363,28 +1450,47 @@ def start_backend(
     if backend not in PROCESS_AGENT_BACKENDS:
         raise ValueError(f"backend {backend} does not have a chat process")
     cfg = load_config(root)
+    plugin = get_backend_plugin(backend)
+    descriptor = plugin.descriptor
+    backend_section = (
+        cfg.get(descriptor.config_key)
+        if descriptor.config_key and isinstance(cfg.get(descriptor.config_key), dict)
+        else {}
+    )
+    selected_backend_bin = str(
+        backend_bin
+        or (codex_bin if backend == "codex" else claude_bin if backend == "claude" else "")
+        or backend_section.get("bin")
+        or descriptor.default_binary
+        or backend
+    ).strip()
     # Determine the workspace the backend will operate on. A task's workspace may
     # be a WSL UNC path (\\wsl.localhost\\<distro>\\...); when it is and a native
     # WSL backend exists, run the whole watcher inside WSL so codex/claude operate
     # on native Linux paths instead of Windows UNC paths.
     workspace = _task_workspace_path(root, run_id, task_id)
-    if backend == "codex" and not model:
-        model = CODEX_DEFAULT_MODEL if task_id else (cfg.get("codex", {}) or {}).get("model")
-    if backend == "claude" and not model:
-        model = (cfg.get("claude", {}) or {}).get("model")
-    requested_model = model
-    model = normalize_model_selector(backend, model, cfg)
     reasoning_effort = _effective_backend_reasoning_effort(root, run_id, target, task_id, backend, cfg, reasoning_effort)
-    codex_config = codex_config_for_model((cfg.get("codex", {}) or {}), model) if backend == "codex" else None
-    claude_config = claude_config_for_model((cfg.get("claude", {}) or {}), model) if backend == "claude" else None
-    command_model = (
-        claude_cli_model(model)
-        if backend == "claude"
-        else codex_cli_model(codex_config, model)
-        if backend == "codex"
-        else model
+    resolved_turn = plugin.resolve_turn(
+        config=cfg,
+        model=model,
+        reasoning_effort=reasoning_effort,
+        task_scoped=bool(task_id),
+        session=None,
     )
-    resolved_model = claude_resolved_model(claude_config, model) if backend == "claude" else codex_resolved_model(codex_config, model) if backend == "codex" else resolve_model(backend, command_model)
+    requested_model = resolved_turn.requested_model
+    model = resolved_turn.extras.get("normalized_model")
+    command_model = resolved_turn.command_model
+    resolved_model = resolved_turn.resolved_model
+    codex_config = (
+        resolved_turn.backend_config
+        if backend == "codex"
+        else None
+    )
+    claude_config = (
+        resolved_turn.backend_config
+        if backend == "claude"
+        else None
+    )
     with locked_backend(root, run_id, target, task_id):
         current = backend_status(root, run_id, target, task_id)
         if current["status"] in {"running", "busy"}:
@@ -1456,7 +1562,7 @@ def start_backend(
             state = {
                 "target": target,
                 "task_id": task_id,
-                "backend": f"{backend}-chat",
+                "backend": descriptor.chat_command or f"{backend}-chat",
                 "status": "running",
                 "pid": proc.pid,
                 "managed": True,
@@ -1514,6 +1620,7 @@ def start_backend(
                 aha_home=root,
                 codex_bin=codex_bin,
                 claude_bin=claude_bin,
+                backend_bin=selected_backend_bin,
                 model=model,
                 reasoning_effort=reasoning_effort,
                 sandbox=sandbox,
@@ -1537,7 +1644,7 @@ def start_backend(
                     {
                         "target": target,
                         "task_id": task_id,
-                        "backend": f"{backend}-chat",
+                        "backend": descriptor.chat_command or f"{backend}-chat",
                         "message": f"WSL backend launch failed ({exc}); falling back to Windows backend",
                         "fallback": True,
                     },
@@ -1549,6 +1656,7 @@ def start_backend(
             aha_home=root,
             codex_bin=codex_bin,
             claude_bin=claude_bin,
+            backend_bin=selected_backend_bin,
             model=model,
             reasoning_effort=reasoning_effort,
             sandbox=sandbox,
@@ -1585,12 +1693,22 @@ def _stop_wsl_backend_process(
     distro = str(state.get("wsl_distro") or "").strip()
     if not distro:
         return
-    backend = str(state.get("backend") or "").removesuffix("-chat")
-    if backend not in ("codex", "claude"):
+    chat_command = str(state.get("backend") or "").strip()
+    plugin = backend_plugin_for_chat_command(chat_command)
+    backend = (
+        plugin.descriptor.name
+        if plugin is not None
+        else chat_command.removesuffix("-chat")
+    )
+    if backend not in PROCESS_AGENT_BACKENDS:
         return
     # Pattern that only matches the backend watcher, not this pkill command:
     #   <b>ackend-chat <run_id> <target> [--task-id <task_id>]
-    pattern = f"[{backend[0]}]{backend[1:]}-chat {run_id} {target}"
+    watcher_command = (
+        str((plugin or get_backend_plugin(backend)).descriptor.chat_command or "")
+        or f"{backend}-chat"
+    )
+    pattern = f"[{watcher_command[0]}]{watcher_command[1:]} {run_id} {target}"
     if task_id:
         pattern += f" --task-id {task_id}"
     script = (

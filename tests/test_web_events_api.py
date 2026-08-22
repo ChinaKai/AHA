@@ -174,6 +174,7 @@ class WebEventsApiTests(unittest.TestCase):
         self.assertTrue(payload["backend_session"]["exists"])
         session_info.assert_called_once_with(
             {"backend": "codex", "backend_session_id": "wsl-session"},
+            root=root,
             distro="Ubuntu-24.04",
             native_home="/home/kaikai",
         )

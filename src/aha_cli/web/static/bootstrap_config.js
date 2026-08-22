@@ -1,5 +1,5 @@
 (function () {
-  const backendOptions = ["codex", "claude"];
+  const backendOptions = ["codex", "claude", "opencode"];
   const claudeEnvModelPrefix = "env:";
   const codexEnvGroupFields = ["OPENAI_BASE_URL", "OPENAI_MODEL", "OPENAI_API_KEY", "CODEX_WIRE_API", "CODEX_ENV_KEY"];
   const claudeEnvGroupFields = [
@@ -83,6 +83,9 @@
                 <label><input type="checkbox" data-bootstrap-bind-backend="codex" data-wire-api="responses" disabled> Codex · Responses</label>
                 <label><input type="checkbox" data-bootstrap-bind-backend="claude" data-wire-api="chat_completions" disabled> Claude · Chat</label>
                 <label><input type="checkbox" data-bootstrap-bind-backend="claude" data-wire-api="anthropic_messages" disabled> Claude · Messages</label>
+                <label><input type="checkbox" data-bootstrap-bind-backend="opencode" data-wire-api="responses" disabled> OpenCode · Responses</label>
+                <label><input type="checkbox" data-bootstrap-bind-backend="opencode" data-wire-api="chat_completions" disabled> OpenCode · Chat</label>
+                <label><input type="checkbox" data-bootstrap-bind-backend="opencode" data-wire-api="anthropic_messages" disabled> OpenCode · Messages</label>
               </div>
             </div>
           </div>
@@ -146,15 +149,21 @@
   }
 
   function envGroupFieldsForBackend(backend) {
-    return backend === "codex" ? codexEnvGroupFields : claudeEnvGroupFields;
+    if (backend === "codex") return codexEnvGroupFields;
+    if (backend === "claude") return claudeEnvGroupFields;
+    return [];
   }
 
   function envGroupModelKey(backend) {
-    return backend === "codex" ? "OPENAI_MODEL" : "ANTHROPIC_MODEL";
+    if (backend === "codex") return "OPENAI_MODEL";
+    if (backend === "claude") return "ANTHROPIC_MODEL";
+    return "OPENCODE_MODEL";
   }
 
   function envGroupSecretKeys(backend) {
-    return backend === "codex" ? ["OPENAI_API_KEY"] : ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"];
+    if (backend === "codex") return ["OPENAI_API_KEY"];
+    if (backend === "claude") return ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"];
+    return [];
   }
 
   function normalizeClaudeEnvGroup(value = {}, fallbackName = "") {
@@ -268,6 +277,7 @@
         <input type="hidden" data-bootstrap-binding-field="backend" value="${escapeHtml(configString(binding.backend))}">
         <input type="hidden" data-bootstrap-binding-field="wire_api" value="${escapeHtml(configString(binding.wire_api))}">
         <input type="hidden" data-bootstrap-binding-field="context_window" value="${escapeHtml(contextWindow ? String(contextWindow) : "")}">
+        <input type="hidden" data-bootstrap-binding-field="max_output_tokens" value="${escapeHtml(configString(binding.max_output_tokens))}">
         <input type="hidden" data-bootstrap-binding-field="auto_compact_threshold_percent" value="${escapeHtml(compactBadge ? String(Math.round(compactThreshold)) : "")}">
         <input type="hidden" data-bootstrap-binding-field="fable_model" value="${escapeHtml(configString(binding.fable_model))}">
         <input type="hidden" data-bootstrap-binding-field="opus_model" value="${escapeHtml(configString(binding.opus_model))}">
@@ -285,7 +295,7 @@
     const names = new Map(providerList(providers).map(provider => [configString(provider.id), configString(provider.name, provider.id)]));
     const rows = configuredModelList(models);
     if (!rows.length) return '<div class="field-help" data-bootstrap-configured-empty>No provider models configured yet.</div>';
-    const backendLabels = { codex: "Codex", claude: "Claude" };
+    const backendLabels = { codex: "Codex", claude: "Claude", opencode: "OpenCode" };
     return backendOptions.map(backend => {
       const backendRows = rows
         .filter(binding => configString(binding.backend).toLowerCase() === backend)
@@ -324,6 +334,7 @@
               <select data-bootstrap-model-field="backend">
                 <option value="codex" ${backend === "codex" ? "selected" : ""}>Codex</option>
                 <option value="claude" ${backend === "claude" ? "selected" : ""}>Claude</option>
+                <option value="opencode" ${backend === "opencode" ? "selected" : ""}>OpenCode</option>
               </select>
             </label>
             <label class="field-label"><span>Wire API</span>
@@ -334,6 +345,7 @@
               </select>
             </label>
             <label class="field-label"><span>Context window</span><input data-bootstrap-model-field="context_window" type="number" min="0" placeholder="200000" value="${escapeHtml(configString(binding.context_window))}"></label>
+            <label class="field-label"><span>Max output tokens</span><input data-bootstrap-model-field="max_output_tokens" type="number" min="0" placeholder="65536" value="${escapeHtml(configString(binding.max_output_tokens))}"></label>
             <label class="field-label"><span>Auto-compact threshold %</span><input data-bootstrap-model-field="auto_compact_threshold_percent" type="number" min="1" max="99" placeholder="e.g. 75" value="${escapeHtml(configString(binding.auto_compact_threshold_percent))}"></label>
           </div>
           <div class="field-help">Trigger the backend's own auto-compact at this context usage (1-99). Claude: CLAUDE_AUTOCOMPACT_PCT_OVERRIDE. Codex: needs a Context window and applies the percentage to its effective context window. Leave blank for the backend default.</div>
@@ -359,6 +371,8 @@
     };
     const contextWindow = Number(value("context_window"));
     if (Number.isFinite(contextWindow) && contextWindow > 0) binding.context_window = contextWindow;
+    const maxOutputTokens = Number(value("max_output_tokens"));
+    if (Number.isFinite(maxOutputTokens) && maxOutputTokens > 0) binding.max_output_tokens = maxOutputTokens;
     const compactThreshold = Number(value("auto_compact_threshold_percent"));
     if (Number.isFinite(compactThreshold) && compactThreshold >= 1 && compactThreshold <= 99) binding.auto_compact_threshold_percent = Math.round(compactThreshold);
     for (const key of ["fable_model", "opus_model", "sonnet_model", "haiku_model"]) {
@@ -408,7 +422,7 @@
       const backend = configString(item.backend).toLowerCase();
       let group = list.querySelector(`[data-bootstrap-model-backend-group="${backend}"]`);
       if (!group) {
-        const label = backend === "codex" ? "Codex" : "Claude";
+        const label = backend === "codex" ? "Codex" : (backend === "claude" ? "Claude" : "OpenCode");
         list.insertAdjacentHTML("beforeend", `<section class="bootstrap-model-backend-group" data-bootstrap-model-backend-group="${escapeHtml(backend)}"><div class="bootstrap-model-backend-head"><strong>${label}</strong><span data-bootstrap-model-backend-count>0 models</span></div><div class="bootstrap-model-backend-items" data-bootstrap-model-backend-items></div></section>`);
         group = list.querySelector(`[data-bootstrap-model-backend-group="${backend}"]`);
       }
@@ -471,7 +485,11 @@
   }
 
   function bootstrapBackendProxySwitchHtml(prefix, proxy = {}) {
-    const label = prefix === "claude" ? "Claude" : "Codex";
+    const label = {
+      codex: "Codex",
+      claude: "Claude",
+      opencode: "OpenCode"
+    }[prefix] || prefix;
     return `
       <label class="field-label checkbox-field">
         <span>${escapeHtml(label)} proxy default</span>
@@ -791,14 +809,17 @@
     const cfg = options.config || {};
     const codex = cfg.codex || {};
     const claude = cfg.claude || {};
+    const opencode = cfg.opencode || {};
     const proxy = cfg.proxy || {};
     const codexProxy = codex.proxy || {};
     const claudeProxy = claude.proxy || {};
+    const opencodeProxy = opencode.proxy || {};
     const backend = backendOptions.includes(configString(cfg.backend)) ? configString(cfg.backend) : "codex";
     const maskSecrets = mode === "settings";
     const sectionOpen = mode === "settings" ? "" : " open";
     const codexModel = selectedBackendModel("codex", codex.model || envModelValue(codex.env_active), options);
     const claudeModel = selectedBackendModel("claude", claude.model || envModelValue(claude.env_active), options);
+    const opencodeModel = selectedBackendModel("opencode", opencode.model || envModelValue(opencode.env_active), options);
     return `
       <form class="bootstrap-form" data-bootstrap-config-form data-bootstrap-config-mode="${escapeHtml(mode)}">
         <details class="bootstrap-config-section"${sectionOpen}>
@@ -841,7 +862,7 @@
         </details>
         <details class="bootstrap-config-section bootstrap-backend-section"${sectionOpen}>
           <summary>Backend</summary>
-          <div class="field-help bootstrap-section-intro">Configure the Codex and Claude runtimes, then connect models from API providers without changing the existing backend configuration format.</div>
+          <div class="field-help bootstrap-section-intro">Configure Codex, Claude and OpenCode runtimes, then connect models from shared API Providers.</div>
           <div class="bootstrap-backend-runtime-grid">
             <section class="bootstrap-backend-card" data-bootstrap-backend-card="codex">
               <div class="bootstrap-backend-card-head">
@@ -861,6 +882,11 @@
                   <span>Model</span>
                   <select data-bootstrap-config-field="codex.model">${backendModelSelectOptions("codex", codexModel, options)}</select>
                   <div class="field-help">Official model or one of the provider connections below.</div>
+                </label>
+                <label class="field-label">
+                  <span>WSL distro</span>
+                  <input data-bootstrap-config-field="opencode.wsl_distro" placeholder="auto (e.g. Ubuntu-24.04)" value="${escapeHtml(configString(opencode.wsl_distro))}">
+                  <div class="field-help">Used as the Windows-hosted Detect Models fallback and for explicit WSL preference.</div>
                 </label>
                 <label class="field-label">
                   <span>Model source</span>
@@ -918,6 +944,42 @@
                 ${bootstrapBackendProxySwitchHtml("claude", claudeProxy)}
               </div>
             </section>
+            <section class="bootstrap-backend-card" data-bootstrap-backend-card="opencode">
+              <div class="bootstrap-backend-card-head">
+                <div>
+                  <strong>OpenCode</strong>
+                  <div class="field-help">Experimental OpenCode Server backend and configured model.</div>
+                </div>
+                <span class="bootstrap-backend-kind">Server / SSE</span>
+              </div>
+              <div class="bootstrap-config-grid">
+                <label class="field-label">
+                  <span>Bin</span>
+                  <input data-bootstrap-config-field="opencode.bin" value="${escapeHtml(configString(opencode.bin, "opencode"))}">
+                  <div class="field-help">OpenCode CLI executable name or path.</div>
+                </label>
+                <label class="field-label">
+                  <span>Model</span>
+                  <select data-bootstrap-config-field="opencode.model">${backendModelSelectOptions("opencode", opencodeModel, options)}</select>
+                  <div class="field-help">OpenCode native model or an AHA Provider model below.</div>
+                </label>
+                <label class="field-label">
+                  <span>Model source</span>
+                  <select data-bootstrap-config-field="opencode.model_source">
+                    <option value="both"${configString(opencode.model_source, "both") !== "official" && configString(opencode.model_source, "both") !== "env" ? " selected" : ""}>BOTH</option>
+                    <option value="official"${configString(opencode.model_source, "both") === "official" ? " selected" : ""}>Native</option>
+                    <option value="env"${configString(opencode.model_source, "both") === "env" ? " selected" : ""}>AHA Provider</option>
+                  </select>
+                  <div class="field-help">Choose native OpenCode catalog models, AHA Provider models, or both.</div>
+                </label>
+                <label class="field-label">
+                  <span>Reasoning effort</span>
+                  <select data-bootstrap-config-field="opencode.reasoning_effort">${backendReasoningEffortSelectOptions("opencode", opencodeModel, opencode.reasoning_effort, options)}</select>
+                  <div class="field-help">Passed to OpenCode as the model variant.</div>
+                </label>
+                ${bootstrapBackendProxySwitchHtml("opencode", opencodeProxy)}
+              </div>
+            </section>
           </div>
           <div class="bootstrap-provider-heading">
             <div>
@@ -939,7 +1001,7 @@
           <div class="bootstrap-provider-heading">
             <div>
               <strong>Configured Models</strong>
-              <div class="field-help">The same Provider model may be bound to both Codex and Claude with different wire APIs. Edit or add models manually when detection misses fields.</div>
+              <div class="field-help">The same Provider model may be bound to Codex, Claude and OpenCode with different wire APIs.</div>
             </div>
             <button class="bootstrap-add-row" type="button" data-bootstrap-add-binding>Add Model</button>
           </div>
@@ -1136,6 +1198,8 @@
       const binding = { provider_id: value("provider_id"), model_id: value("model"), backend: value("backend"), wire_api: value("wire_api") };
       const contextWindow = Number(value("context_window"));
       if (Number.isFinite(contextWindow) && contextWindow > 0) binding.context_window = contextWindow;
+      const maxOutputTokens = Number(value("max_output_tokens"));
+      if (Number.isFinite(maxOutputTokens) && maxOutputTokens > 0) binding.max_output_tokens = maxOutputTokens;
       const compactThreshold = Number(value("auto_compact_threshold_percent"));
       if (Number.isFinite(compactThreshold) && compactThreshold >= 1 && compactThreshold <= 99) binding.auto_compact_threshold_percent = Math.round(compactThreshold);
       for (const key of ["fable_model", "opus_model", "sonnet_model", "haiku_model"]) {
@@ -1188,6 +1252,23 @@
         env: bootstrapConfigEnvGroups(form, "claude", context),
         proxy: {
           enabled: Boolean(bootstrapConfigField(form, "claude.proxy.enabled")?.checked)
+        }
+      },
+      opencode: {
+        bin: bootstrapConfigText(form, "opencode.bin") || "opencode",
+        model: bootstrapConfigText(form, "opencode.model"),
+        reasoning_effort: bootstrapConfigText(form, "opencode.reasoning_effort"),
+        sandbox: "auto",
+        approval: "never",
+        session_policy: "sticky",
+        agent: "build",
+        experimental: true,
+        wsl_distro: bootstrapConfigText(form, "opencode.wsl_distro"),
+        env_active: envModelName(bootstrapConfigText(form, "opencode.model")),
+        model_source: bootstrapConfigText(form, "opencode.model_source") || "both",
+        env: [],
+        proxy: {
+          enabled: Boolean(bootstrapConfigField(form, "opencode.proxy.enabled")?.checked)
         }
       },
       integrations: config.integrations || {}

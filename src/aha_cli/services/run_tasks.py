@@ -8,6 +8,7 @@ import subprocess
 import textwrap
 
 from aha_cli import platform
+from aha_cli.backends.plugin import get_backend_plugin, maybe_backend_plugin
 from aha_cli.constants import EVENTS_FILE
 from aha_cli.store.filesystem import (
     append_event,
@@ -149,7 +150,13 @@ def run_one_task(root: Path, plan: dict, task_id: str, command_template: str | N
     return task_id, exit_code
 
 
-def run_pending_tasks(root: Path, run_id: str, args, codex_command_builder, claude_command_builder=None) -> int:
+def run_pending_tasks(
+    root: Path,
+    run_id: str,
+    args,
+    codex_command_builder=None,
+    claude_command_builder=None,
+) -> int:
     cfg = load_config(root)
     plan = require_plan(root, run_id)
     command = args.runner_command if args.runner_command is not None else cfg.get("runner_command")
@@ -160,15 +167,27 @@ def run_pending_tasks(root: Path, run_id: str, args, codex_command_builder, clau
         backend = "command" if command else "stub"
     if backend == "stub":
         command = None
-    elif backend == "codex":
-        command = codex_command_builder(args, cfg)
-    elif backend == "claude" and claude_command_builder is not None:
-        command = claude_command_builder(args, cfg)
     elif backend == "command":
         if not command:
             raise SystemExit("backend=command requires --runner-command or config runner_command")
     else:
-        raise SystemExit(f"Unknown backend: {backend}")
+        plugin = maybe_backend_plugin(str(backend or ""))
+        if plugin is None:
+            raise SystemExit(f"Unknown backend: {backend}")
+        legacy_builder = (
+            codex_command_builder
+            if backend == "codex"
+            else claude_command_builder
+            if backend == "claude"
+            else None
+        )
+        command = (
+            legacy_builder(args, cfg)
+            if legacy_builder is not None
+            else get_backend_plugin(backend).runner_command(args, cfg)
+        )
+        if not command:
+            raise SystemExit(f"backend={backend} does not provide a task runner")
     parallel = args.parallel or int(cfg.get("default_parallel", 10))
 
     runnable_tasks = [task for task in plan["tasks"] if not task.get("deleted_at")]

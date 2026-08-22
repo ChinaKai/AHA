@@ -10,6 +10,7 @@ import shutil
 import subprocess
 from pathlib import Path
 
+from aha_cli import platform
 from aha_cli.domain.models import utc_now
 from aha_cli.store.io import read_json, write_json
 
@@ -119,6 +120,7 @@ def _run_git(workspace: Path, *args: str) -> str:
             capture_output=True,
             check=False,
             timeout=5,
+            **platform.hidden_subprocess_kwargs(),
         )
     except (OSError, subprocess.SubprocessError):
         return ""
@@ -170,10 +172,12 @@ def git_workspace_facts(workspace: Path) -> dict:
     }
 
 
-def derived_project_key_aliases(workspace: Path, goal: str | None = None) -> list[str]:
-    """Return the current remote/workspace-derived key and legacy aliases."""
+def _derived_project_key_aliases_from_facts(
+    workspace: Path,
+    facts: dict,
+    goal: str | None = None,
+) -> list[str]:
     workspace = Path(workspace).expanduser()
-    facts = git_workspace_facts(workspace)
     remote = str(facts.get("git_identity") or "")
     if remote:
         subpath = str(facts.get("subpath") or ".")
@@ -194,6 +198,16 @@ def derived_project_key_aliases(workspace: Path, goal: str | None = None) -> lis
         basis = "workspace"
     digest = hashlib.sha1(basis.encode("utf-8")).hexdigest()[:8]
     return [f"ws-{slugify(basis)}-{digest}"]
+
+
+def derived_project_key_aliases(workspace: Path, goal: str | None = None) -> list[str]:
+    """Return the current remote/workspace-derived key and legacy aliases."""
+    workspace = Path(workspace).expanduser()
+    return _derived_project_key_aliases_from_facts(
+        workspace,
+        git_workspace_facts(workspace),
+        goal=goal,
+    )
 
 
 def validate_project_key(project_key: str) -> str:
@@ -708,7 +722,11 @@ def resolve_project_identity(
     """Resolve a workspace with explainable local/shared binding precedence."""
     workspace = _normalize_workspace_path(workspace)
     facts = git_workspace_facts(workspace)
-    derived_aliases = derived_project_key_aliases(workspace, goal=goal)
+    derived_aliases = _derived_project_key_aliases_from_facts(
+        workspace,
+        facts,
+        goal=goal,
+    )
     workspace_path = str(facts.get("workspace_path") or _workspace_binding_key(workspace))
     local_binding = next(
         (

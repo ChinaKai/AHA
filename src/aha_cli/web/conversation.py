@@ -112,6 +112,7 @@ def conversation_view_page(
     session_info = (
         backend_session_jsonl_info(
             read_json(session_file),
+            root=root,
             distro=str(backend_state.get("wsl_distro") or "").strip() or None,
             native_home=str(backend_state.get("wsl_native_home") or "").strip() or None,
         )

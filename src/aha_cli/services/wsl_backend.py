@@ -8,6 +8,7 @@ import subprocess
 import sys
 import time
 
+from aha_cli.backends.plugin import process_backend_plugins
 from aha_cli.store.paths import aha_home_path
 
 WSL_BACKENDS_CACHE_FILE = "wsl-backends.json"
@@ -46,7 +47,7 @@ def _run_wsl_script(distro: str, script: str) -> tuple[int, str]:
     return result.returncode, text
 
 
-_WSL_PROBE_SCRIPT = r"""
+_WSL_PROBE_SCRIPT_PREFIX = r"""
 detect() {
   local bin="$1"
   local found=""
@@ -65,8 +66,9 @@ detect() {
   fi
   echo "$bin=$found"
 }
-detect codex
-detect claude
+"""
+
+_WSL_PROBE_SCRIPT_SUFFIX = r"""
 # The WSL onebin is launched with an explicit native python so it never
 # resolves through the Windows shim (e.g. the CRLF python3 in the AHA bin dir).
 detect python3
@@ -84,6 +86,19 @@ fi
 """
 
 
+def _wsl_probe_script() -> str:
+    backend_names = _expected_probe_backend_names()
+    detects = "\n".join(f"detect {name}" for name in backend_names if name)
+    return f"{_WSL_PROBE_SCRIPT_PREFIX}\n{detects}\n{_WSL_PROBE_SCRIPT_SUFFIX}"
+
+
+def _expected_probe_backend_names() -> list[str]:
+    return [
+        str(plugin.descriptor.default_binary or plugin.descriptor.name).strip()
+        for plugin in process_backend_plugins()
+    ]
+
+
 def _parse_probe_output(output: str) -> dict[str, str]:
     result: dict[str, str] = {}
     for line in output.splitlines():
@@ -99,13 +114,13 @@ def _parse_probe_output(output: str) -> dict[str, str]:
 
 
 def probe_wsl_backends(distro: str) -> dict[str, str]:
-    """Probe a WSL distro for native codex/claude and the nvm node path.
+    """Probe a WSL distro for native process-agent backends and helper paths.
 
     Returns a dict like ``{"codex": "...", "claude": "...", "node": "..."}``.
     Values are WSL-native absolute paths; keys are absent when not found. The
     WSL session's own ``$HOME`` is used, so no user path is hardcoded.
     """
-    _exit_code, output = _run_wsl_script(distro, _WSL_PROBE_SCRIPT)
+    _exit_code, output = _run_wsl_script(distro, _wsl_probe_script())
     parsed = _parse_probe_output(output)
     # Drop paths that still point into the Windows mount (shims).
     return {key: value for key, value in parsed.items() if not value.startswith("/mnt/")}
@@ -133,6 +148,12 @@ def cached_wsl_backends(root: Path, distro: str) -> dict[str, str] | None:
     detected_at = entry.get("detected_at") or 0
     if now - float(detected_at) > WSL_CACHE_TTL_SECONDS:
         return None
+    probed_names = entry.get("probed_names")
+    if (
+        not isinstance(probed_names, list)
+        or set(_expected_probe_backend_names()) - {str(name) for name in probed_names}
+    ):
+        return None
     backends = entry.get("backends")
     return backends if isinstance(backends, dict) else None
 
@@ -149,7 +170,11 @@ def cache_wsl_backends(root: Path, distro: str, backends: dict[str, str]) -> Non
                 payload = {}
             if not isinstance(payload, dict):
                 payload = {}
-        payload[distro] = {"detected_at": time.time(), "backends": backends}
+        payload[distro] = {
+            "detected_at": time.time(),
+            "probed_names": _expected_probe_backend_names(),
+            "backends": backends,
+        }
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
     except OSError:

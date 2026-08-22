@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from aha_cli.backends.plugin import maybe_backend_plugin
+
 DEFAULT_NO_PROXY = "localhost,127.0.0.1,::1"
 PROXY_ENV_KEYS = (
     "HTTP_PROXY",
@@ -88,8 +90,14 @@ def backend_proxy_config(
     legacy = core_proxy_config(config)
     backend_name = str(backend or config.get("backend") or "").strip().lower()
     backend_raw = {}
-    if backend_name in {"codex", "claude"} and isinstance(config.get(backend_name), dict):
-        backend_config = config.get(backend_name) or {}
+    plugin = maybe_backend_plugin(backend_name)
+    config_key = (
+        plugin.descriptor.config_key
+        if plugin is not None
+        else backend_name
+    )
+    if config_key and isinstance(config.get(config_key), dict):
+        backend_config = config.get(config_key) or {}
         backend_raw = backend_config.get("proxy") if isinstance(backend_config.get("proxy"), dict) else {}
     backend_enabled = backend_raw.get("enabled", backend_raw.get("proxy_enabled", legacy.get("enabled", False)))
     proxy = normalize_proxy_config(

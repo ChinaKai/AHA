@@ -6,7 +6,7 @@ from typing import Iterable
 
 PROVIDER_AUTH_STYLES = {"auto", "bearer", "x-api-key", "none"}
 PROVIDER_WIRE_APIS = {"responses", "chat_completions", "anthropic_messages"}
-PROVIDER_BACKENDS = {"codex", "claude"}
+PROVIDER_BACKENDS = {"codex", "claude", "opencode"}
 _CREDENTIAL_KEYS = {
     "credential",
     "api_key",
@@ -125,7 +125,15 @@ def normalize_configured_models(value: object, provider_ids: Iterable[str]) -> l
             "backend": backend,
             "wire_api": wire_api,
         }
-        for field in ("name", "context_window", "fable_model", "opus_model", "sonnet_model", "haiku_model"):
+        for field in (
+            "name",
+            "context_window",
+            "max_output_tokens",
+            "fable_model",
+            "opus_model",
+            "sonnet_model",
+            "haiku_model",
+        ):
             if item.get(field) not in (None, ""):
                 model[field] = item[field]
         threshold = _auto_compact_threshold_percent(item.get("auto_compact_threshold_percent"))
@@ -215,7 +223,7 @@ def sync_legacy_backend_env(config: dict) -> dict:
                     # catalog is available, so the backend can apply it to the
                     # effective context window rather than the raw window.
                     common["CODEX_AUTO_COMPACT_THRESHOLD_PERCENT"] = str(threshold)
-            else:
+            elif backend == "claude":
                 anthropic_base = _text(provider.get("anthropic_base_url")) or str(provider.get("base_url") or "")
                 common.update({"ANTHROPIC_BASE_URL": anthropic_base, "ANTHROPIC_MODEL": model_id})
                 if credential:
@@ -241,6 +249,14 @@ def sync_legacy_backend_env(config: dict) -> dict:
                     role_model = _text(binding.get(role_key))
                     if role_model:
                         common[env_key] = role_model
+            else:
+                common.update({
+                    "OPENCODE_MODEL": model_id,
+                    "OPENCODE_WIRE_API": wire_api,
+                })
+                context_window = _positive_window(binding.get("context_window"))
+                if context_window:
+                    common["OPENCODE_CONTEXT_WINDOW"] = str(context_window)
             generated.append(common)
         managed_provider_ids = set(providers)
         unmanaged = [

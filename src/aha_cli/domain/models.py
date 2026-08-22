@@ -348,6 +348,23 @@ def default_config() -> dict:
                 "enabled": False,
             },
         },
+        "opencode": {
+            "bin": "opencode",
+            "model": None,
+            "reasoning_effort": None,
+            "sandbox": "auto",
+            "approval": "never",
+            "session_policy": "sticky",
+            "agent": "build",
+            "experimental": True,
+            "wsl_distro": None,
+            "env_active": None,
+            "model_source": "both",
+            "env": [],
+            "proxy": {
+                "enabled": False,
+            },
+        },
     }
 
 

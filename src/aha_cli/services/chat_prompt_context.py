@@ -692,10 +692,18 @@ def _repository_coding_principles_context() -> str:
 
 
 def _cross_platform_runtime_context() -> str:
+    from aha_cli.backends.plugin import maybe_backend_plugin
+
     backend = str(os.environ.get("AHA_BACKEND") or "").strip().lower()
     distro = str(os.environ.get("AHA_WSL_DISTRO") or "").strip()
     aha_bin = str(os.environ.get(AHA_WSL_AHA_BIN_ENV) or "").strip()
-    if backend not in {"codex", "claude"} or not distro or not aha_bin:
+    plugin = maybe_backend_plugin(backend)
+    if (
+        plugin is None
+        or not plugin.descriptor.process_chat
+        or not distro
+        or not aha_bin
+    ):
         return ""
     aha_home = str(os.environ.get("AHA_WSL_AHA_HOME") or os.environ.get("AHA_HOME") or "").strip()
     return render_prompt_template(

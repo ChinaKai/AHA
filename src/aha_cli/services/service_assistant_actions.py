@@ -1201,8 +1201,13 @@ def _normalize_proxy_enabled(arguments: dict, normalized: dict) -> None:
 def _normalize_task_runtime_preferences(arguments: dict, normalized: dict) -> None:
     if "backend" in arguments:
         backend = str(arguments.get("backend") or "").strip().lower()
-        if backend and backend not in {"codex", "claude", "stub"}:
-            raise ServiceAssistantActionError("backend must be codex, claude, stub, or empty to inherit")
+        allowed_backends = set(agent_backend_names())
+        if backend and backend not in allowed_backends:
+            raise ServiceAssistantActionError(
+                "backend must be one of "
+                + ", ".join(sorted(allowed_backends))
+                + ", or empty to inherit"
+            )
         if backend:
             normalized["backend"] = backend
         elif "backend" in normalized:
@@ -1460,8 +1465,15 @@ def _normalized_write_arguments(
         for key in ("proxy_enabled", "notifications_enabled", "group_mentions_only"):
             if key in normalized and not isinstance(normalized[key], bool):
                 raise ServiceAssistantActionError(f"{key} must be a boolean")
-        if "backend" in normalized and str(normalized["backend"] or "") not in {"", "codex", "claude", "stub"}:
-            raise ServiceAssistantActionError("backend must be codex, claude, stub, or empty to inherit")
+        if "backend" in normalized:
+            backend = str(normalized["backend"] or "")
+            allowed_backends = set(agent_backend_names())
+            if backend and backend not in allowed_backends:
+                raise ServiceAssistantActionError(
+                    "backend must be one of "
+                    + ", ".join(sorted(allowed_backends))
+                    + ", or empty to inherit"
+                )
         for key in ("backend", "model", "reasoning_effort"):
             if key in normalized and not isinstance(normalized[key], str):
                 raise ServiceAssistantActionError(f"{key} must be a string")

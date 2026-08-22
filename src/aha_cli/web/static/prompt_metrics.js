@@ -119,6 +119,7 @@
     const text = String(source || "").trim().toLowerCase();
     if (text.includes("claude")) return "claude";
     if (text.includes("codex")) return "codex";
+    if (text.includes("opencode")) return "opencode";
     return "";
   }
 
@@ -132,25 +133,35 @@
   }
 
   function usageTotalFormula(backend) {
-    return normalizedUsageBackend(backend) === "claude" ? "input + cache read + output" : "input + output";
+    const normalized = normalizedUsageBackend(backend);
+    if (normalized === "claude") return "input + cache read + output";
+    if (normalized === "opencode") return "input + cache read + cache create + output + reasoning";
+    return "input + output";
   }
 
   function usageTokenBreakdown(usage = {}, { backend = "", source = "", backendSession = null, contextPressure = null } = {}) {
     const resolvedBackend = resolveUsageBackend({ backend, source, backendSession, contextPressure });
-    const inputTokens = metricNumberValue(usage?.input_tokens);
-    const outputTokens = metricNumberValue(usage?.output_tokens);
-    const reasoningOutputTokens = metricNumberValue(usage?.reasoning_output_tokens);
-    const cacheReadTokens = metricNumberValue(usage?.cached_input_tokens ?? usage?.cache_read_input_tokens);
-    const cacheCreationTokens = metricNumberValue(usage?.cache_creation_input_tokens);
+    const rawCache = usage?.cache && typeof usage.cache === "object" ? usage.cache : {};
+    const inputTokens = metricNumberValue(usage?.input_tokens ?? usage?.input);
+    const outputTokens = metricNumberValue(usage?.output_tokens ?? usage?.output);
+    const reasoningOutputTokens = metricNumberValue(usage?.reasoning_output_tokens ?? usage?.reasoning);
+    const cacheReadTokens = metricNumberValue(usage?.cached_input_tokens ?? usage?.cache_read_input_tokens ?? rawCache.read);
+    const cacheCreationTokens = metricNumberValue(usage?.cache_creation_input_tokens ?? rawCache.write);
     const isClaude = resolvedBackend === "claude";
     const isCodex = resolvedBackend === "codex";
+    const isOpenCode = resolvedBackend === "opencode";
     const hasCachedInputTokens = usageHasField(usage, "cached_input_tokens");
-    const hasCacheReadTokens = usageHasField(usage, "cache_read_input_tokens") || hasCachedInputTokens;
-    const hasCacheCreationTokens = usageHasField(usage, "cache_creation_input_tokens");
-    const hasInputTokens = usageHasField(usage, "input_tokens");
-    const hasOutputTokens = usageHasField(usage, "output_tokens");
-    const hasReasoningOutputTokens = usageHasField(usage, "reasoning_output_tokens");
-    const calculatedTotal = inputTokens + outputTokens + (isClaude ? cacheReadTokens : 0);
+    const hasCacheReadTokens = usageHasField(usage, "cache_read_input_tokens") || hasCachedInputTokens || usageHasField(rawCache, "read");
+    const hasCacheCreationTokens = usageHasField(usage, "cache_creation_input_tokens") || usageHasField(rawCache, "write");
+    const hasInputTokens = usageHasField(usage, "input_tokens") || usageHasField(usage, "input");
+    const hasOutputTokens = usageHasField(usage, "output_tokens") || usageHasField(usage, "output");
+    const hasReasoningOutputTokens = usageHasField(usage, "reasoning_output_tokens") || usageHasField(usage, "reasoning");
+    const calculatedTotal = (
+      inputTokens +
+      outputTokens +
+      ((isClaude || isOpenCode) ? cacheReadTokens : 0) +
+      (isOpenCode ? cacheCreationTokens + reasoningOutputTokens : 0)
+    );
     return {
       backend: resolvedBackend,
       cacheCreationTokens,
@@ -165,10 +176,11 @@
       inputTokens,
       isCodex,
       isClaude,
+      isOpenCode,
       outputTokens,
       reasoningOutputTokens,
       totalFormula: usageTotalFormula(resolvedBackend),
-      totalTokens: calculatedTotal || metricNumberValue(usage?.total_tokens)
+      totalTokens: calculatedTotal || metricNumberValue(usage?.total_tokens ?? usage?.total)
     };
   }
 
@@ -250,9 +262,9 @@
       backend: ledgerBackend,
       cacheCreationTokens,
       cacheReadTokens,
-      cacheSummaryDetail: usageBreakdown.isClaude ? "counted in total" : "agent usage",
-      cacheSummaryLabel: usageBreakdown.isClaude ? "Cache read" : "Cached",
-      cacheSummaryTokens: usageBreakdown.isClaude ? cacheReadTokens : cachedTokens,
+      cacheSummaryDetail: (usageBreakdown.isClaude || usageBreakdown.isOpenCode) ? "counted in total" : "agent usage",
+      cacheSummaryLabel: (usageBreakdown.isClaude || usageBreakdown.isOpenCode) ? "Cache read" : "Cached",
+      cacheSummaryTokens: (usageBreakdown.isClaude || usageBreakdown.isOpenCode) ? cacheReadTokens : cachedTokens,
       cachedTokens,
       contextPercent,
       currentTotalTokens,
@@ -268,6 +280,7 @@
       hasData: Boolean(totalTokens || backendInputTokens || outputTokens || ahaPromptTokens || sessionBytes || hasUsageFields),
       isCodex: usageBreakdown.isCodex,
       isClaude: usageBreakdown.isClaude,
+      isOpenCode: usageBreakdown.isOpenCode,
       largest,
       outputTokens,
       reasoningOutputTokens,

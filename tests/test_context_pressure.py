@@ -163,6 +163,42 @@ class ContextPressureTests(unittest.TestCase):
         )
         self.assertFalse(pressure["pressure_is_estimate"])
 
+    def test_opencode_context_includes_cached_input_tokens(self) -> None:
+        pressure = context_pressure(
+            "opencode-chat",
+            "big-pickle",
+            {"total": {"tokens": 1}},
+            runtime_token_usage={
+                "input_tokens": 10119,
+                "cache_read_input_tokens": 64,
+                "cache_creation_input_tokens": 0,
+                "output_tokens": 56,
+                "reasoning_output_tokens": 20,
+                "total_tokens": 10259,
+            },
+            cfg={
+                "configured_models": [
+                    {
+                        "provider_id": "hualai-opencode",
+                        "model_id": "big-pickle",
+                        "backend": "opencode",
+                        "context_window": 200000,
+                    }
+                ]
+            },
+            provider_id="hualai-opencode",
+            environ={},
+        )
+
+        self.assertEqual(pressure["context_window"], 200000)
+        self.assertEqual(pressure["context_window_source"], "configured")
+        self.assertEqual(pressure["runtime_effective_input_tokens"], 10183)
+        self.assertEqual(pressure["percent"], 5.09)
+        self.assertEqual(
+            pressure["pressure_source"],
+            "runtime.last_token_usage.effective_input_tokens",
+        )
+
     def test_prompt_chars_without_tokens_keeps_pressure_unknown(self) -> None:
         pressure = context_pressure("codex-chat", "gpt-5.5", {"total": {"chars": 120000, "bytes": 130000}})
 
