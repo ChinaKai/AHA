@@ -352,6 +352,21 @@ def _toml_bool(value: object) -> str:
 CODEX_MODELS_CATALOG_FILE = "codex-models.json"
 CODEX_CATALOG_TEMPLATE_SLUG = "gpt-5.5"
 CODEX_DEFAULT_EFFECTIVE_CONTEXT_WINDOW_PERCENT = 95
+CODEX_CATALOG_REQUIRED_FIELDS = frozenset(
+    {
+        "slug",
+        "display_name",
+        "description",
+        "default_reasoning_level",
+        "supported_reasoning_levels",
+        "shell_type",
+        "visibility",
+        "supported_in_api",
+        "priority",
+        "base_instructions",
+        "context_window",
+    }
+)
 
 
 def _positive_int(value: object) -> int | None:
@@ -389,11 +404,11 @@ def _codex_effective_context_window(catalog_path: Path, model: str) -> int | Non
     return int(context_window * effective_percent / 100) if context_window else None
 
 
-def _configured_codex_auto_compact_threshold(
+def _configured_codex_model(
     cfg: dict | None,
     provider_id: str | None,
     model: str,
-) -> int | None:
+) -> dict | None:
     configured = cfg.get("configured_models") if isinstance(cfg, dict) else []
     if not isinstance(configured, list):
         return None
@@ -407,9 +422,52 @@ def _configured_codex_auto_compact_threshold(
             continue
         if normalized_provider and str(item.get("provider_id") or "").strip() != normalized_provider:
             continue
-        threshold = _positive_int(item.get("auto_compact_threshold_percent"))
-        return threshold if threshold and threshold <= 99 else None
+        return item
     return None
+
+
+def _configured_codex_context_window(
+    cfg: dict | None,
+    provider_id: str | None,
+    model: str,
+) -> int | None:
+    item = _configured_codex_model(cfg, provider_id, model)
+    return _positive_int((item or {}).get("context_window"))
+
+
+def _configured_codex_auto_compact_threshold(
+    cfg: dict | None,
+    provider_id: str | None,
+    model: str,
+) -> int | None:
+    item = _configured_codex_model(cfg, provider_id, model)
+    threshold = _positive_int((item or {}).get("auto_compact_threshold_percent"))
+    return threshold if threshold and threshold <= 99 else None
+
+
+def _codex_catalog_template_complete(value: object) -> bool:
+    if not isinstance(value, dict):
+        return False
+    if not CODEX_CATALOG_REQUIRED_FIELDS.issubset(value):
+        return False
+    string_fields = (
+        "slug",
+        "display_name",
+        "description",
+        "default_reasoning_level",
+        "shell_type",
+        "visibility",
+        "base_instructions",
+    )
+    if any(not isinstance(value.get(key), str) for key in string_fields):
+        return False
+    if not isinstance(value.get("supported_reasoning_levels"), list):
+        return False
+    if not isinstance(value.get("supported_in_api"), bool):
+        return False
+    if isinstance(value.get("priority"), bool) or not isinstance(value.get("priority"), int):
+        return False
+    return _positive_int(value.get("context_window")) is not None
 
 
 def _codex_catalog_template() -> dict | None:
@@ -429,10 +487,13 @@ def _codex_catalog_template() -> dict | None:
         return None
     models = payload.get("models") if isinstance(payload.get("models"), list) else []
     for item in models:
-        if isinstance(item, dict) and item.get("slug") == CODEX_CATALOG_TEMPLATE_SLUG:
+        if (
+            _codex_catalog_template_complete(item)
+            and item.get("slug") == CODEX_CATALOG_TEMPLATE_SLUG
+        ):
             return item
     for item in models:
-        if isinstance(item, dict) and isinstance(item.get("slug"), str):
+        if _codex_catalog_template_complete(item):
             return item
     return None
 
@@ -446,12 +507,14 @@ def ensure_codex_models_catalog(
 
     For every ``configured_models`` entry with ``backend == "codex"`` and an
     explicit ``context_window``, emit a full catalog entry declaring that window
-    so Codex uses it instead of its 258K fallback. When ``provider_id`` is given
-    only entries for that provider are emitted, so the same model_id bound to
-    two providers with different windows does not share a catalog entry (Codex
-    matches the catalog by model slug, so a per-process catalog scoped to the
-    active provider is the correct way to keep windows distinct). Returns the
-    catalog path, or ``None`` when there is nothing to declare.
+    so Codex uses it instead of its fallback. The entry is written only when the
+    installed Codex cache provides a complete ModelInfo template. A fresh,
+    unauthed Codex installation may have no cache; emitting a guessed partial
+    schema would make the CLI fail before the model request, so callers instead
+    use the supported direct ``model_context_window`` override. When
+    ``provider_id`` is given only entries for that provider are emitted.
+    Returns the catalog path, or ``None`` when no complete template/window is
+    available.
     """
     configured = cfg.get("configured_models") if isinstance(cfg, dict) else []
     if not isinstance(configured, list):
@@ -460,6 +523,8 @@ def ensure_codex_models_catalog(
     seen: set[str] = set()
     normalized_provider = str(provider_id or "").strip()
     template = _codex_catalog_template()
+    if not _codex_catalog_template_complete(template):
+        return None
     for item in configured:
         if not isinstance(item, dict):
             continue
@@ -476,21 +541,15 @@ def ensure_codex_models_catalog(
         if not window:
             continue
         seen.add(model_id)
-        if template:
-            entry = json.loads(json.dumps(template))
-            entry["slug"] = model_id
-            entry["display_name"] = str(item.get("name") or model_id)
-            entry["context_window"] = window
-            entry["max_context_window"] = max(window, _positive_int(template.get("max_context_window")) or 0)
-            entry.pop("auto_compact_token_limit", None)
-        else:
-            entry = {
-                "slug": model_id,
-                "context_window": window,
-                "max_context_window": window,
-                "supported_in_api": True,
-                "visibility": "list",
-            }
+        entry = json.loads(json.dumps(template))
+        entry["slug"] = model_id
+        entry["display_name"] = str(item.get("name") or model_id)
+        entry["context_window"] = window
+        entry["max_context_window"] = max(
+            window,
+            _positive_int(template.get("max_context_window")) or 0,
+        )
+        entry.pop("auto_compact_token_limit", None)
         entries.append(entry)
     if not entries:
         return None
@@ -598,10 +657,10 @@ def codex_config_overrides(
         reasoning_effort = normalize_reasoning_effort(codex_config.get("reasoning_effort"), "codex")
         if reasoning_effort:
             overrides.extend(["-c", f"model_reasoning_effort={_toml_string(reasoning_effort)}"])
-    # Declare configured model windows via a codex model catalog so custom models
-    # (e.g. deepseek-v4-flash at 1M) are honored instead of the 258K fallback.
-    # Scope the catalog to the active provider so the same model_id bound to two
-    # providers with different windows does not share an entry.
+    # Prefer a full Codex model-catalog template when the installed CLI already
+    # has one. Fresh/unauthed installations often have no models_cache.json;
+    # never synthesize a partial ModelInfo because Codex rejects it before the
+    # request. In that case use the supported direct context-window override.
     catalog_path: Path | None = None
     active_provider = _provider_override(codex_config)
     active_provider_id = str(
@@ -609,21 +668,40 @@ def codex_config_overrides(
         or active_provider.get("provider_id")
         or ""
     ).strip() or None
+    model = _codex_group_value(active_group, "OPENAI_MODEL")
+    configured_window = _configured_codex_context_window(
+        cfg,
+        active_provider_id,
+        model,
+    )
     if aha_home is not None:
         catalog_path = ensure_codex_models_catalog(cfg, aha_home, provider_id=active_provider_id)
         if catalog_path is not None:
             overrides.extend(["-c", f"model_catalog_json={_toml_string(str(catalog_path))}"])
+    if catalog_path is None and configured_window:
+        overrides.extend(["-c", f"model_context_window={configured_window}"])
     # Keep accepting the legacy absolute limit. Newly generated Env Groups carry
     # a percentage, which is resolved against the same effective window Codex
     # reports as the CTX denominator.
-    model = _codex_group_value(active_group, "OPENAI_MODEL")
     threshold = _configured_codex_auto_compact_threshold(cfg, active_provider_id, model)
     threshold = threshold or _positive_int(
         _codex_group_value(active_group, "CODEX_AUTO_COMPACT_THRESHOLD_PERCENT")
     )
     token_limit: int | None = None
-    if threshold and threshold <= 99 and catalog_path is not None:
-        effective_window = _codex_effective_context_window(catalog_path, model)
+    if threshold and threshold <= 99:
+        effective_window = (
+            _codex_effective_context_window(catalog_path, model)
+            if catalog_path is not None
+            else (
+                int(
+                    configured_window
+                    * CODEX_DEFAULT_EFFECTIVE_CONTEXT_WINDOW_PERCENT
+                    / 100
+                )
+                if configured_window
+                else None
+            )
+        )
         if effective_window:
             token_limit = int(effective_window * threshold / 100)
     if not token_limit:

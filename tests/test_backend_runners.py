@@ -46,6 +46,28 @@ from aha_cli.web.server import backend_session_jsonl_info
 from tests.helpers import fetch_ui_response, json_response_body
 
 
+def complete_codex_catalog_template(**overrides) -> dict:
+    template = {
+        "slug": "gpt-5.5",
+        "display_name": "GPT-5.5",
+        "description": "Codex model",
+        "default_reasoning_level": "medium",
+        "supported_reasoning_levels": [
+            {"effort": "medium", "description": "Balanced reasoning"},
+        ],
+        "shell_type": "shell_command",
+        "visibility": "list",
+        "supported_in_api": True,
+        "priority": 1,
+        "base_instructions": "test",
+        "context_window": 258_400,
+        "max_context_window": 272_000,
+        "effective_context_window_percent": 95,
+    }
+    template.update(overrides)
+    return template
+
+
 class BackendRunnerSessionTests(unittest.TestCase):
     def run_cli(self, *args: str) -> tuple[int, str]:
         out = io.StringIO()
@@ -349,13 +371,9 @@ class BackendRunnerSessionTests(unittest.TestCase):
             },
             "env:gateway",
         )
-        template = {
-            "slug": "gpt-5.5",
-            "context_window": 258_400,
-            "max_context_window": 272_000,
-            "effective_context_window_percent": 90,
-            "base_instructions": "test",
-        }
+        template = complete_codex_catalog_template(
+            effective_context_window_percent=90,
+        )
 
         with tempfile.TemporaryDirectory() as tmp:
             with mock.patch("aha_cli.backends.codex._codex_catalog_template", return_value=template):
@@ -390,6 +408,8 @@ class BackendRunnerSessionTests(unittest.TestCase):
                 overrides = codex_config_overrides(codex_config, aha_home=Path(tmp), cfg=cfg)
 
         joined = " ".join(overrides)
+        self.assertIn("model_context_window=1000000", joined)
+        self.assertNotIn("model_catalog_json=", joined)
         self.assertIn("model_auto_compact_token_limit=760000", joined)
 
     def test_codex_config_overrides_replaces_stale_generated_absolute_limit(self) -> None:
@@ -425,6 +445,8 @@ class BackendRunnerSessionTests(unittest.TestCase):
                 overrides = codex_config_overrides(codex_config, aha_home=Path(tmp), cfg=cfg)
 
         joined = " ".join(overrides)
+        self.assertIn("model_context_window=1000000", joined)
+        self.assertNotIn("model_catalog_json=", joined)
         self.assertIn("model_auto_compact_token_limit=760000", joined)
         self.assertNotIn("model_auto_compact_token_limit=800000", joined)
 
@@ -443,7 +465,11 @@ class BackendRunnerSessionTests(unittest.TestCase):
         }
         with tempfile.TemporaryDirectory() as tmp:
             aha_home = Path(tmp) / "aha"
-            path = ensure_codex_models_catalog(cfg, aha_home)
+            with mock.patch(
+                "aha_cli.backends.codex._codex_catalog_template",
+                return_value=complete_codex_catalog_template(),
+            ):
+                path = ensure_codex_models_catalog(cfg, aha_home)
 
             self.assertIsNotNone(path)
             payload = json.loads(path.read_text(encoding="utf-8"))
@@ -457,13 +483,9 @@ class BackendRunnerSessionTests(unittest.TestCase):
                 {"provider_id": "p1", "model_id": "deepseek-v4-flash", "backend": "codex", "wire_api": "responses", "context_window": 1_000_000},
             ],
         }
-        template = {
-            "slug": "gpt-5.5",
-            "context_window": 258_400,
-            "max_context_window": 272_000,
-            "effective_context_window_percent": 87,
-            "base_instructions": "test",
-        }
+        template = complete_codex_catalog_template(
+            effective_context_window_percent=87,
+        )
         with tempfile.TemporaryDirectory() as tmp:
             aha_home = Path(tmp) / "aha"
             with mock.patch("aha_cli.backends.codex._codex_catalog_template", return_value=template):
@@ -481,13 +503,62 @@ class BackendRunnerSessionTests(unittest.TestCase):
         }
         with tempfile.TemporaryDirectory() as tmp:
             aha_home = Path(tmp) / "aha"
-            hualai_path = ensure_codex_models_catalog(cfg, aha_home, provider_id="hualai")
+            with mock.patch(
+                "aha_cli.backends.codex._codex_catalog_template",
+                return_value=complete_codex_catalog_template(),
+            ):
+                hualai_path = ensure_codex_models_catalog(
+                    cfg,
+                    aha_home,
+                    provider_id="hualai",
+                )
             hualai = json.loads(hualai_path.read_text(encoding="utf-8"))
             self.assertEqual(hualai["models"][0]["context_window"], 1000000)
 
-            deepseek_path = ensure_codex_models_catalog(cfg, aha_home, provider_id="deepseek")
+            with mock.patch(
+                "aha_cli.backends.codex._codex_catalog_template",
+                return_value=complete_codex_catalog_template(),
+            ):
+                deepseek_path = ensure_codex_models_catalog(
+                    cfg,
+                    aha_home,
+                    provider_id="deepseek",
+                )
             deepseek = json.loads(deepseek_path.read_text(encoding="utf-8"))
             self.assertEqual(deepseek["models"][0]["context_window"], 258000)
+
+    def test_ensure_codex_models_catalog_returns_none_without_complete_template(self) -> None:
+        cfg = {
+            "configured_models": [
+                {
+                    "provider_id": "p1",
+                    "model_id": "gpt-5.6-luna",
+                    "backend": "codex",
+                    "wire_api": "responses",
+                    "context_window": 200000,
+                },
+            ],
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            aha_home = Path(tmp) / "aha"
+            with mock.patch(
+                "aha_cli.backends.codex._codex_catalog_template",
+                return_value=None,
+            ):
+                missing = ensure_codex_models_catalog(cfg, aha_home)
+            with mock.patch(
+                "aha_cli.backends.codex._codex_catalog_template",
+                return_value={
+                    "slug": "gpt-5.5",
+                    "display_name": "GPT-5.5",
+                    "context_window": 258400,
+                },
+            ):
+                incomplete = ensure_codex_models_catalog(cfg, aha_home)
+
+        self.assertIsNone(missing)
+        self.assertIsNone(incomplete)
+        self.assertFalse((aha_home / "codex-models.json").exists())
 
     def test_ensure_codex_models_catalog_returns_none_without_windows(self) -> None:
         cfg = {
@@ -508,7 +579,15 @@ class BackendRunnerSessionTests(unittest.TestCase):
         }
         with tempfile.TemporaryDirectory() as tmp:
             aha_home = Path(tmp) / "aha"
-            overrides = codex_config_overrides({"reasoning_effort": "xhigh"}, aha_home=aha_home, cfg=cfg)
+            with mock.patch(
+                "aha_cli.backends.codex._codex_catalog_template",
+                return_value=complete_codex_catalog_template(),
+            ):
+                overrides = codex_config_overrides(
+                    {"reasoning_effort": "xhigh"},
+                    aha_home=aha_home,
+                    cfg=cfg,
+                )
 
             joined = " ".join(overrides)
             self.assertIn("model_catalog_json=", joined)
@@ -544,12 +623,10 @@ class BackendRunnerSessionTests(unittest.TestCase):
                 overrides = codex_config_overrides(codex_config, aha_home=aha_home, cfg=cfg)
 
             joined = " ".join(overrides)
-            self.assertIn("model_catalog_json=", joined)
+            self.assertNotIn("model_catalog_json=", joined)
+            self.assertIn("model_context_window=1050000", joined)
             self.assertIn('model_provider="aha_codex_hualai_sol_', joined)
-            payload = json.loads((aha_home / "codex-models.json").read_text(encoding="utf-8"))
-            self.assertEqual(len(payload["models"]), 1)
-            self.assertEqual(payload["models"][0]["slug"], "gpt-5.6-sol")
-            self.assertEqual(payload["models"][0]["context_window"], 1_050_000)
+            self.assertFalse((aha_home / "codex-models.json").exists())
 
     def test_codex_exec_records_resolved_default_model_in_session(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -191,6 +191,18 @@ In a one-bin zipapp it launches the current one-bin artifact instead, so a packa
 
 Codex and Claude use the same AHA task/session model. Their Model selectors can point at an official model or at a custom env group. Env-group selections are stored as `env:<group-name>`. Codex env groups target OpenAI-compatible Responses providers: AHA passes the selected group's `OPENAI_MODEL` to Codex, adds a temporary Codex `model_provider` override for `OPENAI_BASE_URL`, and uses `CODEX_WIRE_API=responses` plus `CODEX_ENV_KEY` for provider-specific authentication. Chat Completions-only endpoints are not supported by current Codex CLI provider config. Claude env groups inject `ANTHROPIC_*` / `CLAUDE_*` values and launch Claude without a CLI `--model` argument, so `ANTHROPIC_MODEL` is the effective model. Secrets must not be written to task journals, exported documentation, or user-visible logs.
 
+Configured Codex context windows use two compatibility paths. When the
+installed Codex profile contains a complete, schema-compatible
+`~/.codex/models_cache.json` entry, AHA clones that full metadata into its
+provider-scoped `AHA_HOME/codex-models.json` and changes only the model identity
+and window. On a fresh installation that has not logged in or populated the
+cache, AHA does not generate a partial model catalog; it passes
+`model_context_window` directly and calculates
+`model_auto_compact_token_limit` from the configured window and threshold.
+Thus an AHA Env Group/API-key model does not require an unrelated Codex login,
+while existing complete-catalog behavior and official-model authentication
+remain unchanged.
+
 Claude's streamed `assistant.text` blocks are public task-scoped Agent updates;
 `thinking` stays private and `tool_use/tool_result` remain command activity.
 The prompt context asks Claude to emit concise text blocks between work stages,
