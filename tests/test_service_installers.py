@@ -346,8 +346,15 @@ class WindowsServiceInstallerContractTests(unittest.TestCase):
         self.assertIn('[switch]$Repair', installer)
         self.assertIn('[switch]$StrictModules', installer)
         self.assertIn('[switch]$WithBrowser', installer)
-        self.assertIn('@("Hardware", "Feishu")', installer)
+        self.assertIn('@("Browser", "Hardware", "Feishu")', installer)
+        self.assertIn('$BrowserModuleExplicitlyRequested = $Modules -contains "Browser"', installer)
         self.assertIn('$RequestedModules = @($RequestedModules + "Browser")', installer)
+        self.assertIn(
+            "$BrowserDownloadRequested = (-not [bool]$SkipBrowserDownload) -and "
+            "([bool]$WithBrowser -or $BrowserModuleExplicitlyRequested)",
+            installer,
+        )
+        self.assertIn("-SkipDownload (-not $BrowserDownloadRequested)", installer)
         self.assertIn('Optional; rerun with -WithBrowser or -Modules Browser', installer)
         self.assertIn('-Mode Offline requires -OfflineDir', installer)
         self.assertIn('Join-Path $OfflineRoot "wheels"', installer)
@@ -364,6 +371,10 @@ class WindowsServiceInstallerContractTests(unittest.TestCase):
         installer = INSTALL_WINDOWS.read_text(encoding="utf-8")
 
         self.assertIn('"playwright>=1.45,<2"', installer)
+        self.assertIn(
+            '-SkipDownload (-not $BrowserDownloadRequested)',
+            installer,
+        )
         self.assertIn('"pyserial>=3.5"', installer)
         self.assertIn('"lark-channel-sdk>=1.2,<2"', installer)
         self.assertIn('OpenJS.NodeJS.LTS', installer)

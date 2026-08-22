@@ -304,7 +304,7 @@ function Install-AhaBrowserRuntime {
     )
 
     if ($SkipDownload) {
-        Add-AhaInstallResult -Name "chromium" -Kind "browser-runtime" -Status "skipped" -Detail "Skipped by -SkipBrowserDownload"
+        Add-AhaInstallResult -Name "chromium" -Kind "browser-runtime" -Status "skipped" -Detail "Browser download not requested; using an installed Chrome/Edge when available"
         return $true
     }
     $browserRoot = Join-Path $env:LOCALAPPDATA "ms-playwright"
@@ -837,11 +837,12 @@ if ($Mode -eq "Offline") {
         $Artifact = $offlineArtifact
     }
 }
+$BrowserModuleExplicitlyRequested = $Modules -contains "Browser"
 $RequestedModules = if ($Modules.Count -gt 0) {
     @($Modules | Select-Object -Unique)
 }
 elseif ($Mode -in @("Full", "Offline")) {
-    @("Hardware", "Feishu")
+    @("Browser", "Hardware", "Feishu")
 }
 else {
     @()
@@ -849,6 +850,7 @@ else {
 if ($WithBrowser -and $RequestedModules -notcontains "Browser") {
     $RequestedModules = @($RequestedModules + "Browser")
 }
+$BrowserDownloadRequested = (-not [bool]$SkipBrowserDownload) -and ([bool]$WithBrowser -or $BrowserModuleExplicitlyRequested)
 if ($RequestedModules -notcontains "Browser") {
     Add-AhaInstallResult -Name "browser" -Kind "optional-module" -Status "skipped" -Detail "Optional; rerun with -WithBrowser or -Modules Browser"
 }
@@ -945,7 +947,7 @@ if ($RequestedModules -contains "Browser") {
         $browserRuntimeOk = Install-AhaBrowserRuntime `
             -PythonPath $PythonExe `
             -OfflineRoot $OfflineRoot `
-            -SkipDownload ([bool]$SkipBrowserDownload)
+            -SkipDownload (-not $BrowserDownloadRequested)
         $ModuleInstallOk = $ModuleInstallOk -and $browserRuntimeOk
     }
     else {
