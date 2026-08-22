@@ -386,7 +386,7 @@ class WindowsServiceInstallerContractTests(unittest.TestCase):
         self.assertNotIn('claude login', installer.casefold())
         self.assertIn('Get-FileHash -LiteralPath $Path -Algorithm SHA256', installer)
         self.assertIn('install-report.json', installer)
-        self.assertIn('schema_version = 1', installer)
+        self.assertIn('schema_version = 2', installer)
         self.assertIn('$installExitCode = $LASTEXITCODE', installer)
 
     def test_windows_strict_dependency_failure_happens_after_service_restart(self) -> None:
@@ -420,6 +420,18 @@ class WindowsServiceInstallerContractTests(unittest.TestCase):
         self.assertIn('Start-ScheduledTask', installer)
         self.assertIn('Set-AhaLoginStartup -Enabled $true', installer)
         self.assertIn('The Task Scheduler stores it as an LSA-protected secret', installer)
+
+    def test_windows_installer_registers_single_install_and_guards_downgrades(self) -> None:
+        installer = INSTALL_WINDOWS.read_text(encoding="utf-8")
+
+        self.assertIn('"HKCU:\\Software\\AHA"', installer)
+        self.assertIn("Get-AhaRegisteredInstallation", installer)
+        self.assertIn("Set-AhaRegisteredInstallation", installer)
+        self.assertIn("Remove-AhaRegisteredInstallation", installer)
+        self.assertIn("AHA supports one installed program per Windows user", installer)
+        self.assertIn("[switch]$AllowDowngrade", installer)
+        self.assertIn("Refusing to downgrade AHA", installer)
+        self.assertIn("AHA_INSTALL_STAGE|{0}|{1}|{2}", installer)
 
 
 if __name__ == "__main__":

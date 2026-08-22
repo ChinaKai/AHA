@@ -15,13 +15,14 @@ permissions:
   contents: write
 
 jobs:
-  onebin:
+  portable-linux:
     runs-on: ubuntu-latest
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          ref: ${{ inputs.tag || github.ref }}
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -32,27 +33,132 @@ jobs:
         run: python -m pip install -e .
 
       - name: Run release checks
-        run: python -m unittest tests.test_app_version tests.test_service_installers tests.test_service_upgrade tests.test_web_system_routes tests.test_windows_tray
+        run: >-
+          python -m unittest
+          tests.test_app_version
+          tests.test_distribution_packages
+          tests.test_service_install
+          tests.test_service_installers
+          tests.test_service_upgrade
+          tests.test_web_system_routes
+          tests.test_windows_tray
 
-      - name: Build onebin
+      - name: Build portable onebin
         run: python scripts/build_onebin.py --output dist/aha
 
       - name: Smoke packaged CLI
         run: python scripts/smoke_onebin_cli.py --artifact dist/aha
 
-      - name: Prepare release assets
+      - name: Build Debian packages
+        run: |
+          version=$(python dist/aha --version | awk '{print $NF}' | sed 's/^v//')
+          python scripts/build_linux_deb.py --onebin dist/aha --architecture amd64 --version "$version" --output dist/aha_amd64.deb
+          python scripts/build_linux_deb.py --onebin dist/aha --architecture arm64 --version "$version" --output dist/aha_arm64.deb
+          dpkg-deb --info dist/aha_amd64.deb
+          dpkg-deb --info dist/aha_arm64.deb
+
+      - name: Prepare portable assets
         run: |
           cp scripts/install_user_service.sh dist/install_user_service.sh
           cp scripts/install_windows.ps1 dist/install_windows.ps1
           chmod 0755 dist/aha dist/install_user_service.sh
-          (cd dist && sha256sum aha install_user_service.sh install_windows.ps1 > SHA256SUMS)
 
-      - name: Upload workflow artifact
+      - name: Upload portable and Linux assets
         uses: actions/upload-artifact@v4
         with:
-          name: aha-onebin
+          name: aha-portable-linux
           path: |
             dist/aha
+            dist/aha_*.deb
+            dist/install_user_service.sh
+            dist/install_windows.ps1
+
+  windows-installer:
+    needs: portable-linux
+    runs-on: windows-latest
+    env:
+      WINDOWS_SIGN_CERT_BASE64: ${{ secrets.WINDOWS_SIGN_CERT_BASE64 }}
+      WINDOWS_SIGN_CERT_PASSWORD: ${{ secrets.WINDOWS_SIGN_CERT_PASSWORD }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ inputs.tag || github.ref }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Download portable onebin
+        uses: actions/download-artifact@v4
+        with:
+          name: aha-portable-linux
+          path: dist
+
+      - name: Install Windows packager
+        run: python -m pip install "pyinstaller>=6,<7"
+
+      - name: Import optional signing certificate
+        if: env.WINDOWS_SIGN_CERT_BASE64 != ''
+        shell: powershell
+        run: |
+          $pfx = Join-Path $env:RUNNER_TEMP "aha-signing.pfx"
+          [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:WINDOWS_SIGN_CERT_BASE64))
+          $secure = ConvertTo-SecureString $env:WINDOWS_SIGN_CERT_PASSWORD -AsPlainText -Force
+          $certificate = Import-PfxCertificate -FilePath $pfx -CertStoreLocation Cert:\CurrentUser\My -Password $secure
+          if (-not $certificate) { throw "Failed to import Windows signing certificate" }
+          "AHA_WINDOWS_SIGN_CERT_SHA1=$($certificate.Thumbprint)" | Out-File -FilePath $env:GITHUB_ENV -Append
+          Remove-Item -LiteralPath $pfx -Force
+
+      - name: Build Windows installer
+        shell: powershell
+        run: >-
+          powershell.exe -ExecutionPolicy Bypass
+          -File scripts\build_windows_installer.ps1
+          -Artifact dist\aha
+          -Output dist\AHA-Setup-x64.exe
+
+      - name: Smoke Windows installer
+        shell: powershell
+        run: .\dist\AHA-Setup-x64.exe --smoke-test
+
+      - name: Upload Windows installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: aha-windows-installer
+          path: dist/AHA-Setup-x64.exe
+
+  publish:
+    needs:
+      - portable-linux
+      - windows-installer
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download portable and Linux assets
+        uses: actions/download-artifact@v4
+        with:
+          name: aha-portable-linux
+          path: dist
+
+      - name: Download Windows installer
+        uses: actions/download-artifact@v4
+        with:
+          name: aha-windows-installer
+          path: dist
+
+      - name: Generate checksums
+        run: (cd dist && sha256sum AHA-Setup-x64.exe aha aha_*.deb install_user_service.sh install_windows.ps1 > SHA256SUMS)
+
+      - name: Upload combined workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: aha-release
+          path: |
+            dist/AHA-Setup-x64.exe
+            dist/aha
+            dist/aha_*.deb
             dist/install_user_service.sh
             dist/install_windows.ps1
             dist/SHA256SUMS
@@ -60,6 +166,7 @@ jobs:
       - name: Publish GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
           DISPATCH_TAG: ${{ inputs.tag }}
         run: |
           set -euo pipefail
@@ -73,10 +180,11 @@ jobs:
             echo "No release tag selected; workflow artifact uploaded only."
             exit 0
           fi
+          assets=(dist/AHA-Setup-x64.exe dist/aha dist/aha_*.deb dist/install_user_service.sh dist/install_windows.ps1 dist/SHA256SUMS)
           if gh release view "${release_tag}" >/dev/null 2>&1; then
-            gh release upload "${release_tag}" dist/aha dist/install_user_service.sh dist/install_windows.ps1 dist/SHA256SUMS --clobber
+            gh release upload "${release_tag}" "${assets[@]}" --clobber
           else
-            gh release create "${release_tag}" dist/aha dist/install_user_service.sh dist/install_windows.ps1 dist/SHA256SUMS \
+            gh release create "${release_tag}" "${assets[@]}" \
               --title "AHA ${release_tag}" \
               --notes "Automated AHA release ${release_tag}."
           fi

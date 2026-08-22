@@ -19,16 +19,160 @@ param(
     [switch]$SkipBrowserDownload,
     [switch]$EnableStartup,
     [System.Management.Automation.PSCredential]$StartupCredential = $null,
+    [switch]$AllowDowngrade,
     [switch]$Uninstall,
     [switch]$NoShortcut,
     [switch]$NoStart,
     [switch]$NoAuth,
-    [switch]$AllowUnsafeBind
+    [switch]$AllowUnsafeBind,
+    [string]$ProgressFile = ""
 )
 
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
 $script:AhaInstallResults = @()
+$script:AhaInstallRegistryPath = "HKCU:\Software\AHA"
+$script:AhaDirExplicit = $PSBoundParameters.ContainsKey("AhaDir")
+$script:AhaHomeExplicit = $PSBoundParameters.ContainsKey("AhaHome")
+
+function Write-AhaInstallerStage {
+    param(
+        [ValidateRange(0, 100)][int]$Percent,
+        [string]$Name,
+        [string]$Label
+    )
+
+    $line = "AHA_INSTALL_STAGE|{0}|{1}|{2}" -f $Percent, $Name, $Label
+    Write-Output $line
+    if (-not [string]::IsNullOrWhiteSpace($ProgressFile)) {
+        Add-Content -LiteralPath $ProgressFile -Value $line -Encoding UTF8
+    }
+}
+
+function ConvertTo-AhaCanonicalPath {
+    param([string]$Path)
+
+    if ([string]::IsNullOrWhiteSpace($Path)) {
+        return ""
+    }
+    return [IO.Path]::GetFullPath($Path).TrimEnd("\")
+}
+
+function Get-AhaRegisteredInstallation {
+    if (-not (Test-Path -LiteralPath $script:AhaInstallRegistryPath)) {
+        return $null
+    }
+    $item = Get-ItemProperty -LiteralPath $script:AhaInstallRegistryPath -ErrorAction SilentlyContinue
+    if ($null -eq $item -or [string]::IsNullOrWhiteSpace([string]$item.InstallDir)) {
+        return $null
+    }
+    return [pscustomobject][ordered]@{
+        installation_id = [string]$item.InstallationId
+        install_dir = [string]$item.InstallDir
+        install_bin = [string]$item.InstallBin
+        aha_home = [string]$item.AhaHome
+        python = [string]$item.Python
+        version = [string]$item.Version
+    }
+}
+
+function Set-AhaRegisteredInstallation {
+    param(
+        [string]$InstallationId,
+        [string]$InstallDir,
+        [string]$InstallBin,
+        [string]$HomePath,
+        [string]$PythonPath,
+        [string]$Version
+    )
+
+    New-Item -Path $script:AhaInstallRegistryPath -Force | Out-Null
+    $values = [ordered]@{
+        InstallationId = $InstallationId
+        InstallDir = $InstallDir
+        InstallBin = $InstallBin
+        AhaHome = $HomePath
+        Python = $PythonPath
+        Version = $Version
+        UpdatedAt = [DateTimeOffset]::Now.ToString("o")
+    }
+    foreach ($entry in $values.GetEnumerator()) {
+        New-ItemProperty `
+            -Path $script:AhaInstallRegistryPath `
+            -Name $entry.Key `
+            -Value ([string]$entry.Value) `
+            -PropertyType String `
+            -Force | Out-Null
+    }
+}
+
+function Remove-AhaRegisteredInstallation {
+    Remove-Item -LiteralPath $script:AhaInstallRegistryPath -Recurse -Force -ErrorAction SilentlyContinue
+}
+
+function Get-AhaInstallationId {
+    param([string]$InstallDir)
+
+    $normalized = (ConvertTo-AhaCanonicalPath $InstallDir).ToLowerInvariant()
+    $bytes = [Text.Encoding]::UTF8.GetBytes($normalized)
+    $sha = [Security.Cryptography.SHA256]::Create()
+    try {
+        $digest = $sha.ComputeHash($bytes)
+    }
+    finally {
+        $sha.Dispose()
+    }
+    return (([BitConverter]::ToString($digest) -replace "-", "").ToLowerInvariant()).Substring(0, 16)
+}
+
+function Get-AhaVersionText {
+    param([string]$Value)
+
+    $text = [string]$Value
+    $text = $text.Trim()
+    if ($text.StartsWith("aha ")) {
+        $text = $text.Substring(4).Trim()
+    }
+    return $text
+}
+
+function Compare-AhaBuildVersion {
+    param(
+        [string]$Left,
+        [string]$Right
+    )
+
+    $pattern = '^v?(\d+)\.(\d+)\.(\d+)\.(\d{8})\.([A-Za-z0-9_-]+)$'
+    $leftText = Get-AhaVersionText $Left
+    $rightText = Get-AhaVersionText $Right
+    if ($leftText -notmatch $pattern) {
+        return $null
+    }
+    $leftParts = @(
+        [int]$Matches[1],
+        [int]$Matches[2],
+        [int]$Matches[3],
+        [int]$Matches[4]
+    )
+    if ($rightText -notmatch $pattern) {
+        return $null
+    }
+    $rightParts = @(
+        [int]$Matches[1],
+        [int]$Matches[2],
+        [int]$Matches[3],
+        [int]$Matches[4]
+    )
+    for ($index = 0; $index -lt $leftParts.Count; $index++) {
+        if ($leftParts[$index] -gt $rightParts[$index]) {
+            return 1
+        }
+        if ($leftParts[$index] -lt $rightParts[$index]) {
+            return -1
+        }
+    }
+    return 0
+}
 
 function Add-AhaInstallResult {
     param(
@@ -478,21 +622,25 @@ function Ensure-AhaAgentBackend {
 function Write-AhaInstallReport {
     param(
         [string]$Path,
+        [string]$InstallationId,
         [string]$InstallMode,
         [string]$InstalledVersion,
         [string]$PythonPath,
         [string]$InstallPath,
+        [string]$HomePath,
         [bool]$RepairRequested
     )
 
     $report = [ordered]@{
-        schema_version = 1
+        schema_version = 2
+        installation_id = $InstallationId
         installed_at = [DateTimeOffset]::Now.ToString("o")
         mode = $InstallMode
         repair = $RepairRequested
         version = $InstalledVersion
         python = $PythonPath
         install_bin = $InstallPath
+        aha_home = $HomePath
         results = @($script:AhaInstallResults)
         next_actions = @(
             "Run the installed Codex or Claude CLI once to complete login if needed.",
@@ -804,8 +952,73 @@ $StartupTaskFullName = "\AHA Web"
 $Programs = [Environment]::GetFolderPath([Environment+SpecialFolder]::Programs)
 $ShortcutDirectory = if ([string]::IsNullOrWhiteSpace($Programs)) { "" } else { Join-Path $Programs "AHA" }
 $ShortcutPath = if ($ShortcutDirectory) { Join-Path $ShortcutDirectory "AHA.lnk" } else { "" }
+$RegisteredInstallation = Get-AhaRegisteredInstallation
+if ($null -eq $RegisteredInstallation) {
+    $legacyInstallDir = Join-Path $env:LOCALAPPDATA "AHA"
+    $legacyInstallBin = Join-Path $legacyInstallDir "aha"
+    $legacyReportPath = Join-Path $legacyInstallDir "install-report.json"
+    if (
+        (Test-Path -LiteralPath $legacyInstallBin -PathType Leaf) -or
+        (Test-Path -LiteralPath $legacyReportPath -PathType Leaf)
+    ) {
+        $legacyReport = $null
+        if (Test-Path -LiteralPath $legacyReportPath -PathType Leaf) {
+            try {
+                $legacyReport = Get-Content -LiteralPath $legacyReportPath -Raw | ConvertFrom-Json
+            }
+            catch {
+                $legacyReport = $null
+            }
+        }
+        $legacyInstallationId = ""
+        $legacyAhaHome = Join-Path $env:USERPROFILE ".aha"
+        $legacyPython = ""
+        $legacyVersion = ""
+        if ($null -ne $legacyReport) {
+            if ($null -ne $legacyReport.PSObject.Properties["installation_id"]) {
+                $legacyInstallationId = [string]$legacyReport.installation_id
+            }
+            if ($null -ne $legacyReport.PSObject.Properties["aha_home"] -and $legacyReport.aha_home) {
+                $legacyAhaHome = [string]$legacyReport.aha_home
+            }
+            if ($null -ne $legacyReport.PSObject.Properties["python"]) {
+                $legacyPython = [string]$legacyReport.python
+            }
+            if ($null -ne $legacyReport.PSObject.Properties["version"]) {
+                $legacyVersion = [string]$legacyReport.version
+            }
+        }
+        $RegisteredInstallation = [pscustomobject][ordered]@{
+            installation_id = $legacyInstallationId
+            install_dir = $legacyInstallDir
+            install_bin = $legacyInstallBin
+            aha_home = $legacyAhaHome
+            python = $legacyPython
+            version = $legacyVersion
+        }
+    }
+}
+if ($null -ne $RegisteredInstallation) {
+    $registeredDir = ConvertTo-AhaCanonicalPath $RegisteredInstallation.install_dir
+    $requestedDir = ConvertTo-AhaCanonicalPath $AhaDir
+    if (-not $script:AhaDirExplicit) {
+        $AhaDir = $registeredDir
+    }
+    elseif ($requestedDir -ne $registeredDir) {
+        throw (
+            "AHA supports one installed program per Windows user. " +
+            "Registered path: $registeredDir; requested path: $requestedDir"
+        )
+    }
+    if (-not $script:AhaHomeExplicit -and -not [string]::IsNullOrWhiteSpace($RegisteredInstallation.aha_home)) {
+        $AhaHome = [string]$RegisteredInstallation.aha_home
+    }
+}
+
+Write-AhaInstallerStage -Percent 5 -Name "preflight" -Label "Checking installation ownership and settings"
 
 if ($Uninstall) {
+    Write-AhaInstallerStage -Percent 20 -Name "uninstall" -Label "Removing registered startup integration"
     Remove-AhaStartupTask -TaskPath $StartupTaskPath -TaskName $StartupTaskName
     Set-AhaLoginStartup -Enabled $false -Command ""
     if ($ShortcutPath) {
@@ -815,6 +1028,8 @@ if ($Uninstall) {
     if (Test-Path -LiteralPath $AhaDir) {
         Remove-Item -LiteralPath $AhaDir -Recurse -Force
     }
+    Remove-AhaRegisteredInstallation
+    Write-AhaInstallerStage -Percent 100 -Name "complete" -Label "Uninstall completed"
     Write-Host "Removed AHA startup task, login startup, shortcut, and installed files"
     Write-Host "AHA home retained: $AhaHome"
     return
@@ -864,6 +1079,7 @@ if ($null -ne $ExistingStartupTask) {
     Stop-AhaStartupTask -TaskPath $StartupTaskPath -TaskName $StartupTaskName
 }
 
+Write-AhaInstallerStage -Percent 12 -Name "runtime" -Label "Resolving Python runtime"
 $PythonExe = Resolve-AhaPython `
     -Requested $Python `
     -InstallMissing ($Mode -ne "Minimal") `
@@ -874,6 +1090,7 @@ if ($pythonVersionExitCode -ne 0 -or [Version]$PythonVersion -lt [Version]"3.10"
     throw "AHA requires Python 3.10 or newer; found: $PythonVersion"
 }
 Add-AhaInstallResult -Name "python" -Kind "runtime" -Status "present" -Detail "$PythonExe ($PythonVersion)" -Required $true
+Write-AhaInstallerStage -Percent 25 -Name "runtime_ready" -Label "Python runtime is ready"
 $PythonwExe = Join-Path (Split-Path -Parent $PythonExe) "pythonw.exe"
 if (-not (Test-Path -LiteralPath $PythonwExe -PathType Leaf)) {
     $PythonwExe = $PythonExe
@@ -884,6 +1101,19 @@ New-Item -ItemType Directory -Force -Path $AhaHome | Out-Null
 $AhaDir = (Resolve-Path -LiteralPath $AhaDir).Path
 $AhaHome = (Resolve-Path -LiteralPath $AhaHome).Path
 $InstallBin = Join-Path $AhaDir "aha"
+$InstallationId = Get-AhaInstallationId $AhaDir
+$PreviousInstalledVersion = ""
+if (Test-Path -LiteralPath $InstallBin -PathType Leaf) {
+    try {
+        $existingVersionOutput = (& $PythonExe $InstallBin --version 2>&1 | Out-String).Trim()
+        if ($LASTEXITCODE -eq 0 -and $existingVersionOutput.StartsWith("aha ")) {
+            $PreviousInstalledVersion = Get-AhaVersionText $existingVersionOutput
+        }
+    }
+    catch {
+        $PreviousInstalledVersion = ""
+    }
+}
 $Candidate = Join-Path ([System.IO.Path]::GetTempPath()) ("aha-" + [Guid]::NewGuid().ToString("N"))
 $ExpectedSha256 = $Sha256.ToLowerInvariant()
 $DownloadedChecksum = ""
@@ -891,6 +1121,7 @@ $EffectiveChecksumUrl = $ChecksumUrl
 if (-not $Artifact -and [string]::IsNullOrWhiteSpace($EffectiveChecksumUrl) -and $DownloadUrl -match '/aha$') {
     $EffectiveChecksumUrl = $DownloadUrl.Substring(0, $DownloadUrl.Length - 3) + "SHA256SUMS"
 }
+Write-AhaInstallerStage -Percent 35 -Name "core" -Label "Validating and installing AHA core"
 try {
     if ($Artifact) {
         if (-not (Test-Path -LiteralPath $Artifact -PathType Leaf)) {
@@ -923,8 +1154,19 @@ try {
     if ($versionExitCode -ne 0 -or -not $versionOutput.StartsWith("aha ")) {
         throw "Downloaded AHA artifact failed validation: $versionOutput"
     }
+    $candidateVersion = Get-AhaVersionText $versionOutput
+    if ($PreviousInstalledVersion) {
+        $versionComparison = Compare-AhaBuildVersion -Left $candidateVersion -Right $PreviousInstalledVersion
+        if ($null -ne $versionComparison -and $versionComparison -lt 0 -and -not $AllowDowngrade) {
+            throw (
+                "Refusing to downgrade AHA from $PreviousInstalledVersion to $candidateVersion. " +
+                "Pass -AllowDowngrade only after explicit user confirmation."
+            )
+        }
+    }
     Move-Item -LiteralPath $Candidate -Destination $InstallBin -Force
     Add-AhaInstallResult -Name "aha" -Kind "core" -Status "installed" -Detail $versionOutput -Required $true
+    Write-AhaInstallerStage -Percent 48 -Name "core_ready" -Label "AHA core is installed"
 }
 finally {
     if (Test-Path -LiteralPath $Candidate) {
@@ -935,6 +1177,7 @@ finally {
     }
 }
 
+Write-AhaInstallerStage -Percent 55 -Name "modules" -Label "Installing optional modules and agent tools"
 $ModuleInstallOk = $true
 if ($RequestedModules -contains "Browser") {
     $browserModuleOk = Install-AhaPythonModule `
@@ -978,7 +1221,9 @@ if ($Mode -in @("Full", "Offline")) {
 elseif ($AgentBackend -notin @("Auto", "None")) {
     $ModuleInstallOk = (Ensure-AhaAgentBackend -Selection $AgentBackend -Offline $false) -and $ModuleInstallOk
 }
+Write-AhaInstallerStage -Percent 72 -Name "modules_ready" -Label "Optional modules are processed"
 
+Write-AhaInstallerStage -Percent 78 -Name "configuration" -Label "Writing AHA configuration and Web token"
 $TokenFile = Join-Path $AhaHome "web-token"
 $LoopbackBinds = @("127.0.0.1", "localhost", "::1", "[::1]")
 if ($NoAuth -and $LoopbackBinds -notcontains $Bind.ToLowerInvariant() -and -not $AllowUnsafeBind) {
@@ -1001,6 +1246,7 @@ Write-AhaTrayConfig `
     -StartupTaskName $ConfiguredTaskName
 Write-AhaServiceLauncher -Path $ServiceLauncher -PythonPath $PythonExe -ArtifactPath $InstallBin -ConfigPath $TrayConfig
 
+Write-AhaInstallerStage -Percent 84 -Name "service" -Label "Configuring startup and service integration"
 if ($StartupRequested) {
     Install-AhaStartupTask `
         -TaskPath $StartupTaskPath `
@@ -1016,15 +1262,25 @@ if ($StartupRequested) {
 $InstallReport = Join-Path $AhaDir "install-report.json"
 Write-AhaInstallReport `
     -Path $InstallReport `
+    -InstallationId $InstallationId `
     -InstallMode $Mode `
     -InstalledVersion $versionOutput `
     -PythonPath $PythonExe `
     -InstallPath $InstallBin `
+    -HomePath $AhaHome `
     -RepairRequested ([bool]$Repair)
+Set-AhaRegisteredInstallation `
+    -InstallationId $InstallationId `
+    -InstallDir $AhaDir `
+    -InstallBin $InstallBin `
+    -HomePath $AhaHome `
+    -PythonPath $PythonExe `
+    -Version $candidateVersion
 if ($StrictModules -and -not $ModuleInstallOk) {
     throw "AHA core and service configuration were installed, but one or more requested dependencies failed. See: $InstallReport"
 }
 
+Write-AhaInstallerStage -Percent 92 -Name "integration" -Label "Creating shortcuts and final integration"
 if (-not $NoShortcut) {
     $IconPath = Join-Path $AhaDir "aha.ico"
     Install-AhaIcon -ArtifactPath $InstallBin -Destination $IconPath | Out-Null
@@ -1035,6 +1291,7 @@ if (-not $NoShortcut) {
         -IconPath $IconPath
 }
 
+Write-AhaInstallerStage -Percent 97 -Name "launch" -Label "Starting AHA"
 if (-not $NoStart) {
     $TrayArguments = @(
         (Quote-StartProcessArgument $InstallBin),
@@ -1053,6 +1310,7 @@ if (-not $NoStart) {
     Start-Process -FilePath $PythonwExe -ArgumentList $TrayArguments -WindowStyle Hidden
 }
 
+Write-AhaInstallerStage -Percent 100 -Name "complete" -Label "Installation completed"
 Write-Host "Installed AHA: $InstallBin"
 Write-Host "Install mode: $Mode"
 Write-Host "Requested modules: $($RequestedModules -join ', ')"

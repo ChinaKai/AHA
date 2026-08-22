@@ -286,6 +286,36 @@ append a run_imported event
 
 `aha package onebin` builds a Python zipapp containing `aha_cli` and `web/static`. The artifact still stores data in `.aha/` or the selected `--home`, and still depends on external backend CLIs such as `codex` or `claude`.
 
+Official releases wrap that portable core in platform installers. Windows
+`AHA-Setup-x64.exe` is a PyInstaller windowed bootstrap containing the exact
+release onebin, existing PowerShell installer, and AHA ICO. Double-click opens
+an OS-language-aware English/Chinese wizard for mode, backend, paths, browser,
+shortcut, startup and repair choices; the PowerShell child stays hidden while
+its output streams into the progress panel. Existing/pre-login Task Scheduler
+changes use a `ShellExecuteExW(runas)` UAC worker. The bootstrap verifies the
+bundled onebin SHA-256 before installation and optionally signs the final EXE
+through a certificate already imported into the Windows certificate store. Linux
+`aha_amd64.deb` and `aha_arm64.deb` install the onebin under `/usr/lib/aha`, a
+`/usr/bin/aha` launcher, documentation, and a systemd user unit. The DEB never
+starts a user service from root `postinst`; the current user explicitly runs
+`systemctl --user enable --now aha.service`. The unit prepares
+`~/.aha/web-token` before startup and marks the runtime as `AHA_PACKAGE_MANAGER=deb`,
+so Web Upgrade directs users to the package manager instead of trying to mutate
+the dpkg-owned onebin.
+
+The Windows installer is single-instance per user. `HKCU\Software\AHA` records
+the installation id, program/home paths, Python, onebin path and version;
+legacy `%LOCALAPPDATA%\AHA` installs are adopted on first upgrade. A different
+program path is rejected while the registration exists. Uninstall resolves and
+removes only the registered program plus its singleton Task Scheduler/HKCU
+Run/shortcut integration, while retaining AHA_HOME. The GUI compares the
+registered/report/onebin version with its bundled version and labels the primary
+action as install, upgrade, repair or downgrade; downgrade is blocked by both
+GUI confirmation and the PowerShell `-AllowDowngrade` gate. PowerShell emits
+`AHA_INSTALL_STAGE|percent|stage|label` milestones. Normal and elevated installs
+feed those milestones into a determinate progress bar; elevated runs use a
+temporary progress file while the UAC worker owns stdout.
+
 On Windows, `scripts/install_windows.ps1` defaults to a `Full` one-command setup: it creates or repairs the dedicated Python environment, verifies the onebin against `SHA256SUMS`, installs Playwright plus the serial/Feishu Python modules, installs Git, and ensures a selected Codex or Claude backend without performing third-party login. The installer detects and uses system Chrome/Edge, so the large Playwright Chromium payload is not downloaded by default. Explicit `-WithBrowser` or explicit `-Modules Browser` requests Chromium; `-SkipBrowserDownload` always forces module-only installation. `Minimal` retains the core-only path, while `Offline` accepts a local onebin, wheelhouse, optional Chromium payload, and optional Python installer and never falls through to `winget`, `npm`, or Web downloads. Dependency results and remaining user actions are recorded in `%LOCALAPPDATA%\AHA\install-report.json`; optional failures preserve the installed core unless `-StrictModules` is requested. The installer starts `aha tray` through `pythonw.exe`, writes the initial non-secret tray configuration, extracts the packaged multi-size AHA ICO, and creates a current-user Start Menu shortcut unless `-NoShortcut` is set. Without pre-login startup, the tray process supervises the `aha ui` child as before. With `-EnableStartup`, the installer creates the root-level `\AHA Web` Task Scheduler task with an `AtStartup` trigger and a limited current-user password logon token; the task runs a generated `start-web.ps1` launcher that reads `tray.json` and starts the headless Web service before sign-in. The packaged onebin also contains `assets/configure_windows_startup.ps1`: the tray's “无需解锁开机启动” menu materializes this helper, launches it through `ShellExecuteExW` with the `runas` verb, and lets the elevated helper request the current-user credential before creating or deleting the same task. This lets an existing HKCU-only installation migrate after a normal Web/onebin upgrade without separately downloading the installer. This deliberately avoids SYSTEM so the service retains access to the selected user `AHA_HOME`, user configuration, credentials, and network identity. Task Scheduler stores the supplied password as an LSA-protected task secret. HKCU Run is then used only to display the interactive tray after sign-in; the tray attaches to the scheduled Web service, can restart it through `schtasks.exe`, and does not stop it when the icon exits. Existing scheduled tasks are updated in place, an explicit installer credential refresh can replace a stale password, and `-Uninstall` idempotently removes the task, login startup, shortcut, and install directory while retaining `AHA_HOME`. The supervised local Web subtree is assigned to a kill-on-close Windows Job Object and explicitly tree-killed during restart or exit, so a venv `pythonw.exe` redirector, its base interpreter, and Web self-replacements cannot retain the listening port. Settings can change AHA home, bind address, port, and Web token, then transactionally restart either the attached task or local Web child and roll back when the new service fails startup; when login startup is enabled, its tray command is rewritten with the new settings in either service mode. Non-secret launch settings live in `%LOCALAPPDATA%\AHA\tray.json`; the token remains in `<AHA_HOME>\web-token`. Web-triggered helper and background processes share `platform.hidden_subprocess_kwargs()`, which adds `CREATE_NO_WINDOW` on Windows so Git status checks, backend discovery, usage refreshes, diagnostics, and managed children do not flash console windows. Linux continues to use the user systemd installers.
 
 ## Run Management And Onebin Smoke
@@ -466,6 +496,14 @@ can verify service content without touching the developer's real user services.
 and asserts the generated release/source units, health check URLs, entrypoint
 version validation, token-file auth wiring, release metadata, and no-write
 behavior.
+
+The reusable Linux service implementation is also exposed through
+`aha service prepare-user`, `aha service install-user`, and
+`aha service uninstall-user`. `aha package deb` and
+`scripts/build_linux_deb.py` build Debian packages from an existing onebin.
+The release workflow builds the portable/Linux assets on Ubuntu, builds the
+Windows EXE from the same uploaded onebin on `windows-latest`, optionally signs
+it, then generates one combined `SHA256SUMS` before publishing.
 `scripts/preflight_service_upgrade.py` is the release-machine preflight wrapper:
 it validates the source entrypoint, optionally builds and checks a temporary
 onebin, reuses the installer dry-run smoke, and asserts the current user's

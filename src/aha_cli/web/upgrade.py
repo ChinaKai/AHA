@@ -33,6 +33,16 @@ def web_upgrade_status() -> dict:
     if source_root:
         return web_publish_status()
 
+    package_manager = os.environ.get("AHA_PACKAGE_MANAGER", "").strip().lower()
+    if package_manager:
+        return {
+            "available": False,
+            "action": "upgrade",
+            "mode": "package-manager",
+            "package_manager": package_manager,
+            "reason": f"AHA is managed by {package_manager}; use the platform package manager to upgrade",
+        }
+
     installed_bin = os.environ.get("AHA_INSTALL_BIN", "").strip()
     if installed_bin:
         installed_path = Path(installed_bin).expanduser()

@@ -15,80 +15,65 @@ Data is stored in `~/.aha` by default.
 
 | Program | Requirement | Purpose |
 | --- | --- | --- |
-| Python 3.10+ | Required | Run the AHA onebin |
 | Codex CLI, Claude Code, or OpenCode | At least one | Execute AI tasks |
-| Node.js + npm | Required for Codex | Install the Codex CLI |
+| Node.js + npm | Required for Codex | Install Codex CLI |
 | Git | Recommended | Repository operations and Knowledge sync |
-| Playwright Python | Installed by Windows Full | Shared-browser control |
-| Chrome, Edge, or Playwright Chromium | At least one for browser tasks | Browser runtime |
-| pyserial | Optional | Serial / Windows COM debugging |
+| Chrome, Edge, or Playwright Chromium | At least one for browser tasks | Shared browser |
+| pyserial | Optional | Serial debugging |
 | lark-channel-sdk | Optional | Feishu assistant |
 
 ## Windows Installation
 
-Run in PowerShell:
+Download and double-click `AHA-Setup-x64.exe` from the latest Release. Its
+bilingual GUI defaults to Full mode and configures a dedicated Python
+environment, AHA, Playwright,
+pyserial, the Feishu SDK, Git, and at least one Agent CLI. It does not sign in
+to third-party services or download Chromium by default.
+Each Windows user has one registered program installation. The wizard detects
+install, upgrade, repair, or confirmed downgrade actions; uninstall removes
+only that registered program while retaining AHA data.
+
+Command-line examples:
 
 ```powershell
-$Installer = Join-Path $env:TEMP "install_aha.ps1"
-Invoke-WebRequest `
-  "https://github.com/ChinaKai/AHA/releases/latest/download/install_windows.ps1" `
-  -OutFile $Installer
-powershell.exe -ExecutionPolicy Bypass -File $Installer
-```
+.\AHA-Setup-x64.exe
 
-Default `Full` mode installs AHA, Python, Git, Playwright, pyserial, the Feishu
-SDK, and ensures that at least one Agent CLI exists. It prefers system
-Chrome/Edge and does not download Playwright Chromium by default.
+# Core only
+.\AHA-Setup-x64.exe --mode Minimal
 
-```powershell
-# Core-only installation
-& $Installer -Mode Minimal
+# Install Playwright Chromium
+.\AHA-Setup-x64.exe --with-browser
 
-# Explicitly download Playwright Chromium
-& $Installer -Mode Full -WithBrowser
-
-# Install selected modules; Browser requests Chromium
-& $Installer -Mode Minimal -Modules Browser,Hardware
-
-# Install Playwright but never download a browser
-& $Installer -Mode Full -SkipBrowserDownload
-
-# Offline installation
-& $Installer -Mode Offline -OfflineDir D:\AHA-offline
+# Enable the background startup service
+.\AHA-Setup-x64.exe --enable-startup
 ```
 
 Default locations:
 
 ```text
-Program: %LOCALAPPDATA%\AHA\aha
+Program: %LOCALAPPDATA%\AHA
 Data:    %USERPROFILE%\.aha
 Web UI:  http://127.0.0.1:8788
 ```
 
+`install_windows.ps1` remains available for offline, repair, and automation
+workflows.
+
 ## Linux Installation
 
-Ubuntu / Debian example:
+Ubuntu / Debian:
 
 ```bash
-sudo apt update
-sudo apt install -y python3 python3-venv python3-pip curl git
+arch=$(dpkg --print-architecture)
+curl -fL "https://github.com/ChinaKai/AHA/releases/latest/download/aha_${arch}.deb" \
+  -o "aha_${arch}.deb"
+sudo apt install "./aha_${arch}.deb"
 
-python3 -m venv ~/.venvs/aha
-~/.venvs/aha/bin/python -m pip install --upgrade pip
-
-# Install at least one Agent CLI
-npm install --global @openai/codex
-
-# Optional shared browser; no Chromium download is needed with system Chrome/Edge
-~/.venvs/aha/bin/python -m pip install 'playwright>=1.45,<2'
-
-mkdir -p ~/.local/bin
-curl -fL https://github.com/ChinaKai/AHA/releases/latest/download/aha \
-  -o ~/.local/bin/aha
-chmod +x ~/.local/bin/aha
-
-~/.venvs/aha/bin/python ~/.local/bin/aha \
-  --home ~/.aha ui --host 127.0.0.1 --port 8788
+systemctl --user enable --now aha.service
 ```
 
-Open <http://127.0.0.1:8788>.
+Open <http://127.0.0.1:8788>. The first start creates `~/.aha/web-token`.
+
+The Linux package requires Python 3.10+. The portable `aha` onebin remains
+available in Releases, and `install_user_service.sh` supports custom paths and
+service settings.

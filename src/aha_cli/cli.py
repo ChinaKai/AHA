@@ -64,6 +64,7 @@ from aha_cli.services.network_terminal import (
 from aha_cli.services.messages import format_event
 from aha_cli.services.observe_proxy import run_observe_proxy_server
 from aha_cli.services.onebin import aha_cli_invocation, build_onebin
+from aha_cli.services.debian_package import build_linux_deb, debian_architecture, debian_version
 from aha_cli.services.run_archive import RunArchiveError, export_run_archive, import_run_archive
 from aha_cli.services.run_cleanup import cleanup_temp_runs, format_cleanup_summary
 from aha_cli.services.run_delete import RunDeleteError, delete_run
@@ -98,6 +99,14 @@ from aha_cli.services.service_upgrade import (
     ServiceUpgradeError,
     check_user_service_upgrade,
     upgrade_user_service,
+    zipapp_build_version,
+)
+from aha_cli.services.service_install import (
+    ServiceInstallError,
+    UserServiceSpec,
+    install_user_service,
+    prepare_user_service,
+    uninstall_user_service,
 )
 from aha_cli.services.managed_process_client import ManagedProcessClientError, managed_process_request
 from aha_cli.process_control import terminate_parent_death_children
@@ -2533,6 +2542,28 @@ def cmd_package(args: argparse.Namespace) -> int:
             return 2
         print(f"Built one-bin executable: {artifact}")
         return 0
+    if args.package_cmd == "deb":
+        onebin = Path(args.onebin).expanduser().resolve()
+        try:
+            raw_version = args.version or zipapp_build_version(onebin)
+            version = debian_version(raw_version)
+            architecture = debian_architecture(args.architecture)
+            output = (
+                Path(args.output).expanduser().resolve()
+                if args.output
+                else Path(f"dist/aha_{version}_{architecture}.deb").resolve()
+            )
+            artifact = build_linux_deb(
+                onebin=onebin,
+                output=output,
+                architecture=architecture,
+                version=version,
+            )
+        except (OSError, RuntimeError, ValueError) as exc:
+            print(str(exc), file=sys.stderr)
+            return 2
+        print(f"Built Debian package: {artifact}")
+        return 0
     raise SystemExit(f"Unknown package command: {args.package_cmd}")
 
 
@@ -2547,6 +2578,80 @@ def _default_installed_aha_bin() -> str:
 
 
 def cmd_service(args: argparse.Namespace) -> int:
+    if args.service_cmd == "prepare-user":
+        aha_home = Path(args.aha_home).expanduser() if args.aha_home else default_aha_home()
+        try:
+            result = prepare_user_service(
+                aha_home,
+                auth_required=not args.no_auth,
+                auth_token_file=Path(args.auth_token_file) if args.auth_token_file else None,
+            )
+        except (OSError, ServiceInstallError) as exc:
+            print(str(exc), file=sys.stderr)
+            return 2
+        if args.json:
+            print(json.dumps({"ok": True, **result}, indent=2, ensure_ascii=False))
+        else:
+            print(f"Prepared AHA home: {result['aha_home']}")
+            if result.get("auth_required"):
+                print(f"Web token file: {result['auth_token_file']}")
+                print(f"Token created: {1 if result['token_created'] else 0}")
+        return 0
+    if args.service_cmd == "install-user":
+        bin_value = args.bin or _default_installed_aha_bin()
+        if not bin_value:
+            print("--bin is required when $AHA_INSTALL_BIN is not set and the current executable is not a onebin", file=sys.stderr)
+            return 2
+        aha_home = Path(args.aha_home).expanduser() if args.aha_home else default_aha_home()
+        try:
+            result = install_user_service(
+                UserServiceSpec(
+                    bin_path=Path(bin_value),
+                    aha_home=aha_home,
+                    service_name=args.service_name,
+                    bind=args.host,
+                    port=args.port,
+                    run_id=args.run_id,
+                    auth_required=not args.no_auth,
+                    auth_token_file=Path(args.auth_token_file) if args.auth_token_file else None,
+                    allow_unsafe_bind=args.allow_unsafe_bind,
+                    package_manager=args.package_manager,
+                ),
+                enable=not args.no_enable,
+                start=not args.no_start,
+                dry_run=args.dry_run,
+                unit_path=Path(args.unit_path) if args.unit_path else None,
+            )
+        except (OSError, ServiceInstallError) as exc:
+            print(str(exc), file=sys.stderr)
+            return 2
+        if args.json:
+            print(json.dumps({"ok": True, **result}, indent=2, ensure_ascii=False))
+        else:
+            if args.dry_run:
+                print(result["unit"], end="")
+            else:
+                print(f"Installed user service: {result['service']}")
+                print(f"Unit: {result['unit_path']}")
+                print(f"Enabled: {1 if result['enabled'] else 0}")
+                print(f"Started: {1 if result['started'] else 0}")
+        return 0
+    if args.service_cmd == "uninstall-user":
+        try:
+            result = uninstall_user_service(
+                args.service_name,
+                stop=not args.no_stop,
+                unit_path=Path(args.unit_path) if args.unit_path else None,
+            )
+        except (OSError, ServiceInstallError) as exc:
+            print(str(exc), file=sys.stderr)
+            return 2
+        if args.json:
+            print(json.dumps({"ok": True, **result}, indent=2, ensure_ascii=False))
+        else:
+            print(f"Removed user service: {result['service']}")
+            print(f"Unit removed: {1 if result['removed'] else 0}")
+        return 0
     if args.service_cmd == "upgrade-user":
         bin_value = args.bin or _default_installed_aha_bin()
         if not bin_value:
